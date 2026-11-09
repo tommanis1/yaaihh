@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# fallback-badge: show where auto mode runs on the client fallback (tools/classifier-watch.py's report).
+#
+#   fallback-badge SESSION-ID    a red badge if that session is on the fallback, else nothing
+#   fallback-badge --statusline  the same for the session in Claude Code's status line JSON on stdin
+#   fallback-badge --tmux        every session on the fallback, in tmux format (roster's status bar)
+#
+# A report older than 15 min shows as "classifier-watch stale", so a dead watcher is not read as all clear.
+set -uo pipefail
+R=${CLASSIFIER_REPORT:-$HOME/agent-coord/.classifier.json}
+[ -f "$R" ] || exit 0
+case ${1:-} in
+--statusline) sid=$(jq -r '.session_id // empty'); fmt=ansi ;;
+--tmux) sid=; fmt=tmux ;;
+"") exit 2 ;;
+*) sid=$1; fmt=ansi ;;
+esac
+jq -r --arg sid "$sid" --arg fmt "$fmt" --argjson now "$(date +%s)" '
+  def red: if $fmt == "tmux" then "#[fg=colour231,bg=colour160,bold] \(.) #[default]" else "\u001b[1;97;41m \(.) \u001b[0m" end;
+  if $now - .at > 900 then ("classifier-watch stale" | red)
+  else [.sessions[] | select($sid == "" or .session == $sid)] as $s
+    | if ($s | length) == 0 then empty
+      elif $sid != "" then "auto mode: CLIENT FALLBACK (\($s[0].checks) \(.model) checks/\(.window / 60 | floor) min) - restart: claude --resume \($sid)" | red
+      else "fallback: \([$s[] | .title // .session[0:8]] | join(", "))" | red end
+  end' "$R" 2>/dev/null

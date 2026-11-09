@@ -1,0 +1,82 @@
+// The clerk: the owner's messages and the agents' turn
+// ends. Its calls are in calls/clerk.call, its decisions in policy/clerk.eflint; the bindings in nets/bindings.
+// What coordd knows is a fact in the event (an owner message's conversation and open questions; a turn's sent mail
+// and waits); the model judges only the rest.
+
+net owner_message on owner_message(m)
+session clerk: per owner
+{
+    if decide needs-spellcheck(length: len(m.text)) {
+        m.text := spellcheck(m.text) fresh                  // replaces: only the corrected text goes on (§15.7)
+    }
+    match clarity(m.text, m.to, m.open, m.context, m.quoted) in clerk {
+        Unclear(why) => reject(m.from, why)
+        Clear => if m.thread != none {
+            deliver(m.to, m.text, m.thread)                  // sent in a thread: it stays there (§15.7)
+        } else if len(m.open) == 0 {
+            deliver(m.to, m.text, new)                       // no open question it could answer: nothing to split
+        } else {
+            let pieces = split(m.text, m.to, m.open, m.context, m.quoted) in clerk
+            if len(pieces) == 0 {
+                deliver(m.to, m.text, new)
+            } else {
+                for p in pieces {
+                    match p.answers {
+                        q? => match p.about {                // the owner's own words, under the question they answer
+                            a? => deliver(p.to, "On {{ q }} ({{ a }}): {{ p.text }}", q)
+                            none => deliver(p.to, p.text, q)
+                        }
+                        none => deliver(p.to, p.text, new)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// An agent's mail passes on as it was (§15.3: every message passes a net; with `deliver` live it waits for this).
+net agent_message on agent_message(m)
+{
+    deliver(m.to, m.text, m.thread)
+}
+
+net turn_end on turn_end(t)
+session clerk: per agent
+{
+    if t.repeat {
+        accept(wake: none)                                    // the same turn end again (an idle loop): nothing new
+    } else {
+        let r = turn(t.agent, t.text, t.sent, t.waits, t.open) in clerk
+        for p in r.pieces {                                   // filing (§15.3): each piece into its thread
+            match p.label {
+                Question => ask(t.agent, p.text, p.thread)    // asked in plain text: its qN (a follow-up in its thread)
+                Status => {}
+                _ => match p.thread {                         // an answer or report about one of its questions
+                    q? => post(t.agent, p.text, q)
+                    none => {}
+                }
+            }
+        }
+        if t.continues {
+            accept(wake: none)                                // held mail went in as its next turn: it goes on
+        } else if len(t.waits) > 0 {
+            accept(wake: check(joined(t.waits)))              // it waits by fact: the build queue, its background work
+        } else {
+            match decide end-of-turn(state: r.state, nudged: nudged_in_row(t.agent), said: len(t.text)) {
+                accept => match r.state {
+                    Blocked(q) => accept(wake: answer(q))
+                    Waiting(on) => accept(wake: check(on))
+                    _ => accept(wake: none)
+                }
+                nudge => match r.state {
+                    Next(what) => nudge(t.agent, "You stopped after saying what comes next ({{ what }}): do that next.")
+                    _ => nudge(t.agent, "Go on with your work.")
+                }
+                escalate => {
+                    tell(owner, "{{ t.agent }} ended {{ nudged_in_row(t.agent) }} turns in a row saying what it would do next without doing it; last: {{ r.state }}")
+                    accept(wake: none)
+                }
+            }
+        }
+    }
+}

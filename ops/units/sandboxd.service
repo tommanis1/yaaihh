@@ -1,0 +1,17 @@
+[Unit]
+Description=Docker Sandboxes daemon (agent boxes), memory-capped so a box can never freeze the desktop
+# The box VM's memory only grows (its page cache), and the box was created with 40 GB on a 60 GB host whose
+# desktop and sessions use ~20-25 GB: on 3 Nov the host thrashed and froze. Run outside any terminal, capped:
+# past MemoryHigh the VM is slowed and reclaimed, past MemoryMax only the box is killed.
+
+[Service]
+ExecStart=/usr/bin/sbx daemon start
+Restart=on-failure
+RestartSec=5
+MemoryHigh=32G
+MemoryMax=34G
+MemorySwapMax=0
+OOMPolicy=kill
+
+[Install]
+WantedBy=default.target

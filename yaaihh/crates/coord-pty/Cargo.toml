@@ -1,0 +1,15 @@
+[package]
+name = "coord-pty"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coord-pty"
+path = "src/main.rs"
+
+[dependencies]
+coord-types = { path = "../coord-types" }
+serde_json.workspace = true
+libc.workspace = true
+vt100.workspace = true

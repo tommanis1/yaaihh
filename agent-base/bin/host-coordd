@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# host-coordd: the coordd of a project without a box,
+# on the host as the owner's user: the systemd user unit coordd-NAME, with a delegated cgroup for the agents.
+#
+#   host-coordd start NAME        start coordd-NAME unless it runs; then resume the agents that ran when it last went
+#                                 down (roster resume)
+#   host-coordd stop NAME         stop coordd (the agents keep running, as in a box where coordd restarts alone)
+#   host-coordd status NAME       the unit's state and the socket
+#   host-coordd sh NAME [CMD...]  a shell (or CMD) with the project's environment: roster, coord, `coordc bridge` (yaaihh)
+#
+# The project's environment, as box.sh gives a box's: COORD=~/agent-coord/NAME, COORDD_SOCK=$XDG_RUNTIME_DIR/coordd/
+# NAME.sock, AGENT_BASE (this checkout) and agent-base's bin first on PATH; the agents' terminals are their holders'
+# (coord-pty, $COORD/pty), as in a box. coordd also gets COORDD_CGROUP (the unit's cgroup; systemd starts coordd in its
+# leaf ROOT/coordd, DelegateSubgroup, since a cgroup that enables controllers for its children may hold no processes)
+# and COORDD_LIVE.
+# KillMode=process: stopping the unit stops coordd alone; a new start finds the agents in their cgroups (coordd's
+# recover).
+set -euo pipefail
+AB=$(cd "$(dirname "$0")/.." && pwd)
+cmd=${1:-}; NAME=${2:-}
+usage() { sed -n '5,9p' "$0" | sed 's/^# //'; exit 2; }
+[ -n "$NAME" ] || usage
+[[ $NAME =~ ^[A-Za-z0-9_-]+$ ]] || { echo "host-coordd: not a project name: $NAME (letters, digits, - and _)" >&2; exit 2; }
+run=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/coordd
+unit=coordd-$NAME
+export COORD=$HOME/agent-coord/$NAME AGENT_BASE=$AB COORDD_SOCK=$run/$NAME.sock
+export PATH=$AB/bin:$PATH
+. "$AB/lib/route.sh"
+
+# resumed: the agents that ran when coordd last went down, then done
+resumed() { "$AB/bin/roster" resume; exit 0; }
+
+case $cmd in
+start)
+  route_write_key
+  systemctl --user is-active -q "$unit" && resumed
+  [ -x "$AB/bin/coordd" ] || { echo "host-coordd: no $AB/bin/coordd (release.sh build, then release.sh live)" >&2; exit 1; }
+  mkdir -p "$COORD" "$run"
+  rm -f "$COORDD_SOCK"  # a stale socket would pass the wait below before coordd is up
+  systemctl --user reset-failed "$unit" 2>/dev/null || true
+  # a stopped unit whose agents still run in it stays loaded (KillMode=process): start it again as it is
+  if [ "$(systemctl --user show "$unit" -p LoadState --value)" = loaded ]; then
+    systemctl --user start "$unit"
+    for _ in $(seq 50); do [ -S "$COORDD_SOCK" ] && resumed; sleep 0.1; done
+    echo "host-coordd: coordd did not start; see $COORD/coordd.log" >&2; exit 1
+  fi
+  # the system's systemd-run (command -p): a same-named wrapper earlier on the owner's PATH may route elsewhere
+  # shellcheck disable=SC2016  # expanded by the unit's shell
+  command -p systemd-run --user --quiet --unit "$unit" -p Delegate=yes -p DelegateSubgroup=coordd -p KillMode=process \
+    -p StandardOutput="append:$COORD/coordd.log" -p StandardError="append:$COORD/coordd.log" \
+    --setenv=COORD="$COORD" --setenv=AGENT_BASE="$AB" --setenv=COORDD_SOCK="$COORDD_SOCK" \
+    --setenv=COORDD_LIVE="$run/$NAME.live.json" --setenv=PATH="$PATH" \
+    /bin/sh -c 'COORDD_CGROUP=$(dirname "/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup)") exec "$AGENT_BASE/bin/coordd"'
+  for _ in $(seq 50); do [ -S "$COORDD_SOCK" ] && resumed; sleep 0.1; done
+  echo "host-coordd: coordd did not start; see $COORD/coordd.log and systemctl --user status $unit" >&2; exit 1
+  ;;
+stop) systemctl --user stop "$unit" ;;
+status) echo "$unit: $(systemctl --user is-active "$unit" || true); socket $COORDD_SOCK" ;;
+sh) shift 2; [ $# -gt 0 ] || set -- bash; exec "$@" ;;
+*) usage ;;
+esac

@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""codex-rpc: a Codex agent's app-server, from roster and coord (owner 6 Nov: Codex roster agents).
+
+  codex-rpc new-thread CWD MODEL PROMPT  start a thread with its first turn, print its id (a thread gets its
+                                         rollout with its first turn, and one without cannot be resumed once this
+                                         connection closes, so the two go together)
+  codex-rpc send THREAD PRIORITY TEXT    deliver TEXT as a user message: `next` steers it into the running turn
+                                         (owner and orch), else it starts a turn; `later` only starts one when no
+                                         turn runs (exit 3 if one does: the caller keeps it held)
+  codex-rpc trust-hooks CWD              trust the hooks Codex lists for CWD that are not trusted at their hash
+  codex-rpc status THREAD                idle, or the running turn's id
+  codex-rpc interrupt THREAD             cut the running turn off (coord msg --esc); nothing when idle
+  codex-rpc wait-idle THREAD             return once no turn runs (waits for the app-server's turn/completed)
+
+$CODEX_SOCK is the agent's app-server, `codex app-server --listen unix://$CODEX_SOCK` (bin/roster starts one per
+agent; no daemon manager, so no self-update: the box runs the version copied into $COORD/opt/codex). Its protocol is
+JSON-RPC over a WebSocket on that unix socket, the transport `codex --remote unix://` uses too.
+"""
+import base64, json, os, queue, socket, struct, sys, threading, time
+
+
+class Server:
+    def __init__(self, path):
+        self.s = socket.socket(socket.AF_UNIX)
+        self.s.connect(path)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.s.sendall((f'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                        f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n').encode())
+        head = b''
+        while b'\r\n\r\n' not in head:
+            head += self.s.recv(1)
+        if b' 101 ' not in head.split(b'\r\n')[0]:
+            raise ConnectionError(head.decode(errors='replace'))
+        self.n, self.replies, self.wlock, self.events = 0, {}, threading.Lock(), queue.Queue()
+        threading.Thread(target=self.read, daemon=True).start()
+        self.call('initialize', {'clientInfo': {'name': 'codex-rpc', 'version': '1'}})
+        self.send({'jsonrpc': '2.0', 'method': 'initialized'})
+
+    def exact(self, n):
+        b = b''
+        while len(b) < n:
+            c = self.s.recv(n - len(b))
+            if not c:
+                raise EOFError
+            b += c
+        return b
+
+    def frame(self, op, data):  # a client frame is masked (RFC 6455)
+        n, mask = len(data), os.urandom(4)
+        size = bytes([0x80 | n]) if n < 126 else (
+            bytes([0x80 | 126]) + struct.pack('>H', n) if n < 65536 else bytes([0x80 | 127]) + struct.pack('>Q', n))
+        with self.wlock:
+            self.s.sendall(bytes([0x80 | op]) + size + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+    def read(self):
+        buf = b''
+        try:
+            while True:
+                b0, b1 = self.exact(2)
+                n = b1 & 0x7f
+                if n == 126:
+                    n = struct.unpack('>H', self.exact(2))[0]
+                elif n == 127:
+                    n = struct.unpack('>Q', self.exact(8))[0]
+                data, op = self.exact(n), b0 & 0x0f
+                if op == 9:
+                    self.frame(10, data)
+                    continue
+                if op == 8:
+                    return
+                buf += data
+                if b0 & 0x80:
+                    m = json.loads(buf)
+                    buf = b''
+                    if 'id' in m and ('result' in m or 'error' in m):
+                        self.replies[m['id']] = m
+                    elif 'method' in m and 'id' not in m:
+                        self.events.put(m)
+        except (EOFError, OSError):
+            return
+
+    def send(self, m):
+        self.frame(1, json.dumps(m).encode())
+
+    def call(self, method, params, timeout=60):
+        self.n += 1
+        i = self.n
+        self.send({'jsonrpc': '2.0', 'id': i, 'method': method, 'params': params})
+        end = time.time() + timeout
+        while i not in self.replies:
+            if time.time() > end:
+                raise TimeoutError(method)
+            time.sleep(0.02)
+        r = self.replies.pop(i)
+        if 'error' in r:
+            raise RuntimeError(f'{method}: {r["error"].get("message", r["error"])}')
+        return r['result']
+
+
+def running_turn(srv, thread):
+    """The id of the thread's running turn, or None. A thread its app-server has not loaded since it started is
+    resumed first (its settings are the app-server's: bin/roster)."""
+    if thread not in srv.call('thread/loaded/list', {'limit': 1000})['data']:
+        srv.call('thread/resume', {'threadId': thread, 'excludeTurns': True})
+    turns = srv.call('thread/read', {'threadId': thread, 'includeTurns': True})['thread'].get('turns', [])
+    last = turns[-1] if turns else None
+    return last['id'] if last and last.get('status') == 'inProgress' else None
+
+
+def main(argv):
+    srv = Server(os.environ['CODEX_SOCK'])
+    cmd = argv[1] if len(argv) > 1 else ''
+    if cmd == 'new-thread' and len(argv) == 5:
+        cwd, model, prompt = argv[2:5]
+        t = srv.call('thread/start', {'cwd': cwd, 'model': model})['thread']['id']
+        srv.call('turn/start', {'threadId': t, 'input': [{'type': 'text', 'text': prompt}]})
+        print(t)
+    elif cmd == 'send' and len(argv) == 5:
+        thread, prio, text = argv[2:5]
+        msg = [{'type': 'text', 'text': text}]
+        turn = running_turn(srv, thread)
+        if turn and prio in ('now', 'next'):
+            srv.call('turn/steer', {'threadId': thread, 'expectedTurnId': turn, 'input': msg})
+        elif turn:
+            return 3
+        else:
+            srv.call('turn/start', {'threadId': thread, 'input': msg})
+    elif cmd == 'interrupt' and len(argv) == 3:
+        turn = running_turn(srv, argv[2])
+        if turn:
+            srv.call('turn/interrupt', {'threadId': argv[2], 'turnId': turn})
+    elif cmd == 'wait-idle' and len(argv) == 3:
+        # resume rejoins a running thread (app-server protocol), so this connection gets its turn/completed; checked
+        # after that, so a turn that ends in between is not waited for
+        srv.call('thread/resume', {'threadId': argv[2], 'excludeTurns': True})
+        if running_turn(srv, argv[2]):
+            while True:
+                m = srv.events.get()
+                if m['method'] == 'turn/completed' and m.get('params', {}).get('threadId') == argv[2]:
+                    break
+    elif cmd == 'status' and len(argv) == 3:
+        print(running_turn(srv, argv[2]) or 'idle')
+    elif cmd == 'trust-hooks' and len(argv) == 3:
+        for entry in srv.call('hooks/list', {'cwds': [argv[2]]})['data']:
+            for h in entry['hooks']:
+                if h['trustStatus'] != 'trusted':
+                    srv.call('config/value/write', {'keyPath': f'hooks.state."{h["key"]}".trusted_hash',
+                                                    'value': h['currentHash'], 'mergeStrategy': 'replace'})
+                    print(f'trusted {h["key"]}')
+    else:
+        print(__doc__.split('\n\n')[1], file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

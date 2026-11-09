@@ -1,0 +1,5 @@
+// Which net reacts to which event (§16.2). A project's nets/bindings binds at project scope; a line with
+// `where agent in {..}` at agent scope; the narrowest binding wins.
+on owner_message use owner_message
+on turn_end use turn_end
+on agent_message use agent_message

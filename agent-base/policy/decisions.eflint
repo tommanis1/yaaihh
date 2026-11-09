@@ -1,0 +1,6 @@
+// The system's default preferences (scope global; a project's policy/*.eflint and policy/agents/NAME.eflint rank
+// above). Earlier ranks first: the family, then the price.
+Prefer for model-for When call.task == "recognise-question":
+  family(option, "codex") > family(option, "claude")
+Prefer for model-for:
+  minimise price(option)

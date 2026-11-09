@@ -1,0 +1,128 @@
+// The clerk's calls: read by the nets in nets/clerk.net.
+// Question (id, from, text, thread), Said (a mail: id, from, to, text, thread, question) and Quoted (source, text) are
+// the system's types. The facts coordd knows (what an agent sent, what it waits on, the conversation a message is
+// written in) come as inputs; the model judges only what no fact says.
+
+type Piece {
+  text: String
+  about: String?
+  answers: String?
+  to: String
+}
+type Clarity = Clear | Unclear(why: String)
+type PieceKind = Question | Answer | Report | Status
+type TurnPiece {
+  label: PieceKind
+  text: String
+  thread: String?
+}
+type TurnState = Done | Next(what: String) | Blocked(q: String) | Waiting(on: String)
+type Turn {
+  pieces: [TurnPiece]
+  state: TurnState
+}
+
+call spellcheck(text: String) -> String
+  task spellcheck
+  template
+    Fix the misspelt words in the message below, and only those: replace each misspelt word by the word meant. Change
+    nothing else. Never add, drop or change a punctuation mark, a number, a capital letter or a line break, even
+    where the message has none ("1 yes 2 no" stays "1 yes 2 no", with no full stop added); never rephrase or
+    reorder; keep names, ids (like q12, m340), code and paths exactly as they are. Answer with the message only.
+
+    {{ text }}
+
+call clarity(text: String, to: [String], open: [Question], context: [Said], quoted: [Quoted]) -> Clarity
+  task clerk
+  template
+    You are the clerk of a software team: agents work, the owner directs them. You read each message of the owner
+    before it is delivered. A message is clear when its recipients can act on it, reading it as they would: after
+    the conversation before it, with what it quotes, and knowing their own open questions. The owner types fast:
+    a typo is never unclear. A short reply ("yes", "1 yes 2 no") is clear when the conversation or the open questions
+    show what it answers, and "yes" to several open questions at once answers them all. A message about something
+    new is clear, and so is a statement of fact or an FYI. Only call it unclear when a recipient would have to guess
+    what the owner means or which question is answered; then say in one short sentence what the owner should add
+    (why).
+
+    The owner's message, to {{ for t in to }}{{ t }} {{ end }}:
+    {{ text }}
+    {{ for q in quoted }}
+    It quotes {{ q.source }}: "{{ q.text }}"
+    {{ end }}
+
+    The conversation before it, oldest first:
+    {{ for s in context }}- {{ s.id }} from {{ s.from }}: {{ s.text }}
+    {{ end }}
+
+    The recipients' open questions to the owner:
+    {{ for q in open }}- {{ q.id }} from {{ q.from }}: {{ q.text }}
+    {{ end }}
+
+call split(text: String, to: [String], open: [Question], context: [Said], quoted: [Quoted]) -> [Piece]
+  task clerk
+  template
+    You are the clerk of a software team. Split the owner's message below into the parts that go to different
+    threads. A part that answers one of the open questions listed is its own piece: answers is that question's id,
+    to is the agent who asked it, and about names the question's subject in a few words ("merge core/l1 now?").
+    Everything else is one piece with answers and about null, to the first recipient. A part that replies to
+    something in the conversation before the message, or to what it quotes, and not to a listed question, belongs to
+    that rest. text is always the owner's own words, copied exactly: never restate, expand or correct them. A message
+    that is all one thing is one piece.
+
+    The owner's message, to {{ for t in to }}{{ t }} {{ end }}:
+    {{ text }}
+    {{ for q in quoted }}
+    It quotes {{ q.source }}: "{{ q.text }}"
+    {{ end }}
+
+    The conversation before it, oldest first:
+    {{ for s in context }}- {{ s.id }} from {{ s.from }}: {{ s.text }}
+    {{ end }}
+
+    The recipients' open questions to the owner:
+    {{ for q in open }}- {{ q.id }} from {{ q.from }}: {{ q.text }}
+    {{ end }}
+
+call turn(agent: String, text: String, sent: [Said], waits: [String], open: [Question]) -> Turn
+  task clerk
+  template
+    You are the clerk of a software team: agents work, the owner directs them. Agent {{ agent }} just ended a turn.
+    Below are what it wrote in the turn; the mail it sent in the turn (facts: sent and delivered already); what it
+    waits on now (facts from the build queue and its own background work); and its open questions to the owner.
+
+    pieces: split what it wrote into pieces, copied exactly (leave out filler), and label each. A piece is a whole
+    passage, not a sentence: consecutive sentences with the same label and thread are one piece, and a list stays
+    with the line that introduces it. Start a new piece only where the label or the thread changes.
+    - Question: it asks the owner to decide or answer something new. Never one it sent already (a mail above marked
+      as a question, or one of its open questions): a piece that restates or announces that one is a Status in that
+      question's thread. A new question that follows up one of its open questions takes that question's id as
+      thread; otherwise thread null.
+    - Answer: it settles one of its open questions itself (thread: that question's id).
+    - Report: what it did or found; thread: the id of the open question it is about, or null.
+    - Status: what it does or waits on next.
+    Words it addressed to another agent (an instruction, a relay of the owner's words) are never a Question or an
+    Answer: at most a Report of its own work. Only give a thread from its open questions.
+
+    state: how the turn ended.
+    - Waiting(on): it waits on something (a check, a build, another agent's reply); always when it waits on
+      anything listed below (on: what, in a few words).
+    - Blocked(q): it cannot go on until the owner answers its open question q.
+    - Next(what): it says what it will do itself next, and stopped anyway (what: that step, in a few words). Not a
+      step the build queue or another agent takes ("the -O2 build is next" while its check runs is Waiting), and
+      not an instruction it gave another agent.
+    - Done: it finished, and says nothing it will do next.
+
+    What it wrote:
+    {{ text }}
+
+    Mail it sent in the turn:
+    {{ for s in sent }}- {{ s.id }}{{ if s.question }} (a question){{ end }} to {{ for r in s.to }}{{ r }} {{ end }}: {{ s.text }}
+    {{ end }}
+
+    What it waits on now:
+    {{ for w in waits }}- {{ w }}
+    {{ end }}
+
+    Its open questions to the owner:
+    {{ for q in open }}- {{ q.id }}: {{ q.text }}
+    {{ end }}

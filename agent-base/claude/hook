@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# The one hook of an agent-base agent, Claude Code's (claude/settings.json) and Codex's ($CODEX_HOME/hooks.json, which
+# bin/roster writes): each event goes to coordd, which knows the agent by its
+# process's cgroup and keeps its session, turn, running tool calls and held mail.
+#
+#   hook start | prompt | pre | post | stop     SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop
+#   hook failed                                  StopFailure: the turn ended on an API error (Stop does not run then)
+#
+# prompt prints the held mail that goes in with the turn starting now. The hook never refuses a tool call and never
+# blocks a session: with coordd down it does nothing.
+set -u
+event=${1:-}
+# The Bash tool's PATH is the box's own: a resumed session's shell snapshot carries the PATH of the shell it began in
+# (on the host: the box's host-side shims first, unreachable here), and CLAUDE_ENV_FILE is sourced after the snapshot. In a
+# project without a box (its coordd at COORDD_SOCK on the host, bin/host-coordd) it is the agent's own PATH, which
+# roster gave it.
+if [ "$event" = start ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  if [ -n "${COORDD_SOCK:-}" ]; then path=$PATH; else
+    path=${TOOL_PATH:+$TOOL_PATH:}${AGENT_BASE:+$AGENT_BASE/bin:}/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin
+  fi
+  printf 'export PATH=%q\n' "$path" >>"$CLAUDE_ENV_FILE"
+fi
+exec "${AGENT_BASE:?}/bin/coordc" hook "$event"

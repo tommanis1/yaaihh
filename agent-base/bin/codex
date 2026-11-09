@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# codex in the box: the host's static Codex build kept in $COORD/opt/codex, its state in
+# $COORD/codex-home (on the host, so a recreated box keeps it), talking to OpenAI through the host proxy with the
+# box's proxy key. No OpenAI login lives in the box; agent-delegate's codex backend runs this.
+set -euo pipefail
+: "${COORD:?codex: COORD is not set}"
+export CODEX_HOME=${CODEX_HOME:-$COORD/codex-home}
+# the route's key for a codex-home whose config names a proxy provider (env_key CPA_API_KEY); none: Codex's own login
+if [ -s "$COORD/.proxy-key" ]; then CPA_API_KEY=$(cat "$COORD/.proxy-key"); export CPA_API_KEY; fi
+exec "$COORD/opt/codex/bin/codex" "$@"

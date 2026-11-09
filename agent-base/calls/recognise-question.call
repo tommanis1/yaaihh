@@ -1,0 +1,22 @@
+type AgentMessage {
+  from: String
+  text: String
+}
+type QuestionRef {
+  question: String
+  quote: String
+}
+call recognise-question(message: AgentMessage) -> QuestionRef?
+  task recognise-question
+  template
+    An agent of a software team sent the mail below to the owner of the project. Does it ask the owner to decide or
+    answer something, so that the agent (or the work) waits for the owner? A report, a status update or an FYI does
+    not; a question the agent answers itself does not; "should I do X or Y?", "may I ...?", "which ...?" and a
+    request for the owner's choice do.
+
+    If it asks, answer with the question restated in one short line (question) and the sentence of the mail that asks
+    it, copied exactly (quote). If it asks several things, take the one the owner must decide first. If it does not
+    ask, answer null.
+
+    Mail from {{ message.from }}:
+    {{ message.text }}

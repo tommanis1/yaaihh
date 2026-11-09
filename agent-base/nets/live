@@ -1,0 +1,7 @@
+// The live set: the nets' effects coordd takes for real.
+// Every effect not switched on here is only logged (dry). A line is `live EFFECT [where agent in {..}]` or
+// `dry EFFECT [...]`; PROJECT/nets/live and agent-scoped lines override this file, the narrowest winning.
+// Owner m114: on step by step, filing first: a turn's plain-text questions opened as qN (ask) and its
+// answers and reports put in their question's thread (post). deliver, reject, nudge, tell, accept stay dry.
+live ask
+live post

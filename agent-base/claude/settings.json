@@ -1,0 +1,101 @@
+{
+  "apiKeyHelper": "cat \"$COORD/.proxy-key\"",
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "crossSessionInbound": "accept",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" pre",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" post",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" failed",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" prompt",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "modelPicker": {
+    "options": [
+      {
+        "model": "kiro-opus-5.5",
+        "label": "Kiro Opus 5.5",
+        "description": "Opus 5.5 on Kiro credits (1M)",
+        "behavesAs": "claude-opus-5-5"
+      },
+      {
+        "model": "kiro-sonnet-5.5",
+        "label": "Kiro Sonnet 5.5",
+        "description": "Sonnet 5.5 on Kiro credits (1M)",
+        "behavesAs": "claude-sonnet-5-5"
+      }
+    ]
+  },
+  "autoCompactWindow": 350000,
+  "env": {
+    "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
+    "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
+  },
+  "theme": "auto",
+  "promptCacheTtl": "1h"
+}

@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# roster: the agents of a box, each on a terminal of its own held by `coord-pty NAME`
+# . A
+# holder outlives coordd and serves $COORD/pty/NAME.sock: the owner opens an agent in a WezTerm tab on the host with
+# `box.sh sh BOX coord attach NAME` (raw output, so WezTerm keeps its own scrollback and copy/paste), and yaaihh draws
+# it through its bridge. A project without a box runs
+# roster on the host with its environment (`host-coordd sh NAME roster ...`): its agents are plain host processes.
+#
+#   roster up FILE     start every agent in FILE that is not running yet
+#   roster add NAME MODEL PROMPT-FILE [DIR]
+#                      start one agent, as one line of FILE would
+#                      (up and add register the agent with coordd, the caller, an agent or the owner, its parent;
+#                      restart keeps it)
+#   roster restart NAME [--force]
+#   roster rename NAME NEW   NAME is called NEW: once its turn has ended it stops, is renamed, and resumes its own
+#                      session as NEW (its id, session and history stay; coordd's `rename`)
+#                      start NAME again on its own session (session.json: id, cwd, model), hanging up the running
+#                      terminal; refused while NAME is working, unless --force
+#   roster resume      resume the agents that ran when coordd last went down (box.sh start and host-coordd start
+#                      run it after a reboot)
+#   roster tab NAME DIR CMD...
+#                      run a non-agent program (the runner) on terminal NAME, hanging up a running one; it is
+#                      registered as kind `program` and gets its own cgroup as an agent does
+#   roster down NAME   hang up NAME's terminal (its session ends; the transcript stays), and a Codex agent's app-server
+#   roster ls          the terminals: name, size, the title the program sets, command
+#
+# FILE has one agent per line, `#` comments allowed:
+#   NAME  MODEL  PROMPT-FILE  [DIR]
+# MODEL is passed to --model as written; a gpt-* MODEL makes a Codex agent (below). MODEL:EFFORT also sets the
+# reasoning effort (Claude --effort, Codex model_reasoning_effort; else the default of each), e.g. gpt-6-astra:medium.
+# AGENT_MODEL and session.json keep MODEL:EFFORT, so a restart keeps the effort. PROMPT-FILE (relative to FILE) is the agent's first prompt. A first line
+# `resume: SESSION-ID` resumes that session instead (its transcript in ~/.claude/projects/ for DIR), with the rest of
+# the file as the first message. DIR defaults to the current directory.
+#
+# Every agent is registered with coordd (`coordc add`) and its process claims it (`coordc run NAME -- CMD`): coordd
+# puts the process in the agent's cgroup, knows it by that from then on, and sees it end
+# . coordd also writes agents/NAME/session.json, which restart reads.
+# Each session runs with bypass permissions and $COORD/claude-settings.json, made from claude/settings.json (hooks,
+# crossSessionInbound accept; with a model route the proxy key from $COORD/.proxy-key through apiKeyHelper rather than
+# the environment, which sbx rewrites; without one the session's own login), AGENT_NAME and
+# AGENT_MODEL set, and git's hooksPath on git/hooks for the commit trailers. Terminal NAME is the agent's.
+#
+# A Codex agent is a thread on its own Codex app-server (`codex app-server --listen unix://`, no
+# daemon, so no self-update), started with the agent's environment as a Claude agent's terminal gets it, approvals off and no
+# sandbox; its terminal runs the Codex TUI attached to that thread with --remote. One app-server per agent because
+# Codex fixes a thread's environment and sandbox when the thread starts and a resume does not restore them. Hanging up
+# the TUI leaves a running turn running, so a restart only reopens the TUI; `roster down` also stops the app-server. The
+# app-server runs the same claude/hook from $CODEX_HOME/hooks.json, which roster writes and trusts; the app-server is the
+# agent's process for coordd, and coordd reaches the thread through bin/codex-rpc.
+set -euo pipefail
+: "${AGENT_BASE:?AGENT_BASE is not set}" "${COORD:?COORD is not set}"
+# a host project's coordd socket goes to everything roster starts (in a box the default /run/coordd.sock serves)
+sockenv=(); [ -z "${COORDD_SOCK:-}" ] || sockenv=(COORDD_SOCK="$COORDD_SOCK")
+
+export CODEX_HOME=${CODEX_HOME:-$COORD/codex-home}
+. "$AGENT_BASE/lib/route.sh"
+# without a route a Codex agent uses the owner's own Codex login (on the host: ~/.codex/auth.json)
+if [ ! -s "$COORD/.proxy-key" ] && [ ! -e "$CODEX_HOME/auth.json" ] && [ -f "$HOME/.codex/auth.json" ]; then
+  mkdir -p "$CODEX_HOME" && ln -s "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
+fi
+apps=$CODEX_HOME/app  # NAME.sock, NAME.pid, NAME.log; the sockets' directory must be ours alone (codex refuses others)
+# what an agent's session leaves in the environment of the programs it runs (roster among them); a terminal's program
+# gets its starter's environment, and a Claude Code that inherits them takes itself for a nested session, with
+# no channels and, with CLAUDE_CODE_CHILD_SESSION, no saved transcript. Every program roster starts
+# goes without them.
+inherited=()
+for v in $(compgen -e); do case $v in CLAUDECODE | CLAUDE_CODE_* | CLAUDE_PID | CLAUDE_EFFORT) inherited+=(-u "$v") ;; esac; done
+coordc() { "$AGENT_BASE/bin/coordc" "$@"; }
+state() { coordc ls | awk -F'\t' -v n="$1" '$1 == n { print $3 }'; }  # state NAME: coordd's state, empty if unknown
+rpc() { CODEX_SOCK=$apps/$1.sock "$AGENT_BASE/bin/codex-rpc" "${@:2}"; }  # rpc NAME ARGS...
+
+close() { coordc hangup "$1"; }  # close NAME: hang up NAME's terminal and wait for its program to end
+
+open() {  # open NAME DIR [--confirm TEXT] CMD...: CMD in DIR on terminal NAME (coord-pty returns once the terminal is up)
+  local name=$1 dir=$2 confirm=(); shift 2
+  [ "$1" != --confirm ] || { confirm=(--confirm "$2"); shift 2; }
+  (cd "$dir" && "$AGENT_BASE/bin/coord-pty" "$name" "${confirm[@]}" -- "$@")
+}
+
+home() {  # home NAME DIR: false if DIR is gone; else lock it
+  # claude --resume finds the session by its working directory, so a cleanup must not remove it: a worktree is locked
+  # (git worktree remove refuses it; orch's cleanup removed ROWS's on 30 Oct and the resume after a reboot failed)
+  [ -d "$2" ] || { echo "$1: its directory $2 is gone; not started" >&2; return 1; }
+  git -C "$2" worktree lock --reason "session home of $1 (roster)" "$2" 2>/dev/null || true
+  # trusted in Claude Code's ~/.claude.json, so the session does not stop at "Do you trust this folder?" (a new box
+  # starts with a fresh one)
+  local cj=$HOME/.claude.json
+  [ -f "$cj" ] || echo '{}' >"$cj"
+  jq --arg d "$2" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' "$cj" >"$cj.roster.$$" &&
+    chmod 600 "$cj.roster.$$" && mv "$cj.roster.$$" "$cj"
+}
+
+agent() {  # agent NAME MODEL DIR CLAUDE-ARGS...: a Claude Code session as roster agent NAME
+  local name=$1 model=$2 dir=$3 effort=(); shift 3
+  home "$name" "$dir" || return 0
+  case $model in *:*) effort=(--effort "${model#*:}") ;; esac
+  # the coord channel (claude/channel.py, mail per) and the standing
+  # instruction that team mail is to be acted on (without it Haiku and Opus refused mid-turn mail, 7 Nov)
+  local mcp settings=$COORD/claude-settings.json mode=(--dangerously-skip-permissions) url=() filter=.
+  mcp=$(jq -nc --arg c "$AGENT_BASE/claude/channel.py" '{mcpServers: {coord: {command: $c, args: []}}}')
+  # On the host (a project without a box, COORDD_SOCK set) nothing but the session's permissions stands between it and
+  # the owner's machine: it keeps the owner's own Claude Code permission mode (prompts answered in its terminal, which
+  # yaaihh shows), with the same hooks. In a box the box is the boundary and agents bypass prompts.
+  if [ -n "${COORDD_SOCK:-}" ]; then
+    mode=() filter+=' | del(.permissions.defaultMode, .skipDangerousModePermissionPrompt)'
+    # the route's endpoint (a box's comes with every exec, box.sh)
+    local u; u=$(route_get ANTHROPIC_BASE_URL); [ -z "$u" ] || url=(ANTHROPIC_BASE_URL="$u")
+  fi
+  # the proxy key through apiKeyHelper only with a route (lib/route.sh); without one the session uses its own login
+  [ -s "$COORD/.proxy-key" ] || filter+=' | del(.apiKeyHelper)'
+  jq "$filter" "$AGENT_BASE/claude/settings.json" >"$settings.$$" && mv "$settings.$$" "$settings"
+  # Claude Code's development-channel warning, the one dialog at each start (design additions 11), is confirmed by the
+  # terminal's holder: a poller here died with roster's caller and left the agent stuck there
+  open "$name" "$dir" --confirm 'Loading development channels' env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+    LANG=C.UTF-8 AGENT_NAME="$name" AGENT_MODEL="$model" COORD="$COORD" "${sockenv[@]}" "${url[@]}" AGENT_BASE="$AGENT_BASE" \
+    PATH="$AGENT_BASE/bin:$PATH" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
+    GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" \
+    "$AGENT_BASE/bin/coordc" run "$name" -- claude "$@" --name "$name" --model "${model%%:*}" "${effort[@]}" --settings "$settings" \
+    "${mode[@]}" --mcp-config "$mcp" --dangerously-load-development-channels server:coord \
+    --append-system-prompt "$(cat "$AGENT_BASE/claude/team-mail.md")"
+}
+
+app_server() {  # app_server NAME MODEL[:EFFORT]: NAME's Codex app-server, started unless it runs
+  # developer_instructions: the standing team-mail paragraph Claude Code agents get with --append-system-prompt
+  # (without it a Codex agent told to wait for mail slept inside its turn, so no mail could reach it, 7 Nov)
+  local name=$1 sock=$apps/$1.sock pid effort=()
+  case $2 in *:*) effort=(-c "model_reasoning_effort=\"${2#*:}\"") ;; esac
+  pid=$(cat "$apps/$name.pid" 2>/dev/null) || pid=
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ -S "$sock" ] && return
+  mkdir -p -m 700 "$apps"
+  jq -n --arg h "$AGENT_BASE/claude/hook" '
+    def on(e; a): {(e): [{hooks: [{type: "command", command: "\"\($h)\" \(a)"}]}]};
+    def tool(e; a): {(e): [{matcher: "*", hooks: [{type: "command", command: "\"\($h)\" \(a)"}]}]};
+    {hooks: (on("SessionStart"; "start") + on("UserPromptSubmit"; "prompt") + tool("PreToolUse"; "pre")
+             + tool("PostToolUse"; "post") + on("Stop"; "stop"))}' >"$apps/hooks.json.$$"
+  cmp -s "$apps/hooks.json.$$" "$CODEX_HOME/hooks.json" && rm "$apps/hooks.json.$$" ||
+    mv "$apps/hooks.json.$$" "$CODEX_HOME/hooks.json"
+  rm -f "$sock"
+  env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+    LANG=C.UTF-8 AGENT_NAME="$name" AGENT_MODEL="$2" AGENT_KIND=codex CODEX_SOCK="$sock" COORD="$COORD" "${sockenv[@]}" \
+    AGENT_BASE="$AGENT_BASE" PATH="$AGENT_BASE/bin:$PATH" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
+    GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" \
+    setsid "$AGENT_BASE/bin/coordc" run "$name" -- codex app-server -c sandbox_mode='"danger-full-access"' -c approval_policy='"never"' "${effort[@]}" \
+    -c "developer_instructions=$(jq -Rs . "$AGENT_BASE/claude/team-mail.md")" \
+    --listen "unix://$sock" </dev/null >>"$apps/$name.log" 2>&1 &
+  echo $! >"$apps/$name.pid"
+  for _ in $(seq 100); do [ -S "$sock" ] && return; sleep 0.1; done
+  echo "$name: codex app-server did not start; see $apps/$name.log" >&2; exit 1
+}
+
+app_stop() {  # app_stop NAME: stop NAME's app-server, if the pid on file is still that app-server
+  local pid
+  pid=$(cat "$apps/$1.pid" 2>/dev/null) || return 0
+  grep -qF "unix://$apps/$1.sock" "/proc/$pid/cmdline" 2>/dev/null && kill "$pid"
+  rm -f "$apps/$1.pid"
+}
+
+codex_agent() {  # codex_agent NAME MODEL DIR THREAD PROMPT: Codex roster agent NAME; no THREAD starts a new one
+  local name=$1 model=$2 dir=$3 tid=$4 prompt=$5
+  home "$name" "$dir" || return 0
+  app_server "$name" "$model"
+  rpc "$name" trust-hooks "$dir" >/dev/null
+  if [ -z "$tid" ]; then
+    tid=$(rpc "$name" new-thread "$dir" "${model%%:*}" "$prompt") prompt=
+  else
+    rpc "$name" status "$tid" >/dev/null  # loaded by its app-server before the TUI attaches
+  fi
+  # the thread's SessionStart hook tells coordd its transcript later; coordd needs the thread from now (mail to it)
+  coordc session "$name" "$(jq -nc --arg t "$tid" --arg d "$dir" --arg k "$apps/$name.sock" '{session_id: $t, cwd: $d, socket: $k}')"
+  open "$name" "$dir" env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" "${sockenv[@]}" AGENT_BASE="$AGENT_BASE" \
+    PATH="$AGENT_BASE/bin:$PATH" codex -c check_for_update_on_startup=false resume "$tid" --remote "unix://$apps/$name.sock"
+  [ -z "$prompt" ] || rpc "$name" send "$tid" next "$prompt"
+}
+
+start() {  # start NAME MODEL PROMPT DIR
+  case $(state "$1") in '' | stopped) ;; *) echo "$1: already running"; return ;; esac
+  # the hierarchy: NAME's parent is whoever registers it first, an agent or the owner (coordd knows the
+  # caller by its cgroup)
+  local kind=claude; case $2 in gpt-*) kind=codex ;; esac
+  coordc add "$1" "$kind" "$2" >/dev/null
+  local resume=() prompt id
+  prompt=$(cat "$3")
+  if id=$(sed -n '1s/^resume: *\([0-9a-f-]\{36\}\) *$/\1/p' "$3") && [ -n "$id" ]; then
+    resume=(--resume "$id"); prompt=$(tail -n +2 "$3")
+  fi
+  case $2 in
+  gpt-*) codex_agent "$1" "$2" "$4" "${id:-}" "$prompt" ;;
+  *) agent "$1" "$2" "$4" "${resume[@]}" "$prompt" ;;
+  esac
+  echo "$1: started ($2)"
+}
+
+restart() {  # restart NAME: its own session again, from session.json
+  local s=$COORD/agents/$1/session.json sid dir model
+  [ -f "$s" ] || { echo "$1: no $s (roster add starts a new agent)" >&2; exit 1; }
+  sid=$(jq -r '.session_id // empty' "$s"); dir=$(jq -r '.cwd // empty' "$s"); model=$(jq -r '.model // empty' "$s")
+  [ -n "$sid" ] && [ -n "$dir" ] || { echo "$1: $s has no session_id or cwd" >&2; exit 1; }
+  if [ "$(jq -r '.kind // empty' "$s")" = codex ]; then  # the turn lives in the app-server: only the TUI is new
+    close "$1"; codex_agent "$1" "$model" "$dir" "$sid" ""
+    echo "$1: restarted (thread $sid)"; return
+  fi
+  # a running turn is not cut off (a restart killed DEBUG's answer to the owner, 6 Nov); working from the turn's start
+  [ "$(state "$1")" != working ] || [ "${2:-}" = --force ] || { echo "$1: working (a turn is running); not restarted (--force)" >&2; exit 1; }
+  close "$1"
+  # the new process claims NAME only once the old one has ended (coordd refuses a second)
+  for _ in $(seq 40); do [ "$(state "$1")" = stopped ] && break; sleep 0.25; done
+  agent "$1" "${model:-claude-opus-5-5}" "$dir" --resume "$sid"
+  echo "$1: restarted (session $sid)"
+}
+
+rename() {  # rename NAME NEW: wait for NAME's turn to end, stop it, rename it, resume it as NEW
+  local s=$COORD/agents/$1/session.json
+  [ -f "$s" ] || { echo "$1: no $s" >&2; exit 1; }
+  while [ "$(state "$1")" = working ]; do sleep 2; done
+  close "$1"
+  for _ in $(seq 40); do [ "$(state "$1")" = stopped ] && break; sleep 0.25; done
+  coordc rename "$1" "$2" || exit 1
+  restart "$2"
+}
+
+case ${1:-} in
+up)
+  file=$(realpath "${2:?roster up FILE}"); base=$(dirname "$file")
+  while read -r name model prompt dir; do
+    [ -z "$name" ] || [ "${name:0:1}" = "#" ] && continue
+    case $prompt in /*) ;; *) prompt=$base/$prompt ;; esac
+    start "$name" "$model" "$prompt" "${dir:-$PWD}"
+  done <"$file"
+  ;;
+add)
+  [ $# -ge 4 ] || { echo "usage: roster add NAME MODEL PROMPT-FILE [DIR]" >&2; exit 2; }
+  start "$2" "$3" "$(realpath "$4")" "$(realpath "${5:-$PWD}")"
+  ;;
+restart) restart "${2:?roster restart NAME [--force]}" "${3:-}" ;;
+resume)  # the agents that ran when coordd last went down, each from its own session (coordd's $COORD/resume.json)
+  f=$COORD/resume.json
+  [ -f "$f" ] || exit 0
+  mv "$f" "$f.taking"
+  for n in $(jq -r '.[]' "$f.taking"); do (restart "$n") || true; done
+  rm -f "$f.taking"
+  ;;
+rename) rename "${2:?roster rename NAME NEW}" "${3:?roster rename NAME NEW}" ;;
+tab)
+  [ $# -ge 4 ] || { echo "usage: roster tab NAME DIR CMD..." >&2; exit 2; }
+  # registered as a program and claimed like an agent, so it has a delegated cgroup of its own (agents/NAME): the
+  # runner's memory-limited jobs go beside it, counted as the runner's, not its starter's
+  n=$2 d=$3; shift 3; close "$n"; coordc add "$n" program - >/dev/null
+  open "$n" "$d" env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" "${sockenv[@]}" "$AGENT_BASE/bin/coordc" run "$n" -- "$@"
+  echo "$n: started"
+  ;;
+down) close "${2:?roster down NAME}"; app_stop "$2" ;;
+ls) coordc terms ;;
+*) sed -n '9,/^[^#]/p' "$0" | grep '^#' | sed 's/^# //'; exit 2 ;;
+esac

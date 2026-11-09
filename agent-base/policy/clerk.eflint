@@ -1,0 +1,30 @@
+// The clerk's decisions: asked by nets/clerk.net.
+
+// How an agent's turn end is taken when it waits on nothing coordd knows of: accepted (it waits for its wake),
+// nudged ("do that next") or, past the cap, told to the owner. The net gives the clerk's reading of the turn (state:
+// Done, Next, Blocked, Waiting), the nudges in a row so far (nudged) and the length of what it wrote (said). Each
+// case is said outright.
+Decision end-of-turn
+  Options accept | nudge | escalate
+// Only a turn that names its own next step and stops (Next) is nudged or told; any other is accepted.
+Only for end-of-turn When call.state != "Next":
+  option == "accept"
+// A turn whose text came out empty is accepted: there is nothing it could have said it would do next.
+Only for end-of-turn When call.said == 0:
+  option == "accept"
+// Past three nudges in a row there is no fourth: the owner is told instead.
+Only for end-of-turn When call.nudged >= 3:
+  option != "nudge"
+Prefer for end-of-turn When call.state == "Next" and call.nudged >= 3:
+  option == "escalate" > option == "accept"
+// Below the cap, a Next is nudged.
+Prefer for end-of-turn When call.state == "Next":
+  option == "nudge" > option == "escalate" > option == "accept"
+
+// Whether the owner's message gets a spell check first: not a short reply ("yes", "1 yes 2 no").
+Decision needs-spellcheck
+  Options yes | no
+Prefer for needs-spellcheck When call.length < 16:
+  option == "no"
+Prefer for needs-spellcheck:
+  option == "yes"

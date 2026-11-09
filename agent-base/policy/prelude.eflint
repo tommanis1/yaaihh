@@ -1,0 +1,19 @@
+// The system's prelude: the facts coordd supplies and the
+// decisions it asks. Not policy: the facts are filled from the proxy and the price catalog (coordd policy/facts.rs).
+Fact model Identified by String
+Fact provider Identified by model * String
+Fact family Identified by model * String
+// the agent harness that runs the model in a session: codex (OpenAI's models), claude (Anthropic's)
+Fact harness Identified by model * String
+// input price, micro-dollars per million tokens (cpa's resources/model_prices.json); a model without one is not used
+Fact price Identified by model * Int
+
+// The model of an LLM call. The call gives `task` (its `task` line), `agent` (who it runs for) and `call` (its name).
+Decision model-for
+  Options model
+  Requires price(option) >= 0
+
+// A net's session is a harness session: its model must be one a harness runs. The call gives
+// `place` = `session` for a session's first call.
+Only for model-for When call.place == "session":
+  harness(option, _)

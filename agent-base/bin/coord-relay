@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""coord-relay: deliver box agents' messages to Claude Code sessions on the host.
+
+Usage: coord-relay [--once]
+
+A box agent runs `coord msg NAME TEXT` for a host name NAME: the file
+$COORD/hosts/NAME holds that session's resume id (our name, never Claude Code's
+display name, which changes). coord writes the message to the box's
+$COORD/feed.jsonl (delivery "relay"), on the read-write mount the host sees as
+~/agent-coord/BOX/feed.jsonl. This reads every box's feed from where it last
+stopped (~/agent-coord/.relay.json) and posts each such message into the inbox
+socket of the live host session with exactly that id (~/.claude/sessions/PID.json), as
+"[from BOX/AGENT] TEXT". The receiving session sees a message from another
+session, so it cannot approve anything. The result goes back into the box's
+feed as a `relay` entry, where coord status and the view show it.
+
+Nothing is dropped (owner, 6 Nov 2026): a message that cannot be delivered (no
+such host session running) is held in the state file and delivered when a
+session with that id starts. Its sender is told at once, by `coord msg` like
+any message, which message (when it was sent, its first line) and why; and told
+again when it is finally delivered.
+
+Event-driven, no polling: it sleeps on inotify until a box writes its feed, a
+box directory appears, or a host session starts (~/.claude/sessions changes).
+"""
+import argparse, ctypes, glob, json, os, select, socket, struct, subprocess
+from datetime import datetime
+
+HOME = os.path.expanduser("~")
+ROOT = os.environ.get("RELAY_ROOT", f"{HOME}/agent-coord")
+SESSIONS = os.environ.get("RELAY_SESSIONS", f"{HOME}/.claude/sessions")
+STATE = f"{ROOT}/.relay.json"
+COORD_BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "coord")
+
+
+def host_session(box, name):
+    """The inbox socket of the live host session that hosts/NAME of BOX names, and why not if none."""
+    try:
+        with open(f"{ROOT}/{box}/hosts/{name}") as fh:
+            sid = fh.read().strip()
+    except OSError:
+        return None, f"no host named {name} in {box}/hosts"
+    for f in glob.glob(f"{SESSIONS}/*.json"):
+        try:
+            with open(f) as fh:
+                s = json.load(fh)
+            os.kill(s["pid"], 0)
+        except (OSError, ValueError, KeyError):
+            continue
+        if s.get("sessionId") == sid:
+            return s.get("messagingSocketPath"), None
+    return None, f"host {name} ({sid[:8]}) is not running"
+
+
+def deliver(sock, text):
+    line = json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+        c.settimeout(5)
+        c.connect(sock)
+        c.sendall(line.encode())
+
+
+def attempt(box, e):
+    """Deliver message E of BOX; None when delivered, else why not."""
+    sock, why = host_session(box, e.get("to", ""))
+    if not sock:
+        return why
+    try:
+        deliver(sock, f"[from {box}/{e.get('from', '?')}] {e.get('text', '')}")
+        return None
+    except OSError as err:
+        return f"{e.get('to')}: {err}"
+
+
+def tell_sender(box, e, text):
+    """Tell the box agent that sent E, by `coord msg` (held until its turn ends, like any message to a busy agent)."""
+    sender = e.get("from", "")
+    if not os.path.isdir(f"{ROOT}/{box}/agents/{sender}"):
+        return  # the owner or an unknown sender: the feed's relay entry is all there is
+    title = (e.get("text", "").strip().splitlines() or [""])[0][:100]
+    subprocess.run([COORD_BIN, "msg", sender,
+                    f"{text}: your message to host {e.get('to')} sent {e.get('at')}: \"{title}\""],
+                   env={**os.environ, "COORD": f"{ROOT}/{box}", "AGENT_NAME": "coord-relay"},
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def record(box, e, status):
+    with open(f"{ROOT}/{box}/feed.jsonl", "a") as fh:
+        fh.write(json.dumps({"kind": "relay", "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                             "from": "coord-relay", "to": e.get("from"), "msg_to": e.get("to"),
+                             "msg_at": e.get("at"), "status": status}) + "\n")
+
+
+def relay(state):
+    offsets, held = state["offsets"], state["held"]
+    # Held messages first, oldest first: a host session may have started.
+    still = []
+    for h in held:
+        why = attempt(h["box"], h["msg"])
+        if why:
+            still.append(h)
+        else:
+            record(h["box"], h["msg"], f"delivered to {h['msg'].get('to')} (held since {h['msg'].get('at')})")
+            tell_sender(h["box"], h["msg"], "Delivered late")
+    state["held"] = held = still
+    for feed in glob.glob(f"{ROOT}/*/feed.jsonl"):
+        box = os.path.basename(os.path.dirname(feed))
+        size = os.path.getsize(feed)
+        start = offsets.get(feed, 0)  # a feed made since the relay began (older ones start at their end)
+        if start > size:
+            start = 0
+        with open(feed, "rb") as fh:
+            fh.seek(start)
+            data = fh.read()
+        end = data.rfind(b"\n") + 1
+        for raw in data[:end].splitlines():
+            try:
+                e = json.loads(raw)
+            except ValueError:
+                continue
+            if e.get("kind") != "msg" or e.get("delivery") != "relay":
+                continue
+            why = attempt(box, e)
+            if why:
+                held.append({"box": box, "msg": e})
+                record(box, e, f"{why}; held, delivered when it runs")
+                tell_sender(box, e, f"Not delivered ({why}); held, delivered when it runs")
+            else:
+                record(box, e, f"delivered to {e.get('to')}")
+        offsets[feed] = os.path.getsize(feed) if end else start  # past our own relay entries too
+
+
+class Inotify:
+    """The few inotify calls this needs, through libc (no extra package)."""
+    MODIFY, CREATE, MOVED_TO, ISDIR = 0x2, 0x100, 0x80, 0x40000000
+
+    def __init__(self):
+        self.libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        self.fd = self.libc.inotify_init1(os.O_CLOEXEC)
+        if self.fd < 0:
+            raise OSError(ctypes.get_errno(), "inotify_init1")
+        self.watched = {}
+
+    def watch(self, path, mask):
+        if path in self.watched.values():
+            return
+        wd = self.libc.inotify_add_watch(self.fd, path.encode(), mask)
+        if wd >= 0:
+            self.watched[wd] = path
+
+    def wait(self):
+        """Block until events arrive; the (directory, name, mask) of each."""
+        select.select([self.fd], [], [])
+        buf, out, i = os.read(self.fd, 65536), [], 0
+        while i < len(buf):
+            wd, mask, _, n = struct.unpack_from("iIII", buf, i)
+            name = buf[i + 16:i + 16 + n].rstrip(b"\0").decode(errors="replace")
+            out.append((self.watched.get(wd, ""), name, mask))
+            i += 16 + n
+        return out
+
+
+def save(state):
+    with open(STATE + ".tmp", "w") as f:
+        json.dump(state, f)
+    os.replace(STATE + ".tmp", STATE)
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--once", action="store_true")
+    args = p.parse_args()
+    try:
+        with open(STATE) as f:
+            state = json.load(f)
+        if "offsets" not in state:  # the old state file: offsets only
+            state = {"offsets": state, "held": []}
+    except (OSError, ValueError):
+        state = {"offsets": {}, "held": []}
+    for feed in glob.glob(f"{ROOT}/*/feed.jsonl"):  # what was there before the relay began is not delivered
+        state["offsets"].setdefault(feed, os.path.getsize(feed))
+    ino = None if args.once else Inotify()
+    while True:
+        if ino:  # watch before reading, so nothing written in between is missed
+            ino.watch(ROOT, Inotify.CREATE)
+            ino.watch(SESSIONS, Inotify.CREATE | Inotify.MOVED_TO | Inotify.MODIFY)
+            for d in glob.glob(f"{ROOT}/*/"):
+                ino.watch(d.rstrip("/"), Inotify.MODIFY | Inotify.CREATE)
+        relay(state)
+        save(state)
+        if args.once:
+            break
+        # Wake for a feed written, a box directory made, or a host session file written; not for our own state file.
+        while not any(d == SESSIONS or name == "feed.jsonl" or (d == ROOT and mask & Inotify.ISDIR)
+                      for d, name, mask in ino.wait()):
+            pass
+
+
+if __name__ == "__main__":
+    main()

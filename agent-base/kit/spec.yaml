@@ -1,0 +1,20 @@
+# agent-base mixin for Docker Sandboxes (sbx v0.50.1, kits v2).
+# Adds what the claude image lacks for the box: tmux (one window per agent)
+# and socat (coord posts into session inbox sockets). The agent-base checkout
+# itself is mounted read-only by box/box.sh, so hooks and tools update without
+# recreating the sandbox.
+schemaVersion: "2"
+kind: mixin
+name: agent-base
+description: tmux and socat for agent-base boxes
+requires:
+  agent: claude
+permissions:
+  network:
+    allow:
+      - localhost:8317
+setup:
+  install:
+    - description: tmux for agent windows, socat for inbox sockets
+      command: "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tmux socat >/dev/null"
+      user: "0"

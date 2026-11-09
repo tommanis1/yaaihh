@@ -1,0 +1,11 @@
+[Unit]
+Description=coord-relay: deliver box agents' messages to host Claude Code sessions
+
+[Service]
+# the agent-base of your checkout (edit to where yours is)
+ExecStart=%h/yaaihh/agent-base/bin/coord-relay
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# git hooks for box sessions (design §9, links). core.hooksPath points here, and
+# every standard hook name in this directory is a symlink to this file.
+#
+# prepare-commit-msg adds the commit's provenance as trailers:
+#   Agent:   $AGENT_NAME (set by roster)
+#   Session: $CLAUDE_CODE_SESSION_ID (exported by Claude Code to Bash)
+#   Ruling:  the ruling the agent last acknowledged ($COORD/agents/NAME/ruling)
+# Every hook then runs the repository's own hook of the same name, so a repo's
+# pre-commit or pre-push checks still apply.
+set -u
+hook=$(basename "$0")
+
+if [ "$hook" = prepare-commit-msg ] && [ -n "${AGENT_NAME:-}" ]; then
+  msg=$1
+  ruling=$(cat "${COORD:-/nonexistent}/agents/$AGENT_NAME/ruling" 2>/dev/null || true)
+  args=(--trailer "Agent: $AGENT_NAME")
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && args+=(--trailer "Session: $CLAUDE_CODE_SESSION_ID")
+  [ -n "$ruling" ] && args+=(--trailer "Ruling: $ruling")
+  git interpret-trailers --in-place --if-exists replace "${args[@]}" "$msg"
+fi
+
+own=$(git rev-parse --git-common-dir)/hooks/$hook
+if [ -x "$own" ]; then exec "$own" "$@"; fi
+exit 0

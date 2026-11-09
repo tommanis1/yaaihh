@@ -1,0 +1,6 @@
+__pycache__/
+releases/
+# the owner's flavour (private boxes, projects, config): its own repo, checked out here so a box mounting soft-swarm sees it
+/flavor/
+# the account proxy (tommanis1/yaaihh-proxy, private): its own repo, checked out here
+/proxy/

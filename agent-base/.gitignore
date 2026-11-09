@@ -1,0 +1,5 @@
+scratch/
+view/out/
+bin/coordd
+bin/coordc
+bin/coord-pty

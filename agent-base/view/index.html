@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Box View</title>
+<!-- The live view (design, owner decision 9). Read-only: it reloads out/snap.js,
+     written by snapshot.py, every 3 s. Open this file directly in a browser. -->
+<style>
+:root { --bg:#fbfbfa; --fg:#1d1d1b; --mute:#6b6b66; --line:#e3e2dd; --card:#fff;
+        --ok:#2f7d4f; --warn:#a46200; --bad:#b3261e; --accent:#2856a6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+        --bg:#151514; --fg:#e8e7e3; --mute:#9a9992; --line:#2c2c2a; --card:#1c1c1b;
+        --ok:#5fbf86; --warn:#e0a040; --bad:#ef6b62; --accent:#7ea6ec; } }
+:root[data-theme="dark"] { --bg:#151514; --fg:#e8e7e3; --mute:#9a9992; --line:#2c2c2a; --card:#1c1c1b;
+        --ok:#5fbf86; --warn:#e0a040; --bad:#ef6b62; --accent:#7ea6ec; }
+* { box-sizing: border-box; }
+body { margin:0; padding:12px 16px; background:var(--bg); color:var(--fg);
+       font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+header { display:flex; flex-wrap:wrap; gap:6px 18px; align-items:baseline; padding-bottom:8px; border-bottom:1px solid var(--line); }
+header b { font-weight:600; }
+.mute { color:var(--mute); }
+.ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+main { display:grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr); gap:14px; margin-top:10px; }
+@media (max-width: 900px) { main { grid-template-columns: minmax(0,1fr); } }
+section { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:8px 10px; min-width:0; }
+h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 6px; font-weight:600; }
+table { width:100%; border-collapse:collapse; }
+td, th { text-align:left; padding:3px 6px 3px 0; vertical-align:top; border-top:1px solid var(--line); }
+th { color:var(--mute); font-weight:500; border-top:none; }
+td.doing { word-break:break-word; }
+.alarm { color:var(--bad); }
+.feed div { padding:2px 0; border-top:1px solid var(--line); word-break:break-word; }
+details { margin-left:calc(var(--lvl, 0) * 14px); }
+summary { cursor:pointer; }
+.pid { color:var(--accent); display:inline-block; min-width:3.5em; }
+</style>
+</head>
+<body>
+<header id="top"><b>agent box</b><span class="mute">waiting for out/snap.js (run view/snapshot.py --every 3)</span></header>
+<main>
+  <div style="display:grid; gap:14px; min-width:0">
+    <section id="alarms" hidden><h2>Alarms</h2><div></div></section>
+    <section><h2>Agents</h2><div id="agents"></div></section>
+    <section><h2>Plan</h2><div id="plan" class="mute">no --plan given</div></section>
+  </div>
+  <section><h2>Feed</h2><div id="feed" class="feed"></div></section>
+</main>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const age = (t, now) => { const s = Math.max(0, Math.round(now - t));
+  return s >= 3600 ? `${Math.floor(s/3600)}h${Math.floor(s%3600/60)}m` : s >= 60 ? `${Math.floor(s/60)}m` : `${s}s`; };
+const clock = t => new Date(t * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+const openPlan = new Set();
+
+function render(S) {
+  const now = Date.now() / 1000, stale = now - S.at > 15;
+  document.getElementById("top").innerHTML =
+    `<b>agent box</b><span class="${stale ? "bad" : "mute"}">snapshot ${age(S.at, now)} ago</span>` +
+    S.boxes.map(b => `<span>${esc(b.name)} <span class="${b.status === "running" ? "ok" : "mute"}">${esc(b.status)}</span>` +
+      (b.memory_mib ? ` <span class="mute">${(b.memory_mib / 1024).toFixed(0)} GiB</span>` : "") + `</span>`).join("") +
+    (S.ruling ? `<span>ruling <b>#${esc(S.ruling.id)}</b> <span class="mute">${esc(S.ruling.title)}</span></span>` : "");
+
+  const alarms = (S.alarms || []).concat(S.boxes.flatMap(b => b.alarms));
+  const al = document.getElementById("alarms");
+  al.hidden = !alarms.length;
+  al.querySelector("div").innerHTML = alarms.map(a => `<div class="alarm">${esc(a)}</div>`).join("");
+
+  const rows = S.boxes.flatMap(b => b.agents.map(a => {
+    const doing = a.doing.map(x => `${esc(x.tool)} <span class="mute">${esc(x.what.slice(0, 90))} · ${age(x.at, now)}</span>`).join("<br>");
+    const beatCls = a.beat == null ? "bad" : now - a.beat > 600 && a.doing.length ? "bad" : "mute";
+    return `<tr><td>${esc(b.name)}/<b>${esc(a.name)}</b></td><td class="mute">${esc(a.model)}</td>` +
+      `<td class="${beatCls}">${a.beat == null ? "never" : age(a.beat, now)}</td>` +
+      `<td>${a.ruling ? "#" + esc(a.ruling) : "<span class=mute>-</span>"}</td>` +
+      `<td class="doing">${doing || "<span class=mute>idle</span>"}</td></tr>`;
+  }));
+  document.getElementById("agents").innerHTML = rows.length
+    ? `<table><tr><th>agent</th><th>model</th><th>beat</th><th>ruling</th><th>doing now</th></tr>${rows.join("")}</table>`
+    : `<span class="mute">no agents registered</span>`;
+
+  if (S.plan) {
+    // Headings become nested <details>; the open state survives re-renders.
+    const items = S.plan.items; let html = "", depth = 0;
+    items.forEach((it, i) => {
+      const next = items[i + 1], hasKids = next && next.level > it.level, key = it.id || it.title;
+      while (depth >= it.level) { html += "</details>"; depth--; }
+      const label = `<span class="pid">${esc(it.id)}</span>${esc(it.title)}`;
+      if (hasKids) { html += `<details data-k="${esc(key)}" ${openPlan.has(key) ? "open" : ""} style="--lvl:${it.level > 1 ? 1 : 0}"><summary>${label}</summary>`; depth = it.level; }
+      else html += `<div style="margin-left:${(it.level - 1) * 14 + 14}px">${label}</div>`;
+    });
+    while (depth-- > 0) html += "</details>";
+    const plan = document.getElementById("plan");
+    plan.className = ""; plan.innerHTML = html;
+    plan.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () =>
+      d.open ? openPlan.add(d.dataset.k) : openPlan.delete(d.dataset.k)));
+  }
+
+  const feed = S.boxes.flatMap(b => b.feed.map(e => ({...e, box: b.name}))).sort((x, y) => y.t - x.t).slice(0, 80);
+  document.getElementById("feed").innerHTML = feed.map(e => {
+    const head = `<span class="mute">${clock(e.t)}</span> `;
+    if (e.kind === "commit") return `<div>${head}<span class="ok">commit</span> ${esc(e.hash)} <b>${esc(e.from)}</b> ${esc(e.text)}` +
+      `<span class="mute">${e.ruling ? " · ruling #" + esc(e.ruling) : ""}${e.session ? " · session " + esc(e.session.slice(0, 8)) : ""}</span></div>`;
+    if (e.kind === "stop") return `<div>${head}<span class="bad">stop</span> ${esc(e.from)} → <b>${esc(e.to)}</b> #${esc(e.ruling)} ${esc(e.reason)}</div>`;
+    if (e.kind === "ack") return `<div>${head}<span class="ok">ack</span> <b>${esc(e.from)}</b> #${esc(e.ruling)}</div>`;
+    return `<div>${head}<span class="warn">msg</span> ${esc(e.from)} → <b>${esc(e.to)}</b> ${esc(e.text)}</div>`;
+  }).join("") || `<span class="mute">nothing yet</span>`;
+}
+
+function load() {
+  const s = document.createElement("script");
+  s.src = "out/snap.js?" + Date.now();
+  s.onload = () => { s.remove(); if (window.SNAP) render(window.SNAP); };
+  s.onerror = () => s.remove();
+  document.head.appendChild(s);
+}
+load(); setInterval(load, 3000);
+</script>
+</body>
+</html>
