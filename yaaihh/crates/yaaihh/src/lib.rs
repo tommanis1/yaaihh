@@ -756,6 +756,9 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
             );
         }
     }
+    for b in zoom::toolbar(s, &k) {
+        bar = bar.trailing(b);
+    }
     bar = bar.trailing(Button::new("Split").variant(ButtonVariant::Ghost).disabled(!s.can_split()).on_press(|s: &mut App| s.split()).build(&k));
     if let Some(pin) = s.shown_pin() {
         let on = s.pins.has(&pin);
@@ -792,7 +795,7 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
         .sidebar_toggle(SidebarToggle::new().in_header())
         .reduced_motion(cx.is_reduced_motion())
         .build(&k);
-    rune_kit::root(split, layer).on_wheel(|s: &mut App, e, tx| zoom::wheel(s, &e, tx))
+    rune_kit::root(split, layer)
 }
 
 fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
@@ -1232,6 +1235,7 @@ pub fn run(exts: Vec<ext::Extension>) {
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
+        on_wheel: Some(zoom::wheel),
         scenes: scenes(),
         min_size: Some((720.0, 480.0)),
         // mono text (tool calls, results) in the system's monospace face

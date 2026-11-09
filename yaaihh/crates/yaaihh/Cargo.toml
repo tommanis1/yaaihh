@@ -10,8 +10,8 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 # our fork of Rune (its yaaihh branch); a local checkout replaces it through a cargo [patch] in .cargo/config.toml
-rune = { git = "https://github.com/tommanis1/rune", rev = "10ee36ade874582759a79d0d74174200ee8df8dc", features = ["native-file-dialog"] }
-rune-kit = { git = "https://github.com/tommanis1/rune", rev = "10ee36ade874582759a79d0d74174200ee8df8dc", features = ["markdown"] }
+rune = { git = "https://github.com/tommanis1/rune", rev = "059f1aaa8f61d82749031af795577f0303eca353", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/tommanis1/rune", rev = "059f1aaa8f61d82749031af795577f0303eca353", features = ["markdown"] }
 # the model price catalog, for the agents' cost
 prices = { path = "../prices" }
 chrono = "0.4"

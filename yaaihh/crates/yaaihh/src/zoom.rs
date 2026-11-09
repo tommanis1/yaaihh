@@ -1,4 +1,5 @@
-//! The whole window's zoom: Ctrl+wheel, Ctrl+= and Ctrl+- in tenths, Ctrl+0 back to 100%, kept in
+//! The whole window's zoom: Ctrl+wheel, Ctrl+= and Ctrl+- in tenths, Ctrl+0 back to 100%, and the
+//! toolbar's − / % / + buttons (`toolbar`), kept in
 //! ui.json (state.rs). Rune lays the window out, draws its text and hit-tests at the system's scale times the zoom
 //! (`Tx::set_ui_zoom`), so every page follows without knowing.
 
@@ -33,6 +34,11 @@ impl Zoom {
         self.level = if level.is_finite() { snap(level) } else { 1.0 };
     }
 
+    /// To `level` (snapped); the next poll gives Rune the level (`show`).
+    fn to(&mut self, level: f32) {
+        self.level = snap(level);
+    }
+
     fn set(&mut self, level: f32, tx: &mut Tx) {
         self.level = snap(level);
         self.show(tx);
@@ -53,6 +59,18 @@ fn snap(level: f32) -> f32 {
     ((level * STEPS).round() / STEPS).clamp(MIN, MAX)
 }
 
+/// The toolbar's zoom buttons: out, the level (back to 100% when pressed), in. A press has no `Tx`, so the level
+/// reaches Rune at the next poll (`Zoom::show`).
+pub fn toolbar(s: &App, k: &rune_kit::Kit) -> [rune::El; 3] {
+    use rune_kit::{Button, ButtonVariant};
+    let level = s.zoom.level();
+    [
+        Button::new("−").variant(ButtonVariant::Ghost).disabled(level <= MIN).on_press(|s: &mut App| s.zoom.to(s.zoom.level() - STEP)).build(k),
+        Button::new(format!("{:.0}%", level * 100.0)).variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.zoom.to(1.0)).build(k),
+        Button::new("+").variant(ButtonVariant::Ghost).disabled(level >= MAX).on_press(|s: &mut App| s.zoom.to(s.zoom.level() + STEP)).build(k),
+    ]
+}
+
 /// Ctrl+= (and Ctrl++, the numpad's +), Ctrl+- and Ctrl+0; whether the key was one of them.
 pub fn key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let Key::Command(c) = ev.key else { return false };
@@ -67,7 +85,8 @@ pub fn key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     true
 }
 
-/// Ctrl+wheel anywhere in the window: up zooms in, down out, a step a notch. Takes it, so nothing scrolls under it.
+/// Ctrl+wheel anywhere in the window (Rune's app-level `on_wheel`, ahead of scroll views): up zooms in, down out, a step
+/// a notch. Takes it, so nothing scrolls under it.
 pub fn wheel(s: &mut App, e: &WheelEvent, tx: &mut Tx) -> bool {
     if !e.mods.ctrl {
         return false;
