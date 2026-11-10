@@ -108,8 +108,11 @@ impl Live {
         }
         let names: HashSet<&str> = self.agents.iter().map(|a| a.name.as_str()).collect();
         let mut out = Vec::new();
-        // roots: agents whose parent is not an agent of this box (the owner, a host session)
-        for a in self.agents.iter().filter(|a| !names.contains(a.parent.as_str())) {
+        // roots: agents whose parent is not an agent of this box (the owner, a host session); the teams (roots with agents
+        // below them) first, lone ones (a consultant) after
+        let mut roots: Vec<&AgentView> = self.agents.iter().filter(|a| !names.contains(a.parent.as_str())).collect();
+        roots.sort_by_key(|r| !self.agents.iter().any(|a| a.parent == r.name));
+        for a in roots {
             out.push((0, a));
             walk(&self.agents, &a.name, 1, &mut out);
         }
@@ -118,8 +121,8 @@ impl Live {
 }
 
 /// The box's mail, oldest first (read as a slice), with its threads indexed: a view asks for a mail's thread on
-/// every build, for every mail it shows, so the lookups are by id, never a walk of the whole list
-/// .
+/// every build, for every mail it shows, so the lookups are by id, never a walk of the whole list (9 Nov: walking it
+/// took 60% of each frame).
 #[derive(Default, Clone)]
 pub struct Mail {
     list: Vec<MailView>,

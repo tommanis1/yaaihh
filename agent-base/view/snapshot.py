@@ -135,7 +135,7 @@ def classifier_alarms(now):
 
 
 # Each `sbx ls` opens ~47 Secret Service sessions (sbx reads the Docker login from the keyring); every 3 s that churn
-# crashed gnome-keyring 46, relocking it. So at most
+# crashed gnome-keyring 46 (29 Oct, 16:14 and 20:38: aes_negotiate on a gone client), relocking it. So at most
 # every SBX_EVERY seconds.
 SBX_EVERY = 300
 _sbx = {"at": 0.0, "boxes": {}}

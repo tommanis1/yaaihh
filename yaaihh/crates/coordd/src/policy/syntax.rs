@@ -1,4 +1,4 @@
-//! The policy language's surface: the part of it the
+//! The policy language's surface (vault designs/policy-language-draft-2026-11-08.md, "eFLINT/A"): the part of it the
 //! first slice compiles. A file is a list of declarations, each a head line and its indented body lines:
 //!
 //! ```text
@@ -13,11 +13,20 @@
 //! Only for model-for When call.agent == "orch":     // a hard rule, written as such
 //!   family(option, "claude")
 //! Judge staffing Using "guidelines/staffing.md" When ties          // §6 (read, not yet run)
+//! +tier("claude-haiku-5-5", 1).                   // an instance of a fact type (eFLINT's `+`), one per line:
+//!                                                 // the installer's own facts, such as an order of models
+//!
+//! Act send-mail                                   // §3: an eFLINT act (norms.rs compiles it, GPCE translation)
+//!   Actor agent                                     //     its fields: actor, recipient, one per `Related to` type
+//!   Recipient agent
+//!   Related to thread
+//!   Holds when not role(recipient, "consultant")    //     each `Holds when` derives the act (they are alternatives)
+//!   Conditioned by actor != recipient               //     each `Conditioned by` must hold for it to be enabled
 //! ```
 //!
-//! Comments run from `//` to the line's end. Names may contain `-` (`model-for`, `quota-left`). Norms (`Act`, `Duty`)
-//! are eFLINT's own and not parsed here yet: a file with them is refused with its line, so nothing is silently
-//! dropped.
+//! Comments run from `//` to the line's end. Names may contain `-` (`model-for`, `quota-left`). Of eFLINT's norms only
+//! `Act` with `Holds when` and `Conditioned by` is compiled so far; its effects (`Creates`, `Terminates`, `Syncs with`),
+//! `Duty`, `Event`, `Invariant` and `Predicate` are refused with their line, so nothing is silently dropped.
 
 use std::fmt;
 
@@ -42,6 +51,8 @@ pub enum Expr {
     /// `_`: any value, as a fact's argument only (`harness(option, _)`: some harness runs the option).
     Any,
     Call(String),
+    /// A bare name: an act's field (`actor`, `recipient`, `thread`) in a norm's condition.
+    Field(String),
     Str(String),
     Int(i64),
     App(String, Vec<Expr>),
@@ -102,6 +113,11 @@ pub enum DeclKind {
     Only { decision: String, when: Cond, cond: Cond },
     /// `Judge DECISION Using "FILE" When ties`.
     Judge { decision: String, using: String },
+    /// `+FACT(V1, V2, ...).`: an instance of fact type FACT, its values strings and integers (vault designs/
+    /// teams-and-tiers-2026-11-10.md §2: the installer states facts coordd does not know, such as an order of models).
+    Instance { fact: String, args: Vec<Expr> },
+    /// `Act NAME` (§3): its fields in order (field name, fact type), its `Holds when` and `Conditioned by` lines.
+    Act { name: String, fields: Vec<(String, String)>, holds: Vec<(At, Cond, String)>, conditions: Vec<(At, Cond, String)> },
 }
 
 /// Parse FILE's TEXT.
@@ -150,6 +166,16 @@ fn decl(at: &At, lines: &[(usize, String)]) -> Result<DeclKind, String> {
     let head = &lines[0].1;
     let body = &lines[1..];
     let word = head.split_whitespace().next().unwrap_or("");
+    if let Some(rest) = head.strip_prefix('+') {
+        if !body.is_empty() {
+            return Err("an instance `+FACT(...).` is one line".into());
+        }
+        let rest = rest.trim().strip_suffix('.').ok_or("an instance `+FACT(...)` ends with `.`")?;
+        return match expr(rest)? {
+            Expr::App(fact, args) if args.iter().all(|a| matches!(a, Expr::Str(_) | Expr::Int(_))) => Ok(DeclKind::Instance { fact, args }),
+            _ => Err(format!("`+{rest}.`: an instance names a fact type and gives string and integer values")),
+        };
+    }
     match word {
         "Fact" => {
             let rest = head["Fact".len()..].trim();
@@ -207,7 +233,44 @@ fn decl(at: &At, lines: &[(usize, String)]) -> Result<DeclKind, String> {
             let using = rest.split('"').nth(1).ok_or("the guideline file is a string")?;
             Ok(DeclKind::Judge { decision: decision.trim().into(), using: using.into() })
         }
-        "Act" | "Duty" | "Event" | "Invariant" | "Predicate" => {
+        "Act" => {
+            let name = head["Act".len()..].trim();
+            ident(name)?;
+            let (mut fields, mut holds, mut conditions) = (Vec::new(), Vec::new(), Vec::new());
+            for (l, line) in body {
+                let at = At { file: at.file.clone(), line: *l };
+                if let Some(ty) = line.strip_prefix("Actor ") {
+                    ident(ty.trim())?;
+                    fields.push(("actor".to_string(), ty.trim().to_string()));
+                } else if let Some(ty) = line.strip_prefix("Recipient ") {
+                    ident(ty.trim())?;
+                    fields.push(("recipient".to_string(), ty.trim().to_string()));
+                } else if let Some(tys) = line.strip_prefix("Related to ") {
+                    // eFLINT names a related field by its type
+                    for ty in tys.split(',').map(str::trim) {
+                        ident(ty)?;
+                        fields.push((ty.to_string(), ty.to_string()));
+                    }
+                } else if let Some(c) = line.strip_prefix("Holds when ") {
+                    holds.push((at, cond(c)?, line.clone()));
+                } else if let Some(c) = line.strip_prefix("Conditioned by ") {
+                    conditions.push((at, cond(c)?, line.clone()));
+                } else if ["Creates", "Terminates", "Obfuscates", "Syncs with", "Derived from"].iter().any(|k| line.starts_with(k)) {
+                    return Err(format!("line {l}: `{line}`: an act's effects and `Derived from` are not compiled yet"));
+                } else {
+                    return Err(format!("line {l}: an Act takes Actor, Recipient, Related to, Holds when and Conditioned by lines"));
+                }
+            }
+            if holds.is_empty() {
+                return Err(format!("Act {name} has no `Holds when` line: say when its instances exist (`Holds when true` for all of them)"));
+            }
+            let mut seen = std::collections::HashSet::new();
+            if let Some((f, _)) = fields.iter().find(|(f, _)| !seen.insert(f.clone())) {
+                return Err(format!("Act {name} has two fields named `{f}`"));
+            }
+            Ok(DeclKind::Act { name: name.into(), fields, holds, conditions })
+        }
+        "Duty" | "Event" | "Invariant" | "Predicate" => {
             Err(format!("eFLINT norms (`{word}`) are not compiled yet in this slice; keep them out of the policy for now"))
         }
         _ => Err(format!("unknown declaration `{word}` (Fact, Decision, Prefer, Only, Judge)")),
@@ -242,6 +305,9 @@ fn split_top(s: &str, sep: char) -> Vec<String> {
 
 /// A condition: conjuncts joined by ` and `.
 pub fn cond(s: &str) -> Result<Cond, String> {
+    if s.trim() == "true" {
+        return Ok(Vec::new());
+    }
     split_words(s, " and ").iter().map(|l| lit(l)).collect()
 }
 
@@ -334,7 +400,10 @@ pub fn expr(s: &str) -> Result<Expr, String> {
         let args = if args.trim().is_empty() { Vec::new() } else { split_top(args, ',').iter().map(|a| expr(a)).collect::<Result<_, _>>()? };
         return Ok(Expr::App(f.trim().into(), args));
     }
-    Err(format!("`{s}` is not a value (option, call.FIELD, \"text\", a number or fact(args))"))
+    if ident(s).is_ok() {
+        return Ok(Expr::Field(s.into()));
+    }
+    Err(format!("`{s}` is not a value (option, call.FIELD, a field name, \"text\", a number or fact(args))"))
 }
 
 #[cfg(test)]
@@ -359,6 +428,7 @@ mod tests {
         let d = parse("x", "Decision model-for\n  Options model\n  Requires price(option) >= 0\n").unwrap();
         let DeclKind::Decision { requires, .. } = &d[0].kind else { panic!() };
         assert_eq!(requires[0].1, vec![Lit::Cmp(Expr::App("price".into(), vec![Expr::Option]), Op::Ge, Expr::Int(0))]);
-        assert!(parse("x", "Act staff\n  Actor agent\n").unwrap_err().contains("not compiled yet"));
+        assert!(parse("x", "Duty pay\n  Holder agent\n").unwrap_err().contains("not compiled yet"));
+        assert!(parse("x", "Act staff\n  Actor agent\n").unwrap_err().contains("no `Holds when`"));
     }
 }

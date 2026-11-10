@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""coord context: the nets' contexts (vault designs/supervision-nets-2026-11-10.md §8a), seen and corrected.
+
+  coord context [ls]           each context: its key, harness and model, calls, last use, and its size as the
+                               harness's own session record gives it (first turn: system, instructions and the
+                               first call's facts; the turns since; the window's free space)
+  coord context note KEY TEXT  the next call in context KEY reads TEXT before its prompt (once)
+  coord context reset KEY      the next call in context KEY starts a new session (fresh, or from a digest)
+
+A context is $COORD/nets/sessions/KEY.json (KEY: NAME@agent, NAME@owner, NAME@YYYY-MM-DD); its note KEY.note. The
+context is a cache of judgment, never the record: resetting it loses no state of a net (that is in the logs).
+"""
+import json, os, sys, time
+from pathlib import Path
+
+COORD = Path(os.environ["COORD"])
+NETS = COORD / "nets"
+SESSIONS = NETS / "sessions"
+
+
+def lines(p):
+    try:
+        with open(p, errors="replace") as f:
+            for l in f:
+                try:
+                    yield json.loads(l)
+                except ValueError:
+                    pass
+    except OSError:
+        return
+
+
+def codex_size(sid):
+    """(first input, last input, last output, window) from the session's rollout `token_count` events."""
+    for p in (NETS / "codex" / "home" / "sessions").rglob("rollout-*.jsonl"):
+        with open(p, errors="replace") as f:
+            if sid not in f.readline() and sid not in p.name:
+                continue
+        counts = [e["payload"]["info"] for e in lines(p)
+                  if e.get("type") == "event_msg" and e.get("payload", {}).get("type") == "token_count" and e["payload"].get("info")]
+        if counts:
+            first, last = counts[0]["last_token_usage"], counts[-1]["last_token_usage"]
+            return first["input_tokens"], last["input_tokens"], last["output_tokens"], counts[-1].get("model_context_window")
+    return None
+
+
+def claude_size(sid):
+    """The same from a Claude Code session's assistant usage (input = fresh + cache read + cache write)."""
+    for p in (NETS / "claude" / "home" / "projects").glob(f"*/{sid}.jsonl"):
+        used = [e["message"]["usage"] for e in lines(p) if e.get("type") == "assistant" and e.get("message", {}).get("usage")]
+        if used:
+            tin = lambda u: u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+            return tin(used[0]), tin(used[-1]), used[-1].get("output_tokens", 0), None
+    return None
+
+
+def k(n):
+    return f"{n / 1000:.1f}k"
+
+
+def ls():
+    rows = sorted(SESSIONS.glob("*.json"))
+    if not rows:
+        return print("no contexts yet")
+    for p in rows:
+        s = json.loads(p.read_text() or "{}")
+        key, sid, harness = p.stem, s.get("id"), s.get("harness")
+        last = time.strftime("%Y-%m-%d %H:%M", time.gmtime(s["last"])) + "Z" if s.get("last") else "-"
+        size = (codex_size if harness == "codex" else claude_size)(sid) if sid else None
+        if size:
+            first, now, out, window = size
+            shown = f"{k(now + out)}: first turn {k(first)}, turns since {k(now + out - first)}"
+            if window:
+                shown += f", free {k(window - now - out)} of {k(window)}"
+        else:
+            shown = "no session yet" if not sid else "size unknown (no usage in its record)"
+        note = " [note waiting]" if p.with_suffix(".note").exists() else ""
+        print(f"{key}\t{harness or '-'}/{s.get('model') or '-'}\tcalls {s.get('calls', 0)}\tlast {last}\t{shown}{note}")
+
+
+def path(key):
+    p = SESSIONS / f"{key.replace('/', '_')}.json"
+    if not p.exists():
+        sys.exit(f"coord context: no context {key} (coord context ls)")
+    return p
+
+
+def main(a):
+    if not a or a[0] == "ls":
+        return ls()
+    if a[0] == "note" and len(a) >= 3:
+        path(a[1]).with_suffix(".note").write_text(" ".join(a[2:]) + "\n")
+        return print(f"noted: the next call in {a[1]} reads it")
+    if a[0] == "reset" and len(a) == 2:
+        p = path(a[1])
+        p.rename(p.with_suffix(f".reset-{int(time.time())}"))
+        return print(f"reset: the next call in {a[1]} starts a new session (the old record kept as {p.stem}.reset-*)")
+    sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

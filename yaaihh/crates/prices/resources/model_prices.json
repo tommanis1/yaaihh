@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-24",
+  "updatedAt": "2026-11-09",
   "models": {
     "gpt-6-astra": { "inputPer1M": 10.0, "outputPer1M": 50.0, "cacheReadPer1M": 1.0, "cacheCreationPer1M": 12.5 },
     "gpt-6-sol": { "inputPer1M": 2.0, "outputPer1M": 10.0, "cacheReadPer1M": 0.2, "cacheCreationPer1M": 2.5 },
@@ -40,6 +40,8 @@
     "o3-mini": { "inputPer1M": 1.1, "outputPer1M": 4.4, "cacheReadPer1M": 0.55 },
     "o3-pro": { "inputPer1M": 20.0, "outputPer1M": 80.0 },
     "o4-mini": { "inputPer1M": 1.1, "outputPer1M": 4.4, "cacheReadPer1M": 0.275 },
+    "claude-fable-5-2": { "inputPer1M": 8.0, "outputPer1M": 40.0, "cacheReadPer1M": 0.2, "cacheCreationPer1M": 10.0 },
+    "claude-mythos-5-2": { "inputPer1M": 8.0, "outputPer1M": 40.0, "cacheReadPer1M": 0.2, "cacheCreationPer1M": 10.0 },
     "claude-fable-5-1": { "inputPer1M": 10.0, "outputPer1M": 50.0, "cacheReadPer1M": 0.25, "cacheCreationPer1M": 12.5 },
     "claude-mythos-5-1": { "inputPer1M": 10.0, "outputPer1M": 50.0, "cacheReadPer1M": 0.25, "cacheCreationPer1M": 12.5 },
     "claude-fable-5": { "inputPer1M": 10.0, "outputPer1M": 50.0, "cacheReadPer1M": 1.0, "cacheCreationPer1M": 12.5 },

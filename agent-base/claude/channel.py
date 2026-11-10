@@ -13,12 +13,15 @@ Plain JSON-RPC 2.0, newline-delimited, no SDK: the server only answers initializ
 import json, os, socket, sys, threading
 
 NAME, COORD = os.environ["AGENT_NAME"], os.environ["COORD"]
-# One socket per session: two sessions with one agent's name
-# each bound channel.sock, the last took it, and mail to the agent went to the empty one. coordd
+# One socket per session: two sessions with one agent's name (8 Nov: a resumed background job came with an empty
+# second session) each bound channel.sock, the last took it, and mail to the agent went to the empty one. coordd
 # connects to the socket of the session its hooks named (core.rs push); channel.sock is the fallback with no id.
 SID = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
 SOCK = f"{COORD}/agents/{NAME}/channel-{SID}.sock" if SID else f"{COORD}/agents/{NAME}/channel.sock"
 out = threading.Lock()
+# The mail ids already handed to Claude Code: coordd hands a mail again only when it had no `ok`, and one that went
+# through all the same is not passed on twice (design coordd-core-2026-11-10 §4). The latest 2000 are kept.
+passed, passed_order = set(), []
 
 
 def write(msg):
@@ -51,6 +54,15 @@ def client(c):
             buf += chunk
         try:
             for ev in json.loads(buf.split(b"\n", 1)[0])["events"]:
+                mid = ev.get("meta", {}).get("id")
+                with out:
+                    if mid in passed:
+                        continue
+                    if mid:
+                        passed.add(mid)
+                        passed_order.append(mid)
+                        if len(passed_order) > 2000:
+                            passed.discard(passed_order.pop(0))
                 write({"jsonrpc": "2.0", "method": "notifications/claude/channel",
                        "params": {"content": ev["content"], "meta": ev.get("meta", {})}})
             c.sendall(b"ok\n")

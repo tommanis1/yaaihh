@@ -1,4 +1,4 @@
-//! The split: up to four panes side by side (two or
+//! The split (owner 7 Nov night: "side by side, split into 4, like VS Code"): up to four panes side by side (two or
 //! three in a row, four as two rows of two), each showing a page of a project; one has focus. The focused pane is the
 //! app's `cur` and `sel`, so everything that acts on "the page shown" acts on it; the others are kept in
 //! `App::panes` (the focused one's slot there is refreshed whenever focus moves). A pane on an agent shows its chat
@@ -8,7 +8,7 @@
 //! Split (the toolbar's button, or a double click on an agent in the sidebar: "open to the side") adds a pane; any
 //! click inside a pane focuses it (before the click does what it does there), and its header's × closes it.
 //!
-//! **Drag and drop**: an agent dragged from the sidebar (a pin or a running agent) onto
+//! **Drag and drop** (owner 8 Nov, "like VS Code"): an agent dragged from the sidebar (a pin or a running agent) onto
 //! the main area shows where it would land: over a pane's left or right third, a new pane on that side of it; over
 //! its middle (or anywhere once the split is full), in that pane. The drop does it; a drop over the sidebar does
 //! nothing (a pin dropped there still reorders the pins). The split is panes in a row (four as two rows of two), so
@@ -275,7 +275,7 @@ pub fn area(s: &App, focused: El, k: &Kit) -> El {
             let close = Button::new("×").variant(ButtonVariant::GhostMuted).on_press(move |s: &mut App| s.close_pane(j)).build(k);
             col()
                 .key(format!("pane-{j}"))
-                // any click inside a pane focuses it, also on its buttons, fields and text
+                // any click inside a pane focuses it, also on its buttons, fields and text (owner 8 Nov)
                 .on_press_within(move |s: &mut App| s.focus_pane(j))
                 .grow(1.0)
                 .min_w(0.0)

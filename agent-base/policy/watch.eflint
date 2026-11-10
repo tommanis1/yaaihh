@@ -1,0 +1,35 @@
+// agent_watch's decisions (nets/watch.net; vault designs/supervision-nets-2026-11-10.md, owner m359 answers 4–5).
+// The thresholds are the proposal's defaults (open question 5): mail held 30 min, idle 2 h with items, a turn quiet
+// 20 min, a tool running 3 h. Change them here.
+
+// An agent's problem, at most one per tick: every problem whose threshold is not reached is ruled out, and of those
+// left the most urgent is taken (held mail first: the agent's lead is waiting on it).
+Decision watch-agent
+  Options fine | held | tool | quiet | idle
+Only for watch-agent When call.held < 30:
+  option != "held"
+Only for watch-agent When call.tool < 180:
+  option != "tool"
+Only for watch-agent When call.quiet < 20:
+  option != "quiet"
+Only for watch-agent When call.idle < 120:
+  option != "idle"
+Only for watch-agent When call.items == 0:
+  option != "idle"
+Prefer for watch-agent:
+  option == "held" > option == "tool" > option == "quiet" > option == "idle" > option == "fine"
+
+// Who hears of it (owner m359 answer 4): the agent, then its lead at a later tick, then the owner, each once a day.
+// Held mail skips the agent: its own mail is what is held.
+Decision watch-tell
+  Options agent | lead | owner | done
+Only for watch-tell When call.owner_told > 0:
+  option == "done"
+Only for watch-tell When call.lead_told > 0 and call.owner_told == 0:
+  option == "owner"
+Only for watch-tell When call.agent_told > 0 and call.lead_told == 0 and call.owner_told == 0:
+  option == "lead"
+Only for watch-tell When call.problem == "held" and call.agent_told == 0 and call.lead_told == 0 and call.owner_told == 0:
+  option == "lead"
+Only for watch-tell When call.problem != "held" and call.agent_told == 0 and call.lead_told == 0 and call.owner_told == 0:
+  option == "agent"

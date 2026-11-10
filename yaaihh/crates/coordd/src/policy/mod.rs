@@ -1,4 +1,4 @@
-//! The policy engine: decisions,
+//! The policy engine (vault designs/policy-language-draft-2026-11-08.md, "eFLINT/A"; first slice): decisions,
 //! preferences and typed LLM calls, compiled to answer set programs and solved by clingo, one engine per coordd.
 //!
 //! - [`syntax`]: the language (Fact, Decision, Prefer, Only, Judge); [`compile`]: to clingo (§4, §5, §14);
@@ -20,6 +20,7 @@ pub mod call;
 pub mod compile;
 pub mod facts;
 pub mod harness;
+pub mod norms;
 pub mod solve;
 pub mod syntax;
 
@@ -96,6 +97,25 @@ impl Places {
         Ok(scopes)
     }
 
+    /// The policy files (system, project, agents) with their modification times: what the compiled norms were made
+    /// from, to tell when they must be made again.
+    pub fn stamp(&self) -> Vec<(String, Option<std::time::SystemTime>)> {
+        let mut dirs = vec![format!("{}/policy", self.base)];
+        if let Some(p) = &self.project {
+            dirs.push(format!("{p}/policy"));
+            dirs.push(format!("{p}/policy/agents"));
+        }
+        let mut out: Vec<(String, Option<std::time::SystemTime>)> = dirs
+            .iter()
+            .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "eflint"))
+            .map(|p| (p.display().to_string(), std::fs::metadata(&p).and_then(|m| m.modified()).ok()))
+            .collect();
+        out.sort();
+        out
+    }
+
     fn call_dirs(&self) -> Vec<String> {
         let mut dirs = vec![format!("{}/calls", self.base)];
         dirs.extend(self.project.as_ref().map(|p| format!("{p}/calls")));
@@ -140,7 +160,7 @@ pub struct Engine {
     proxy: facts::Proxy,
 }
 
-/// A standing context: a harness session (Codex or Claude Code), its harness and model decided
+/// A standing context (§16.4, owner m116): a harness session (Codex or Claude Code), its harness and model decided
 /// once at its start (and that decision), and the harness's own id for it, by which every later call resumes it.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Session {
@@ -150,6 +170,14 @@ pub struct Session {
     pub decision: Option<String>,
     /// The harness's session (Codex thread, Claude Code session) id; none until the first call started it.
     pub id: Option<String>,
+    /// Calls that advanced it, and when (seconds since the epoch) it began and was last used: its lifetime
+    /// (`context NAME: per KEY for N calls | for D`) and `context-for`'s facts.
+    #[serde(default)]
+    pub calls: u64,
+    #[serde(default)]
+    pub began: u64,
+    #[serde(default)]
+    pub last: u64,
 }
 
 /// What a decided call gave.
@@ -198,8 +226,13 @@ impl Engine {
     /// GIVEN fields), a failed model excluded and the decision solved again until a model answers or none is left.
     /// The decision is recorded either way. Blocking.
     pub fn call(&self, name: &str, input: Value, agent: &str, given: Vec<Given>) -> Result<Called, String> {
+        self.call_prefaced(name, input, agent, given, "")
+    }
+
+    /// [`Engine::call`] with PREFACE before the call's prompt (a digest, a note).
+    pub fn call_prefaced(&self, name: &str, input: Value, agent: &str, given: Vec<Given>, preface: &str) -> Result<Called, String> {
         let calls = self.calls()?;
-        let c = self.checked(&calls, name, &input)?;
+        let c = call::Calls::prefaced(&self.checked(&calls, name, &input)?, preface);
         let fields = BTreeMap::from([("task".to_string(), c.task.clone()), ("agent".to_string(), agent.to_string()), ("call".to_string(), name.to_string())]);
         let (answer, decision) = self.decided("model-for", fields, given, |model| call::run(&calls, &c, &input, model, &self.proxy))?;
         Ok(Called { answer, decision })
@@ -210,24 +243,43 @@ impl Engine {
     /// runs, `harness(option, _)`), falling back as [`Engine::call`] does, and the harness session is started; every
     /// later call resumes it by id on the same harness and model. A later call that fails twice gives the session up:
     /// a new one starts as a first call does, without the model that failed (the attempts show both).
-    pub fn call_in(&self, name: &str, input: Value, agent: &str, session: &mut Session, given: Vec<Given>) -> Result<Called, String> {
+    ///
+    /// PREFACE goes before the prompt. FORK (`with c`): the call reads a fork of the session and leaves it as it was;
+    /// with no session begun yet it is a fresh call.
+    #[allow(clippy::too_many_arguments)]
+    pub fn call_in(&self, name: &str, input: Value, agent: &str, session: &mut Session, given: Vec<Given>, preface: &str, fork: bool) -> Result<Called, String> {
         let calls = self.calls()?;
-        let c = self.checked(&calls, name, &input)?;
+        let c = call::Calls::prefaced(&self.checked(&calls, name, &input)?, preface);
+        if fork && session.id.is_none() {
+            return self.call_prefaced(name, input, agent, given, preface);
+        }
         let coord = self.places.coord.clone();
+        // a session on a model the policy now excludes is given up: it would keep a model the owner ruled out (10 Nov:
+        // the clerk's sessions begun on Claude Haiku kept resuming on it after the policy became Codex only)
+        if let Some(model) = session.model.clone() {
+            if self.excludes(&self.session_fields(&c, agent, session), &given, &model)? {
+                *session = Session { name: session.name.clone(), ..Default::default() };
+            }
+        }
         if let (Some(harness), Some(model), Some(id)) = (session.harness.clone(), session.model.clone(), session.id.clone()) {
             if let Some(g) = given.iter().find(|g| g.field == "model" && g.value != model) {
                 return Err(format!("session_model: the session {} runs {model}; the call gives model {}", session.name, g.value));
             }
             let mut d = Decision { id: session.decision.clone().unwrap_or_default(), at: crate::core::now(), decision: "model-for".into(), chosen: Some(model.clone()), ..Default::default() };
             // once more on a failure (a harness hiccup), then the session is given up for a new one on another model
+            // (9 Nov: 22 calls in a row failed on one codex session, with nothing to fall back to)
             for _ in 0..2 {
-                match call::run_session(&calls, &c, &input, &harness, &model, &self.proxy, &coord, Some(&id)) {
+                match call::run_session(&calls, &c, &input, &harness, &model, &self.proxy, &coord, Some(&id), fork) {
                     Ok((a, _)) => {
                         d.attempts.push(Attempt { model, failure: None });
                         return Ok(Called { answer: Some(a), decision: d });
                     }
                     Err(f) => d.attempts.push(Attempt { model: model.clone(), failure: Some(format!("{f:?}")) }),
                 }
+            }
+            if fork {
+                // a fork that fails leaves the session alone: it is not the session's failure to give it up for
+                return Ok(Called { answer: None, decision: d });
             }
             let failed = model.clone();
             *session = Session { name: session.name.clone(), ..Default::default() };
@@ -244,27 +296,45 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     fn call_in_new(&self, calls: &call::Calls, c: &call::Call, input: &Value, agent: &str, session: &mut Session, given: Vec<Given>, failed: Option<&str>) -> Result<Called, String> {
         let coord = self.places.coord.clone();
-        let fields = BTreeMap::from([
-            ("task".to_string(), c.task.clone()),
-            ("agent".to_string(), agent.to_string()),
-            ("call".to_string(), format!("session:{}", session.name)),
-            ("place".to_string(), "session".to_string()),
-        ]);
+        let fields = self.session_fields(c, agent, session);
         let mut started = None;
         let (answer, decision) = self.decided("model-for", fields, given, |model| {
             if failed == Some(model) {
                 return Err(call::Failure::Error(format!("{model} failed in the session this one replaces")));
             }
             let harness = self.harness(model).map_err(call::Failure::Error)?;
-            call::run_session(calls, c, input, &harness, model, &self.proxy, &coord, None).map(|(a, id)| {
+            call::run_session(calls, c, input, &harness, model, &self.proxy, &coord, None, false).map(|(a, id)| {
                 started = Some((harness, id));
                 a
             })
         })?;
         if let (Some(model), Some((harness, id))) = (&decision.chosen, started) {
-            *session = Session { name: session.name.clone(), harness: Some(harness), model: Some(model.clone()), decision: Some(decision.id.clone()), id: Some(id) };
+            *session = Session { name: session.name.clone(), harness: Some(harness), model: Some(model.clone()), decision: Some(decision.id.clone()), id: Some(id), ..Default::default() };
         }
         Ok(Called { answer, decision })
+    }
+
+    /// The `model-for` call fields of SESSION's model, for call C by AGENT.
+    fn session_fields(&self, c: &call::Call, agent: &str, session: &Session) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("task".to_string(), c.task.clone()),
+            ("agent".to_string(), agent.to_string()),
+            ("call".to_string(), format!("session:{}", session.name)),
+            ("place".to_string(), "session".to_string()),
+        ])
+    }
+
+    /// Whether the policy now excludes OPTION for `model-for` with FIELDS and GIVEN (solved, not run or recorded).
+    fn excludes(&self, fields: &BTreeMap<String, String>, given: &[Given], option: &str) -> Result<bool, String> {
+        let inst = Instance { kind: "model-for".into(), call: fields.clone(), given: given.to_vec() };
+        let o = self.with(move |st| {
+            let s = st.ready()?;
+            let d = s.open(&inst)?;
+            let o = s.solve(&d, &inst);
+            s.close(&d)?;
+            o
+        })??;
+        Ok(o.excluded.iter().any(|e| e.option == option))
     }
 
     /// The harness that runs MODEL (the system fact `harness(model, H)`).

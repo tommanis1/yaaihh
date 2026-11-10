@@ -14,7 +14,7 @@
 #   box.sh down BOX            stop BOX (sbx rm BOX deletes it and its clone)
 #   box.sh hold BOX [WHY]      nothing goes into BOX until `box.sh release BOX`: sh, coordd and start refuse, so no caller
 #                              (yaaihh's link retrying every 3 s, a host `coord`) starts it again (`sbx exec` starts a stopped
-#                              box); for repairs on a stopped box
+#                              box); for repairs on a stopped box (8 Nov: e2fsck of its disk after the host disk filled)
 #   box.sh release BOX         end the hold
 #
 # Inside the box (design §1-§5, decisions of 29 Oct):
@@ -36,13 +36,13 @@
 #   - sbx's host SSH agent forwarding and host browser opening must be off;
 #   - the box is detached (`sbx run -d`): it keeps running with no session
 #     attached, until box.sh down;
-#   - coordd, the box's one watcher, runs as root from up and each
+#   - coordd, the box's one watcher (vault designs/yaaihh-2026-11-07.md §7), runs as root from up and each
 #     start (bin/coordd, a link into releases/current, release.sh), logging to $COORD/coordd.log; the agent user has no sudo and
 #     is not in the docker group, so an agent cannot leave its cgroup or speak for another (design §6).
 set -euo pipefail
 AB=$(cd "$(dirname "$0")/.." && pwd)
 cmd=${1:-}; BOX=${2:-}
-# `up DIR`: the box is declared by DIR/sbxenv.yaml; its name comes from the file.
+# `up DIR`: the box is declared by DIR/sbxenv.yaml (owner 29 Oct: declarative layers); its name comes from the file.
 ENVDIR=; if { [ "$cmd" = up ] || [ "$cmd" = start ]; } && [ -f "$BOX/sbxenv.yaml" ]; then ENVDIR=$(realpath "$BOX"); BOX=$(sed -n 's/^name: *//p' "$ENVDIR/sbxenv.yaml"); fi
 [ -n "$BOX" ] || { sed -n '4,20p' "$0" | sed 's/^# //'; exit 2; }
 COORD=$HOME/agent-coord/$BOX
@@ -60,7 +60,7 @@ allow_route() {
   local hp; hp=$(printf '%s' "$anthropic_url" | sed -E 's#^[a-z]+://([^/]+).*#\1#')
   [ -z "$hp" ] || sbx policy allow network --sandbox "$BOX" "${hp/127.0.0.1/localhost}" >/dev/null
 }
-# The sandbox daemon runs as the memory-capped user unit sandboxd.service.
+# The sandbox daemon runs as the memory-capped user unit sandboxd.service (3 Nov: a box VM with no cap froze the host).
 # An sbx call with no daemon running starts one itself, uncapped and inside the caller's terminal, so start the unit first.
 systemctl --user start sandboxd.service
 
@@ -73,7 +73,7 @@ held() {  # refuse while BOX is held (box.sh hold)
 inbox() {
   held
   local flags=(); while [ "$1" != -- ]; do flags+=("$1"); shift; done; shift
-  # LANG: the box has no locale; without UTF-8, tmux draws a client's lines and the hook's ● as _
+  # LANG: the box has no locale; without UTF-8, tmux draws a client's lines and the hook's ● as _ (6 Nov)
   sbx exec "${flags[@]}" "${ENVV[@]}" -e LANG=C.UTF-8 -e "PATH=$AB/bin:/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin" "$BOX" "$@"
 }
 
@@ -124,10 +124,15 @@ up)
 start)
   held
   [ -n "$ENVDIR" ] || { echo "box.sh start DIR (DIR holds sbxenv.yaml)"; exit 2; }
+  was_up=; inbox -- true 2>/dev/null && was_up=1   # yaaihh runs start at each of its own starts: the box may be up
   sbx run -d --name "$BOX" claude >/dev/null
   # as root (the agent user has no sudo), and before coordd: the project's sources read what start.sh mounts
   [ ! -f "$ENVDIR/start.sh" ] || inbox -u root -i -- bash -s <"$ENVDIR/start.sh"
   route_write_key
+  # the agents come back idle and get only the owner's mail until he removes $COORD/hold (owner m312, 10 Nov: a box
+  # started again, by hand or by a bridge's sbx exec, waits for him). Only a box that was down: a start of a running
+  # box (yaaihh restarting, 10 Nov) set it again and held the agents' mail for an hour
+  [ -n "$was_up" ] || touch "$COORD/hold"
   coordd_up
   inbox -- roster resume
   ;;

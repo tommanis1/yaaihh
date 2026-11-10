@@ -1,4 +1,4 @@
-//! The drawing of a net beside its text on the Clerk page: the net as written, read-only, top to
+//! The drawing of a net beside its text on the Clerk page (owner m127, m130): the net as written, read-only, top to
 //! bottom. coordd parses the text (`Request::NetGraph`) into nested blocks; `coord_types::netlayout` places them (a
 //! sequence on a shared axis, a branch's arms side by side or stacked on a rail, a loop framed) with this page's text
 //! sizes, and this module draws what it placed at those positions, so every line drawn is one the layout's
@@ -238,7 +238,7 @@ const KEYWORDS: &[&str] = &[
     "net", "on", "session", "per", "if", "else", "match", "let", "for", "in", "where", "fresh", "type", "call", "none", "new", "true", "false",
 ];
 
-/// Net or call text T coloured, all of it in mono: keywords, strings, numbers, comments dimmed, type names,
+/// Net or call text T coloured (owner m130), all of it in mono: keywords, strings, numbers, comments dimmed, type names,
 /// and the words the drawing gives a shape in that shape's colour: a call (one of CALLS, before its `(`) in the session
 /// bar's blue, `decide` and its option in the decision's amber, an effect in the effect's green, a fault in red, a
 /// raise in the event's blue.

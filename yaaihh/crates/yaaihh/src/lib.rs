@@ -1,4 +1,4 @@
-//! yaaihh: the owner's window onto the projects. A project is one coordd, in a box
+//! yaaihh: the owner's window onto the projects (vault designs/yaaihh-2026-11-07.md). A project is one coordd, in a box
 //! or on the host; each is read through its coordd's stream (`coordc bridge`, link.rs) and drawn from the project
 //! file's views.
 //!
@@ -123,7 +123,9 @@ pub struct Proj {
     /// In a box (`box.sh`), else on the host (`host-coordd`): how it is brought up (projects.rs `bring_up`).
     pub boxed: bool,
     /// Its bring-up running (at yaaihh's start, or the owner's Start): what it ended with comes here.
-    pub starting: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    pub starting: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// A fork of one of its agents running (the agent page's Fork): the new agent's name or why it failed.
+    pub forking: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Why the last bring-up failed.
     pub start_error: Option<String>,
     pub convs: HashMap<String, Conv>,
@@ -182,6 +184,10 @@ pub struct App {
     pub expanded: HashSet<String>,
     /// The chats' images by `chat::image_key`, asked of coordd as their entries arrive (chat.rs `ask_images`).
     pub images: HashMap<String, chat::Img>,
+    /// The chat image shown over the whole window (`chat::image_key`), opened by clicking it; a click or Escape closes it.
+    pub viewing: Option<String>,
+    /// The pointer is over an element that takes Ctrl+wheel itself (the usage chart's zoom), so the window does not zoom.
+    pub wheel_taken: bool,
     /// Decodes them off the frame; set up with the window's waker (a headless scene makes its own).
     pub image_cache: Option<rune::ImageCache>,
     /// The last thing that went wrong (a refused send, say).
@@ -250,6 +256,8 @@ pub(crate) fn init() -> App {
         all_sort,
         back_to_grid: false,
         images: HashMap::new(),
+        viewing: None,
+        wheel_taken: false,
         image_cache: None,
         prices: prices::PriceTable::bundled(),
         prices_at: Instant::now(),
@@ -371,7 +379,7 @@ impl App {
                 let snapshot = matches!(ev.body, coord_types::Body::Snapshot(_));
                 // an agent's chat is read on only when its transcript grew (its latest activity moved), not for every
                 // change of its view (tokens, memory, state): those came twice a second while agents worked, each a
-                // page asked of coordd and the window rebuilt
+                // page asked of coordd and the window rebuilt (9 Nov, m151 fix 4)
                 let active_before = match &ev.body {
                     coord_types::Body::Agent(a) => p.live.agents.iter().find(|x| x.name == a.name).map(|x| x.last_active.clone()),
                     _ => None,
@@ -573,14 +581,16 @@ impl App {
 
     /// Send the text written to agent NAME of project PROJECT, after the comments made on its chat; ESC stops its
     /// turn first.
-    pub fn send(&mut self, project: usize, name: &str, esc: bool) {
+    /// The composer's mail to NAME (and those it tags): held until its turn ends; SOON in after its next tool call; ESC
+    /// stops its turn first.
+    pub fn send(&mut self, project: usize, name: &str, soon: bool, esc: bool) {
         let key = (project, name.to_string());
         let written = self.composers.get(&key).map(|t| t.text.clone()).unwrap_or_default();
         let comments = self.notes.comments.get(name).cloned().unwrap_or_default();
         if written.trim().is_empty() && comments.is_empty() {
             return;
         }
-        // the chat's agent, and each agent tagged @NAME in the text or its comments
+        // the chat's agent, and each agent tagged @NAME in the text or its comments (owner m118)
         let notes: Vec<&str> = std::iter::once(written.as_str()).chain(comments.iter().map(|c| c.note.as_str())).collect();
         let mut to = vec![name.to_string()];
         match self.projects.get(project).map(|p| ask::tagged(p, &notes)) {
@@ -592,7 +602,7 @@ impl App {
             None => return,
         }
         let (body, quotes) = ask::compose(&comments, &written);
-        let req = Request::Msg { to, body, esc, as_host: None, re: None, quotes };
+        let req = Request::Msg { to, body, esc, soon, as_host: None, re: None, quotes };
         if self.request_in(project, req, Pending::Mailed { typed: written, comments }) {
             self.composers.remove(&key);
             self.notes.comments.remove(name);
@@ -604,9 +614,9 @@ impl App {
         self.request_in(project, Request::Unsend { id: id.into() }, Pending::Unsent { id: id.into(), agent: agent.into(), edit });
     }
 
-    /// Deliver queued mail ID now, stopping its recipients' turns.
-    pub fn send_now(&mut self, project: usize, id: &str) {
-        self.request_in(project, Request::Now { id: id.into() }, Pending::Sent);
+    /// Deliver queued mail ID now: SOON after its recipients' next tool calls, else stopping their turns.
+    pub fn send_now(&mut self, project: usize, id: &str, soon: bool) {
+        self.request_in(project, Request::Now { id: id.into(), soon }, Pending::Sent);
     }
 
     /// Send a mail request through the current project's pipe; false (and a notice) when it is down.
@@ -647,6 +657,7 @@ impl Proj {
             down: Some("connecting".into()),
             boxed: cfg.boxed,
             starting: None,
+            forking: None,
             start_error: None,
             convs: HashMap::new(),
             pending: HashMap::new(),
@@ -743,7 +754,16 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
     let (title, main) = panes::page(s, &k);
     let main = panes::area(s, main, &k);
     let mut bar = Toolbar::new().title(title);
-    if let Sel::Agent(_) = &s.sel {
+    if let Sel::Agent(name) = &s.sel {
+        let name = name.clone();
+        let forking = s.proj().is_some_and(|p| p.forking.is_some());
+        bar = bar.trailing(
+            Button::new(if forking { "Forking…" } else { "Fork" })
+                .variant(ButtonVariant::Ghost)
+                .disabled(forking || name.is_empty())
+                .on_press(move |s: &mut App| projects::fork(s, &name))
+                .build(&k),
+        );
         if s.back_to_grid {
             bar = bar.leading(
                 Button::new("‹ Agents")
@@ -785,6 +805,7 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
     ask::mentions(s, cx, &k, &mut layer);
     ask::layer(s, cx, &k, &mut layer);
     panes::drop_zone(s, cx, &k, &mut layer);
+    chat::viewer(s, &k, &mut layer);
     let split = SplitView::new(main.key("main"))
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar::sidebar(s, &k).cache())
         .toolbar(bar)
@@ -800,6 +821,10 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
 
 fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if zoom::key(s, ev, tx) {
+        return true;
+    }
+    if s.viewing.is_some() && matches!(ev.key, rune::Key::Escape) {
+        s.viewing = None;
         return true;
     }
     if shell::is_sidebar_toggle(ev) {
@@ -886,6 +911,7 @@ fn term_scene(s: &mut App) {
             down: None,
             boxed: false,
             starting: None,
+            forking: None,
             start_error: None,
             convs: HashMap::new(),
             pending: HashMap::new(),
@@ -965,14 +991,14 @@ const SCENES: &[(&str, fn(&mut App))] = &[
             s.clerk_ed.tried = [Some(Ok(coord_types::NetRun { id: "try".into(), ..r })), None];
         }
     }),
-    // the owner's-message net open: its own lines and drawing, the calls it uses
+    // the owner's-message net open: its own lines and drawing, the calls it uses (owner m130)
     ("clerk-owner", |s| {
         SCENES.iter().find(|(n, _)| *n == "clerk-edit").unwrap().1(s);
         s.clerk_ed.tried = [None, None];
         s.clerk_ed.picked = None;
         s.clerk_ed.open = Some("owner_message".into());
     }),
-    // the drawing with the caret in the text: its step outlined
+    // the drawing with the caret in the text: its step outlined (owner m127)
     ("clerk-caret", |s| {
         SCENES.iter().find(|(n, _)| *n == "clerk-edit").unwrap().1(s);
         s.clerk_ed.tried = [None, None];
@@ -1014,6 +1040,18 @@ const SCENES: &[(&str, fn(&mut App))] = &[
     }),
     ("agent", |s| read_once(s, Sel::Agent(String::new()))),
     ("agents", |s| read_once(s, Sel::Agents)),
+    // the agent scene with its first image opened over the window (a click on it in a chat)
+    ("agent-image", |s| {
+        read_once(s, Sel::Agent(String::new()));
+        // YAAIHH_IMAGE=FILE: that picture stands in when the chat holds none
+        if let Ok(bytes) = std::env::var("YAAIHH_IMAGE").map(std::fs::read).unwrap_or(Ok(Vec::new())) && !bytes.is_empty() {
+            let cache = s.image_cache.get_or_insert_with(|| rune::ImageCache::new(std::sync::Arc::new(|| {})));
+            let img = cache.load(bytes);
+            let _ = img.wait();
+            s.images.insert("scene".into(), chat::Img::Ready(img));
+        }
+        s.viewing = s.images.iter().find(|(_, i)| matches!(i, chat::Img::Ready(_))).map(|(k, _)| k.clone());
+    }),
     // the split: orch's chat beside LAZY's (panes.rs)
     ("split", |s| {
         read_once(s, Sel::Agent("LAZY".into()));
@@ -1042,7 +1080,7 @@ const SCENES: &[(&str, fn(&mut App))] = &[
         p.live.mail.put(coord_types::MailView {
             id: "m9998".into(), at: "2026-11-08T15:19:00Z".into(), from: "orch".into(), to: vec!["owner".into()], subject: "runner green".into(),
             body: "runner green\nThe runner is green again. Should I merge core/l1 into dev now, or wait for the proof check?".into(),
-            esc: false, delivered: vec!["owner".into()], withdrawn: Vec::new(), kind: String::new(), re: None, quotes: Vec::new(), state: Some("open".into()),
+            esc: false, soon: false, delivered: vec!["owner".into()], withdrawn: Vec::new(), kind: String::new(), re: None, quotes: Vec::new(), state: Some("open".into()),
             recognised: Some(coord_types::Recognised { question: "Merge core/l1 into dev now, or wait for the proof check?".into(),
                 quote: "Should I merge core/l1 into dev now, or wait for the proof check?".into(), decision: "D1".into(), model: "gpt-6-luna".into() }),
             filed: None, unfiled: false, clerk: None,
@@ -1052,7 +1090,7 @@ const SCENES: &[(&str, fn(&mut App))] = &[
     }),
     // the comment bar with a note being written and one comment waiting (YAAIHH_AGENT's chat)
     ("comment", comment_scene),
-    // an @ being typed in an agent chat's composer: the agents offered at the caret
+    // an @ being typed in an agent chat's composer: the agents offered at the caret (owner m118)
     ("mention", |s| {
         read_once(s, Sel::Agent(String::new()));
         let Sel::Agent(a) = s.sel.clone() else { return };
@@ -1078,23 +1116,23 @@ const SCENES: &[(&str, fn(&mut App))] = &[
         }
         p.live.mail.put(coord_types::MailView {
             id: "m9999".into(), at: "2026-11-08T14:02:00Z".into(), from: "owner".into(), to: vec![a], subject: String::new(),
-            body: "once the runner is green, merge it and tell me".into(), esc: false, delivered: Vec::new(), withdrawn: Vec::new(),
+            body: "once the runner is green, merge it and tell me".into(), esc: false, soon: false, delivered: Vec::new(), withdrawn: Vec::new(),
             kind: String::new(), re: None, quotes: Vec::new(), state: None, recognised: None, filed: None, unfiled: false, clerk: None,
         });
     }),
-    // a mail of the owner's the clerk sent back, with Deliver anyway
+    // a mail of the owner's the clerk sent back, with Deliver anyway (owner m116)
     ("queued-clerk", |s| {
         read_once(s, Sel::Agent(String::new()));
         let Sel::Agent(a) = s.sel.clone() else { return };
         let Some(p) = s.projects.first_mut() else { return };
         p.live.mail.put(coord_types::MailView {
             id: "m9999".into(), at: "2026-11-08T14:02:00Z".into(), from: "owner".into(), to: vec![a], subject: String::new(),
-            body: "merge it once its green".into(), esc: false, delivered: Vec::new(), withdrawn: Vec::new(),
+            body: "merge it once its green".into(), esc: false, soon: false, delivered: Vec::new(), withdrawn: Vec::new(),
             kind: String::new(), re: None, quotes: Vec::new(), state: None, recognised: None, filed: None, unfiled: false,
             clerk: Some("sent back: which branch: core/l1 or lazy/portfolio?".into()),
         });
     }),
-    // a placed comment beside a queued mail: the same card
+    // a placed comment beside a queued mail: the same card (owner m132)
     ("comment-queued", |s| {
         SCENES.iter().find(|(n, _)| *n == "queued").unwrap().1(s);
         let mails = s.projects.first().map(|p| p.live.mail.clone()).unwrap_or_default();

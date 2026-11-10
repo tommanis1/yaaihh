@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-desktop.sh: yaaihh in the desktop. The icon,
+# install-desktop.sh: yaaihh in the desktop (owner 7 Nov: it replaces EasyCLIProxyAPI, tray icon included). The icon,
 # a launcher entry, and a login autostart that starts it in the tray (--background), all running the release build
 # that is current (release.sh: releases/current/yaaihh; a new release going live moves the link, so the launcher and
 # the next login start it). A second start opens the running yaaihh's window (src/tray.rs).

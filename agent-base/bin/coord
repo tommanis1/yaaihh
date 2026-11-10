@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# coord: the agents' commands in one box.
+# coord: the agents' commands in one box (vault designs/yaaihh-2026-11-07.md §5).
 #
 #   coord msg [--esc] [--re ID] NAME[,NAME...] TEXT...   a message; first line = subject (--esc: agents below me; --re: in ID's thread)
 #   coord msg --thread ID TEXT...     a reply in ID's thread to everyone in it
@@ -14,6 +14,12 @@
 #   coord ready [--item I] [--also WORKTREE]... [--with BRANCH]...  (run by the agent) queue its branch at HEAD
 #   coord queue                       each queue entry and the runner's state for it
 #   coord attach NAME                 NAME's terminal in this one (Ctrl-\ detaches; from the host, through the box)
+#   coord fork [--name NEW] [--model MODEL] [TEXT...]  (run by the agent) a copy of my conversation as a new agent
+#                                     below me, TEXT its first task (roster fork)
+#   coord team ask TEXT...            (run by the agent) ask to form a team; it goes to whoever the policy names
+#   coord team grant NAME N           NAME's team may have N agents (the owner, or an agent the policy names)
+#   coord context [ls | note KEY TEXT | reset KEY]  the nets' contexts: sizes; a note for the next call; a new start
+#   coord measure [DAYS]              the nets' deciders: what each chose, the owner's marks, rubber-stamp flags
 #
 # msg, mail, ask, ls (state), log and item are coordd's (bin/coordc): it knows the caller by its process's cgroup, never by
 # a name it gives, and keeps the agents, their mail and the project's items. A host session (hosts/NAME: the resume id
@@ -32,14 +38,14 @@ set -euo pipefail
 : "${COORD:?COORD is not set}"
 me=${AGENT_NAME:-owner}
 feed() { jq -nc --arg at "$(date -Is)" --arg from "$me" "$@" >>"$COORD/feed.jsonl"; }
-usage() { sed -n '4,15p' "$0" | sed 's/^# //'; exit 2; }
+usage() { sed -n '4,22p' "$0" | sed 's/^# //'; exit 2; }
 
 # On the host, a box's coord folder (~/agent-coord/BOX, the same path inside the box) belongs to the box, and coordd's
 # socket lives in the box VM: coordd's commands run inside the box (a stopped box has no coordd, so they fail), and so
 # does attach, whose holders' sockets are the box's too. A project without a box has its coordd on the host, at
 # COORDD_SOCK (bin/host-coordd sh sets it): no box is reached then.
 box=${COORD#"$HOME/agent-coord/"}
-case ${1:-} in msg | mail | ask | ls | state | log | item | attach)
+case ${1:-} in msg | mail | ask | ls | state | log | item | team | attach)
   if [ -z "${COORDD_SOCK:-}" ] && [ ! -S /run/coordd.sock ] && [ "$box" != "$COORD" ] && [ "${box%/*}" = "$box" ] && [ -x "$(dirname "$0")/../box/box.sh" ]; then
     as=(); [ "$me" = owner ] || as=(COORD_AS="$me")
     exec "$(dirname "$0")/../box/box.sh" sh "$box" env "${as[@]}" coord "$@"
@@ -48,8 +54,13 @@ esac
 
 case ${1:-} in
 msg) shift; exec "$(dirname "$0")/coordc" msg ${COORD_AS:+--as "$COORD_AS"} "$@" ;;
-mail|ask|ls|state|log|item) exec "$(dirname "$0")/coordc" "$@" ;;
+mail|ask|ls|state|log|item|team) exec "$(dirname "$0")/coordc" "$@" ;;
 attach) [ $# -eq 2 ] || usage; exec "$(dirname "$0")/coordc" attach "$2" ;;
+context) shift; exec "$(dirname "$0")/coord-context" "$@" ;;
+measure) shift; exec "$(dirname "$0")/coord-measure" "$@" ;;
+fork)
+  [ "$me" != owner ] || { echo "coord fork runs inside an agent session (AGENT_NAME set); the owner forks with roster fork NAME" >&2; exit 2; }
+  shift; exec "$(dirname "$0")/roster" fork "$me" "$@" ;;
 ack)
   [ $# -eq 2 ] && [ "$me" != owner ] || { echo "coord ack RULING runs inside an agent session (AGENT_NAME set)" >&2; exit 2; }
   mkdir -p "$COORD/agents/$me" && echo "$2" >"$COORD/agents/$me/ruling"
@@ -72,7 +83,7 @@ ready)
   commit=$(git rev-parse HEAD) top=$(git rev-parse --show-toplevel) also='[]'
   udirs=("$top") ucommits=("$commit")
   # Only the worktrees named with --also (folder names beside this one in .wt/NAME, e.g. the agent's
-  # P4 worktree) ride along as one unit.
+  # P4 worktree) ride along as one unit (owner, 6 Nov: nothing is guessed).
   for n in "${alsos[@]}"; do
     d=$(dirname "$top")/$n
     [ "$d" != "$top" ] && [ -e "$d/.git" ] ||

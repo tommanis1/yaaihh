@@ -21,6 +21,79 @@ pub fn append(path: &str, line: &str) -> std::io::Result<()> {
     })
 }
 
+/// What the writer thread does, in the order given ([`start_writer`]).
+enum Job {
+    Append(String, String),
+    Replace(String, Vec<u8>),
+}
+
+static WRITER: std::sync::OnceLock<std::sync::mpsc::Sender<Job>> = std::sync::OnceLock::new();
+
+/// Start the writer thread: from then on [`later`] and [`replace_later`] hand their writes to it, in order, so the
+/// core's lock is never held over a disk write (design coordd-core-2026-11-10 §2).
+pub fn start_writer() {
+    let (tx, rx) = std::sync::mpsc::channel::<Job>();
+    if WRITER.set(tx).is_err() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("coordd-writer".into())
+        .spawn(move || {
+            for job in rx {
+                match job {
+                    Job::Append(path, line) => {
+                        if let Err(e) = append(&path, &line) {
+                            eprintln!("coordd: {path}: {e}");
+                        }
+                    }
+                    Job::Replace(path, bytes) => {
+                        if let Err(e) = replace(&path, &bytes) {
+                            eprintln!("coordd: {path}: {e}");
+                        }
+                    }
+                }
+            }
+        })
+        .expect("the writer thread");
+}
+
+/// Append LINE to PATH on the writer thread (at once, before it runs: the load and the tests).
+pub fn later(path: &str, line: String) {
+    match WRITER.get() {
+        Some(tx) => {
+            let _ = tx.send(Job::Append(path.into(), line));
+        }
+        None => {
+            if let Err(e) = append(path, &line) {
+                eprintln!("coordd: {path}: {e}");
+            }
+        }
+    }
+}
+
+/// Replace PATH's content with BYTES (a temporary file renamed over it) on the writer thread.
+pub fn replace_later(path: &str, bytes: Vec<u8>) {
+    match WRITER.get() {
+        Some(tx) => {
+            let _ = tx.send(Job::Replace(path.into(), bytes));
+        }
+        None => {
+            if let Err(e) = replace(path, &bytes) {
+                eprintln!("coordd: {path}: {e}");
+            }
+        }
+    }
+}
+
+fn replace(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(tmp, path)
+}
+
 /// The number of whole lines in PATH (0 when it does not exist): the next record's number is one more.
 pub fn lines(path: &str) -> usize {
     std::fs::read(path).map(|b| b.iter().filter(|c| **c == b'\n').count()).unwrap_or(0)

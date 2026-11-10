@@ -52,7 +52,7 @@ fn family(provider: &str) -> &str {
     }
 }
 
-/// The agent harness that runs a provider's models in a session:
+/// The agent harness that runs a provider's models in a session (owner m116: a net's session is a harness session):
 /// Codex for OpenAI's, Claude Code for Anthropic's; none for the others.
 fn harness(provider: &str) -> Option<&'static str> {
     match provider {

@@ -210,6 +210,7 @@ fn all_rows(s: &App) -> Vec<&AgentView> {
                 "name" => rune_kit::natural_cmp(&a.name, &b.name),
                 "id" => rune_kit::natural_cmp(&a.id, &b.id),
                 "parent" => a.parent.cmp(&b.parent),
+                "role" => a.role.cmp(&b.role),
                 "kind" => a.kind.cmp(&b.kind),
                 "model" => a.model.cmp(&b.model),
                 "state" => a.state.cmp(&b.state),
@@ -235,6 +236,7 @@ fn all(s: &App, k: &Kit) -> El {
         .column(TableColumn::new("name", "Name").flex(1.4).min(110.0).sortable())
         .column(TableColumn::new("id", "Id").width(84.0).min(64.0).sortable())
         .column(TableColumn::new("parent", "Parent").flex(1.0).min(80.0).sortable())
+        .column(TableColumn::new("role", "Role").width(170.0).min(70.0).sortable())
         .column(TableColumn::new("kind", "Kind").width(70.0).min(56.0).sortable())
         .column(TableColumn::new("model", "Model").flex(1.4).min(110.0).sortable())
         .column(TableColumn::new("state", "State").flex(1.0).min(80.0).sortable())
@@ -248,6 +250,7 @@ fn all(s: &App, k: &Kit) -> El {
                 "name" => Cell::text(&a.name),
                 "id" => Cell::text(&a.id).mono(),
                 "parent" => Cell::text(&a.parent).muted(),
+                "role" => Cell::text(role_text(a)).muted(),
                 "kind" => Cell::text(&a.kind).muted(),
                 "model" => Cell::text(&a.model),
                 "state" => Cell::text(&a.state).muted(),
@@ -296,4 +299,16 @@ pub fn table_state() -> (TableState, Option<(String, SortDir)>) {
     let mut t = TableState::new().key("all-agents");
     t.set_sort("created", SortDir::Ascending);
     (t, Some(("created".into(), SortDir::Ascending)))
+}
+
+/// A's role and its team (vault designs/teams-and-tiers-2026-11-10.md §6): `lead · team 1/3 by orch`, `member of DEBUG`.
+fn role_text(a: &AgentView) -> String {
+    let mut t = if a.role.is_empty() { "member".to_string() } else { a.role.clone() };
+    if let Some(l) = &a.member_of {
+        t += &format!(" of {l}");
+    }
+    if let Some(g) = &a.team {
+        t += &format!(" · team {}/{} by {}", g.used, g.granted, g.by);
+    }
+    t
 }

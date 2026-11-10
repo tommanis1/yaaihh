@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""coord measure [DAYS]: how the nets' deciders do (vault designs/supervision-nets-2026-11-10.md, principle 4).
+
+For the last DAYS days (default 7), per net and per step (each `decide KIND` and each model call): how often it ran,
+what it chose, and the owner's marks on it (right / wrong, from the Clerk page: nets/marks.jsonl). Two flags, so a
+decider cannot become a rubber stamp unseen:
+
+  rule?   a model call that gave the same answer (an enum variant: free text and records are not compared) in at
+          least 90% of 20 or more runs: a rule would do. The owner asks
+          the model to draft it in eFLINT and accepts or declines it; nothing changes by itself.
+  owner?  a step the owner marked wrong in at least 30% of 5 or more marks: send that kind to the owner directly.
+
+What a run cost is the harness's (coord context ls gives each context's size); not counted here yet.
+"""
+import json, os, sys, time
+from collections import Counter, defaultdict
+from pathlib import Path
+
+NETS = Path(os.environ["COORD"]) / "nets"
+SAME, SAME_MIN = 0.9, 20
+WRONG, WRONG_MIN = 0.3, 5
+
+
+def lines(p):
+    try:
+        with open(p, errors="replace") as f:
+            for l in f:
+                try:
+                    yield json.loads(l)
+                except ValueError:
+                    pass
+    except OSError:
+        return
+
+
+def shown(v):
+    """A step's answer as one short word: an enum's variant, a decision's option, else its type."""
+    if isinstance(v, dict):
+        return v.get("kind") or "{…}"
+    if isinstance(v, list):
+        return f"[{len(v)}]"
+    if isinstance(v, str):
+        return v if len(v) <= 24 else "text"
+    return json.dumps(v)
+
+
+def main():
+    days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days * 86400))
+    steps = defaultdict(Counter)   # (net, what) -> answers
+    runs, models, nets_of = Counter(), {}, {}
+    for r in lines(NETS / "log.jsonl"):
+        if (r.get("at") or "") < since:
+            continue
+        net = r.get("net", "?")
+        runs[net] += 1
+        nets_of[r.get("id")] = net
+        for s in r.get("steps", []):
+            key = (net, s.get("what", "?"))
+            steps[key][shown(s.get("out"))] += 1
+            if s.get("model"):
+                models[key] = True
+    marks = defaultdict(Counter)
+    for m in lines(NETS / "marks.jsonl"):
+        net = nets_of.get(m.get("run"))
+        if net and m.get("verdict") in ("right", "wrong"):
+            marks[(net, m.get("what", "?"))][m["verdict"]] += 1
+    if not runs:
+        return print(f"no net ran in the last {days} days")
+    print(f"the nets' deciders, last {days} days (since {since})")
+    for net in sorted(runs):
+        print(f"\n{net}: {runs[net]} runs")
+        for (n, what), answers in sorted(steps.items()):
+            if n != net:
+                continue
+            total = sum(answers.values())
+            top, top_n = answers.most_common(1)[0]
+            kind = "model" if models.get((n, what)) else "rule"
+            mk = marks.get((n, what), Counter())
+            flags = []
+            categorical = top not in ("text", "{…}") and not top.startswith("[")  # a variant or option, not free text
+            if kind == "model" and categorical and total >= SAME_MIN and top_n / total >= SAME:
+                flags.append(f"rule? ({top} {top_n}/{total})")
+            nm = mk["right"] + mk["wrong"]
+            if nm >= WRONG_MIN and mk["wrong"] / nm >= WRONG:
+                flags.append(f"owner? (wrong {mk['wrong']}/{nm})")
+            spread = ", ".join(f"{a} {c}" for a, c in answers.most_common(5))
+            marked = f"  marks: right {mk['right']}, wrong {mk['wrong']}" if nm else ""
+            print(f"  {kind:5} {what}: {total} × ({spread}){marked}" + (f"  ⚑ {'; '.join(flags)}" if flags else ""))
+
+
+if __name__ == "__main__":
+    main()

@@ -41,7 +41,7 @@ impl Link {
         std::thread::spawn(move || {
             // the pause doubles while the pipe keeps failing at once, up to a minute, and is short again after a pipe
             // that ran: a box whose coordd is gone was retried every 3 s, each try an `sbx exec` opening dozens of
-            // Secret Service sessions, which crashed gnome-keyring every hour or two
+            // Secret Service sessions, which crashed gnome-keyring every hour or two (8 Nov, m95)
             let mut pause = PAUSE_MIN;
             loop {
                 let began = std::time::Instant::now();

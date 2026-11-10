@@ -98,8 +98,9 @@ pub fn pane(s: &App, pi: usize, name: &str, k: &Kit) -> El {
 }
 
 /// The owner's mails to the agent that have not reached it yet, at the chat's foot, greyed until they are delivered:
-/// a click (or Edit) takes one back into the composer, Cancel takes it back, Send now stops the agent's turn and
-/// delivers it.
+/// a click (or Edit) takes one back into the composer, Cancel takes it back, Send now has it go in after the agent's
+/// next tool call and, once so, Interrupt and send stops the turn for it (owner 8 Nov: "if you press send it then
+/// remains and is editable and cancelable … until it's sent"; m358, 10 Nov: send now does not interrupt by default).
 fn queued(s: &App, pi: usize, a: &AgentView, k: &Kit) -> El {
     let Some(p) = s.projects.get(pi) else { return col() };
     let waiting: Vec<&coord_types::MailView> = p
@@ -125,7 +126,8 @@ fn queued(s: &App, pi: usize, a: &AgentView, k: &Kit) -> El {
             .child(Button::new("Edit").variant(ButtonVariant::Ghost).on_press(move |s: &mut App| s.unsend(pi, &edit.1, &edit.0, true)).build(k))
             .child(Button::new("Cancel").variant(ButtonVariant::GhostMuted).on_press(move |s: &mut App| s.unsend(pi, &cancel.1, &cancel.0, false)).build(k));
         if a.state == "working" && m.clerk.is_none() {
-            acts = acts.child(Button::new("Send now").variant(ButtonVariant::Warning).on_press(move |s: &mut App| s.send_now(pi, &now)).build(k));
+            let soon = !m.soon;
+            acts = acts.child(Button::new(if soon { "Send now" } else { "Interrupt and send" }).variant(ButtonVariant::Warning).on_press(move |s: &mut App| s.send_now(pi, &now, soon)).build(k));
         }
         // sent back by its message net (the clerk): the owner may have it delivered as it was
         if m.clerk.as_deref().is_some_and(|c| c.starts_with("sent back")) {
@@ -135,6 +137,7 @@ fn queued(s: &App, pi: usize, a: &AgentView, k: &Kit) -> El {
             }).build(k));
         }
         let why = match m.clerk.as_deref() {
+            None if m.soon && a.state == "working" => format!("goes in after {}'s next tool call", a.name),
             None => why.clone(),
             Some("with the clerk") => format!("the clerk is reading it before it goes to {}", a.name),
             Some(c) if c.starts_with("sent back") => format!("the clerk {c} — edit it, or deliver it as it is"),
@@ -228,7 +231,7 @@ pub fn item_row(s: &App, pi: usize, agent: &str, item: &Item, last: bool, k: &Ki
     let key = item_key(c, item);
     let live = last && a.is_some_and(|a| a.state == "working");
     // a row drawn once and reused until it changes (Rune's subtree cache): a frame for the spinner of the run going
-    // on, or for anything else that moves, no longer repaints every row's text; the live run
+    // on, or for anything else that moves, no longer repaints every row's text (9 Nov, m151 fix 2); the live run
     // itself, whose spinner changes 30 times a second, draws live
     let shown: Vec<usize> = match *item {
         Item::Entry(i) => vec![i],
@@ -330,6 +333,21 @@ pub fn take_image(cache: Option<&rune::ImageCache>, ok: bool, out: &str) -> Img 
     }
 }
 
+/// The clicked chat image over the whole window, as large as fits at its aspect ratio; a click anywhere closes it.
+pub fn viewer(s: &App, k: &Kit, layer: &mut Vec<El>) {
+    let Some(Img::Ready(img)) = s.viewing.as_ref().and_then(|key| s.images.get(key)) else { return };
+    layer.push(
+        rune::el()
+            .key("image-viewer")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .fill(k.c.bg_deep.alpha(0.94))
+            .padding(24.0)
+            .cursor(rune::Cursor::Pointer)
+            .on_press(|s: &mut App| s.viewing = None)
+            .child(rune::el().w_full().h_full().pixels_fit(img.pixels(), rune::SurfaceFit::Fit)),
+    );
+}
+
 /// The widest an image in a chat draws; a narrower one keeps its own width.
 const IMAGE_MAX_W: f32 = 720.0;
 
@@ -345,7 +363,8 @@ fn images(s: &App, pi: usize, agent: &str, e: &Entry, k: &Kit) -> Option<El> {
         out = out.child(match s.images.get(&key) {
             Some(Img::Ready(img)) if img.error().is_none() => {
                 let w = img.size().map_or(IMAGE_MAX_W, |[w, _]| (w as f32 / 2.0).min(IMAGE_MAX_W));
-                rune::el().w(w).radius(k.radius.sm).border(1.0, k.c.border_weak).pixels(img.pixels())
+                let open = key.clone();
+                rune::el().w(w).radius(k.radius.sm).border(1.0, k.c.border_weak).pixels(img.pixels()).cursor(rune::Cursor::Pointer).on_press(move |s: &mut App| s.viewing = Some(open.clone()))
             }
             Some(Img::Ready(img)) => text(format!("image: {}", img.error().map(|e| e.to_string()).unwrap_or_default())).font(k.ty.small).color(k.c.text_faint),
             Some(Img::Failed(why)) => text(format!("image: {why}")).font(k.ty.small).color(k.c.text_faint),
@@ -432,7 +451,8 @@ pub fn entry(s: &App, pi: usize, agent: &str, e: &Entry, key: &str, cwd: Option<
     if s.found.as_deref() == Some(key) { row.fill(k.c.surface_raised).border(1.0, k.c.border_focus) } else { row }
 }
 
-/// Mail to the agent: Send (Cmd/Ctrl+Enter) puts it in its inbox; Esc stops its turn first.
+/// Mail to the agent: Send (Cmd/Ctrl+Enter) puts it in its inbox, for its turn's end; Send now has it go in after its next
+/// tool call, the turn not stopped (its queued card then offers Interrupt and send).
 fn composer(s: &App, pi: usize, a: &AgentView, k: &Kit) -> El {
     let running = a.state != "stopped";
     let key = (pi, a.name.clone());
@@ -446,11 +466,11 @@ fn composer(s: &App, pi: usize, a: &AgentView, k: &Kit) -> El {
         .on_edit(move |s: &mut App| s.composers.entry(edit.clone()).or_insert_with(|| TextEdit::new("")))
         .on_change(move |s: &mut App, _| crate::ask::follow_mention(s, &f1))
         .on_key(move |s: &mut App, key, _| crate::ask::mention_key(s, &f2, key))
-        .on_submit(move |s: &mut App, _| s.send(submit.0, &submit.1, false))
+        .on_submit(move |s: &mut App, _| s.send(submit.0, &submit.1, false, false))
         .build(k);
     let field = col().key(crate::ask::Field::Composer(pi, a.name.clone()).key()).w_full().child(field);
-    let send = Button::new("Send").variant(ButtonVariant::Contrast).on_press(move |s: &mut App| s.send(send.0, &send.1, false)).build(k);
-    let esc = Button::new("Esc and send").variant(ButtonVariant::Warning).on_press(move |s: &mut App| s.send(esc.0, &esc.1, true)).build(k);
+    let send = Button::new("Send").variant(ButtonVariant::Contrast).on_press(move |s: &mut App| s.send(send.0, &send.1, false, false)).build(k);
+    let esc = Button::new("Send now").variant(ButtonVariant::Warning).on_press(move |s: &mut App| s.send(esc.0, &esc.1, true, false)).build(k);
     let mut buttons = row().gap(8.0).child(send);
     if running {
         buttons = buttons.child(esc);

@@ -1,11 +1,11 @@
-//! yaaihh in the background. Closing the
+//! yaaihh in the background (owner 7 Nov: yaaihh replaces EasyCLIProxyAPI fully, with its own tray icon). Closing the
 //! window hides it; the app keeps running, and with it the proxy backend's usage collector and the links to the
 //! boxes. The tray icon opens the window again (a click, or "Open yaaihh"); "Quit yaaihh" ends it.
 //!
 //! One yaaihh per login: the first listens on `$XDG_RUNTIME_DIR/yaaihh.sock`; a second start (the launcher, while
 //! the autostarted one sits in the tray) asks it to open its window and exits.
 //!
-//! Releases: `--replace` asks the running yaaihh to quit and
+//! Releases (vault designs/yaaihh-2026-11-07.md, rolling updates): `--replace` asks the running yaaihh to quit and
 //! starts once it has (a release going live, or a rollback); `--dev` runs beside prod (its own socket and tray icon,
 //! never taking the proxy's usage recording), to try a release without interrupting the owner.
 

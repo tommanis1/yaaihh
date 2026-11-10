@@ -1,4 +1,4 @@
-// The system's prelude: the facts coordd supplies and the
+// The system's prelude (vault designs/policy-language-draft-2026-11-08.md §2): the facts coordd supplies and the
 // decisions it asks. Not policy: the facts are filled from the proxy and the price catalog (coordd policy/facts.rs).
 Fact model Identified by String
 Fact provider Identified by model * String
@@ -13,7 +13,24 @@ Decision model-for
   Options model
   Requires price(option) >= 0
 
-// A net's session is a harness session: its model must be one a harness runs. The call gives
+// A net's session is a harness session (owner m116): its model must be one a harness runs. The call gives
 // `place` = `session` for a session's first call.
 Only for model-for When call.place == "session":
   harness(option, _)
+
+// The team (coordd supplies these for every norm query, policy/norms.rs): each agent, its role (`coord role`; an agent
+// given none is a member), the mail thread a query is about ("none" outside a thread), and the agents the owner wrote to
+// in that thread.
+Fact agent Identified by String
+Fact role Identified by agent * String
+Fact thread Identified by String
+Fact brought-in Identified by agent * thread
+
+// Teams and model tiers (vault designs/teams-and-tiers-2026-11-10.md §3), supplied for every norm query: each agent's
+// model (its effort suffix dropped), its parent (none for the owner's own), a team grant (N agents allowed, U added so
+// far) and whether it was added to a team. The proxy's `model` and `family` facts are supplied to the norms too.
+Fact runs Identified by agent * model
+Fact parent Identified by agent * agent
+Fact granted Identified by agent * Int
+Fact used Identified by agent * Int
+Fact member Identified by agent

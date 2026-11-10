@@ -1,4 +1,4 @@
-//! A net drawn as written: its source structure, not its workflow net. Statements become
+//! A net drawn as written (owner m127, the Clerk page): its source structure, not its workflow net. Statements become
 //! nested blocks ([`NetFlow`]): a sequence, a branch per `if`/`match` (its arms side by side), a frame per `for`. The
 //! model calls and decisions inside a statement's expressions come first as their own steps, in evaluation order; a
 //! `match` or `if` on exactly one call or decision has that call as its head, so `match decide end-of-turn(…)` is one
@@ -14,10 +14,7 @@ pub fn graphs(file: &str, text: &str) -> Result<Vec<NetGraph>, String> {
 }
 
 fn graph(net: &Net) -> NetGraph {
-    let sessions: Vec<String> = net.sessions.iter().map(|s| format!("session {}: per {}", s.name, match s.per {
-        syntax::Per::Agent => "agent",
-        syntax::Per::Owner => "owner",
-    })).collect();
+    let sessions: Vec<String> = net.sessions.iter().map(|s| format!("context {}: per {}", s.name, s.per.word())).collect();
     let start = FlowNode {
         kind: "start".into(),
         label: format!("on {}({})", net.event, net.var),
@@ -60,11 +57,13 @@ fn calls(e: &Expr, line: usize, out: &mut Vec<FlowNode>) {
             args.iter().for_each(|a| calls(&a.value, line, out));
             with.iter().for_each(|(_, v)| calls(v, line, out));
             let mut n = node("call", format!("{name}({})", show_args(args)), at.line.max(line));
-            n.session = match place {
-                Place::Fresh => None,
-                Place::In(s) => Some(s.clone()),
+            n.session = place.context().cloned();
+            let used = match place {
+                Place::With(s) => format!("with {s} (a fork, not advanced)"),
+                Place::Digest => "digest".into(),
+                Place::Fresh | Place::In(_) => String::new(),
             };
-            n.detail = show_with(with);
+            n.detail = [used, show_with(with)].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(", ");
             out.push(n);
         }
         Expr::Decide { name, args, with, at } => {
@@ -169,10 +168,13 @@ fn stmt(s: &Stmt) -> Vec<NetFlow> {
                     n.label = format!("fault {name}({})", show_args(args));
                     n.terminal = true;
                 }
-                Effect::Raise(name) => {
+                Effect::Raise(name, after) => {
                     n.kind = "raise".into();
-                    n.label = format!("raise {name}({})", show_args(args));
-                    n.out.push(format!("raises {name}"));
+                    n.label = format!("{}({})", effect.name(), show_args(args));
+                    n.out.push(match after {
+                        None => format!("raises {name}"),
+                        Some(d) => format!("raises {name} after {}", super::syntax::show_duration(*d)),
+                    });
                 }
                 Effect::Accept => {
                     n.label = "accept".into();
@@ -311,7 +313,7 @@ mod tests {
     }
 
     /// Every net shipped draws connected: walking the drawn lines from the event reaches every step, arm label and the
-    /// end, with the arms side by side, stacked, and at the room the Clerk page gives.
+    /// end, with the arms side by side, stacked, and at the room the Clerk page gives (owner m130).
     #[test]
     fn every_shipped_net_draws_connected() {
         use coord_types::netlayout::{layout, unreached, Font};

@@ -1,4 +1,4 @@
-//! The agents' raw terminals. Each attached
+//! The agents' raw terminals (vault designs/yaaihh-2026-11-07.md, "Terminals: a holder per agent"). Each attached
 //! agent has its own emulator (vt100, as in its holder, `coord-pty`), fed by the bridge's `{"pty": …}` lines; the view
 //! draws its cells at any size and, focused, takes keys and makes its own size the terminal's.
 //!
@@ -309,7 +309,7 @@ pub fn view(s: &App, k: &Kit, project: usize, agent: &str, focused: bool) -> El 
     }
     let mut v = frame.child(grid);
     let scrolled = (back > 0).then(|| format!("{back} lines back · typing returns to the end"));
-    // a program on the alternate screen gets the wheel as Up and Down (wheel()); say so, or it looks stuck
+    // a program on the alternate screen gets the wheel as Up and Down (wheel()); say so, or it looks stuck (8 Nov)
     let full = screen.alternate_screen().then(|| "a full-screen view: the wheel sends ↑ ↓ to it · in Claude Code, Esc or Ctrl+O leaves it".to_string());
     if let Some(why) = t.note.clone().or(t.exited.as_ref().map(|e| format!("ended: {e}"))).or(scrolled).or(full) {
         v = v.child(row_note(why, k));

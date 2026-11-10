@@ -1,4 +1,4 @@
-//! The sidebar, top to bottom:
+//! The sidebar (owner 7 Nov night), top to bottom:
 //!
 //! - **Pinned**: chats pinned from any project (the agent page's Pin button), so the owner moves between agents of
 //!   different projects (a host session and a box's orch) in one click. A row's close button unpins it; dragging a
@@ -249,7 +249,10 @@ fn built(s: &App, k: &Kit) -> El {
     for (depth, a) in p.live.agent_tree().into_iter().filter(|(_, a)| a.state != "stopped") {
         let (name, side, cur) = (a.name.clone(), a.name.clone(), s.cur);
         let mut row = SidebarRow::new(a.name.clone())
-            .subtitle(format!("{} · {}", first_line(&a.state), a.model))
+            .subtitle(match a.role.as_str() {
+                "" | "member" => format!("{} · {}", first_line(&a.state), a.model),
+                role => format!("{role} · {} · {}", first_line(&a.state), a.model),
+            })
             .depth(depth as u8 + 1)
             .height(40.0)
             .selected(s.sel == Sel::Agent(a.name.clone()))

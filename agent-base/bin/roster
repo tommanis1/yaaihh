@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# roster: the agents of a box, each on a terminal of its own held by `coord-pty NAME`
-# . A
+# roster: the agents of a box, each on a terminal of its own held by `coord-pty NAME` (vault designs/
+# yaaihh-2026-11-07.md, "Terminals: a holder per agent"; it replaced the box's WezTerm mux, which replaced tmux). A
 # holder outlives coordd and serves $COORD/pty/NAME.sock: the owner opens an agent in a WezTerm tab on the host with
 # `box.sh sh BOX coord attach NAME` (raw output, so WezTerm keeps its own scrollback and copy/paste), and yaaihh draws
 # it through its bridge. A project without a box runs
@@ -16,6 +16,12 @@
 #                      session as NEW (its id, session and history stay; coordd's `rename`)
 #                      start NAME again on its own session (session.json: id, cwd, model), hanging up the running
 #                      terminal; refused while NAME is working, unless --force
+#   roster fork NAME [--name NEW] [--model MODEL] [TEXT]
+#                      a new agent NEW (default NAME-fork, NAME-fork2, ...) on a copy of NAME's whole conversation
+#                      (`claude --resume --fork-session`: a new session id, the same history, settings and hooks); NAME
+#                      goes on unchanged. NEW's parent is the caller (the owner from yaaihh's Fork, or the agent that
+#                      runs `coord fork`). Its first prompt says it is a fork, then TEXT, if any (vault designs/
+#                      decisions-policies-forks-2026-11-08.md §4.5)
 #   roster resume      resume the agents that ran when coordd last went down (box.sh start and host-coordd start
 #                      run it after a reboot)
 #   roster tab NAME DIR CMD...
@@ -33,14 +39,14 @@
 # the file as the first message. DIR defaults to the current directory.
 #
 # Every agent is registered with coordd (`coordc add`) and its process claims it (`coordc run NAME -- CMD`): coordd
-# puts the process in the agent's cgroup, knows it by that from then on, and sees it end
-# . coordd also writes agents/NAME/session.json, which restart reads.
+# puts the process in the agent's cgroup, knows it by that from then on, and sees it end (vault designs/
+# yaaihh-2026-11-07.md §7). coordd also writes agents/NAME/session.json, which restart reads.
 # Each session runs with bypass permissions and $COORD/claude-settings.json, made from claude/settings.json (hooks,
 # crossSessionInbound accept; with a model route the proxy key from $COORD/.proxy-key through apiKeyHelper rather than
 # the environment, which sbx rewrites; without one the session's own login), AGENT_NAME and
 # AGENT_MODEL set, and git's hooksPath on git/hooks for the commit trailers. Terminal NAME is the agent's.
 #
-# A Codex agent is a thread on its own Codex app-server (`codex app-server --listen unix://`, no
+# A Codex agent (owner, 6 Nov) is a thread on its own Codex app-server (`codex app-server --listen unix://`, no
 # daemon, so no self-update), started with the agent's environment as a Claude agent's terminal gets it, approvals off and no
 # sandbox; its terminal runs the Codex TUI attached to that thread with --remote. One app-server per agent because
 # Codex fixes a thread's environment and sandbox when the thread starts and a resume does not restore them. Hanging up
@@ -61,7 +67,7 @@ fi
 apps=$CODEX_HOME/app  # NAME.sock, NAME.pid, NAME.log; the sockets' directory must be ours alone (codex refuses others)
 # what an agent's session leaves in the environment of the programs it runs (roster among them); a terminal's program
 # gets its starter's environment, and a Claude Code that inherits them takes itself for a nested session, with
-# no channels and, with CLAUDE_CODE_CHILD_SESSION, no saved transcript. Every program roster starts
+# no channels (7 Nov) and, with CLAUDE_CODE_CHILD_SESSION, no saved transcript (6 Nov). Every program roster starts
 # goes without them.
 inherited=()
 for v in $(compgen -e); do case $v in CLAUDECODE | CLAUDE_CODE_* | CLAUDE_PID | CLAUDE_EFFORT) inherited+=(-u "$v") ;; esac; done
@@ -94,10 +100,17 @@ agent() {  # agent NAME MODEL DIR CLAUDE-ARGS...: a Claude Code session as roste
   local name=$1 model=$2 dir=$3 effort=(); shift 3
   home "$name" "$dir" || return 0
   case $model in *:*) effort=(--effort "${model#*:}") ;; esac
-  # the coord channel (claude/channel.py, mail per) and the standing
+  # the coord channel (claude/channel.py, mail per vault designs/agent-messaging-2026-11-07.md) and the standing
   # instruction that team mail is to be acted on (without it Haiku and Opus refused mid-turn mail, 7 Nov)
   local mcp settings=$COORD/claude-settings.json mode=(--dangerously-skip-permissions) url=() filter=.
   mcp=$(jq -nc --arg c "$AGENT_BASE/claude/channel.py" '{mcpServers: {coord: {command: $c, args: []}}}')
+  # the project's own MCP servers: each executable $COORD/mcp/NAME (a link to it) is server NAME of every agent session
+  # (owner m326, 10 Nov: the box's agda-mcp, registered for all agents, not by hand per agent)
+  local m
+  for m in "$COORD"/mcp/*; do
+    [ -x "$m" ] && [ "${m##*/}" != coord ] || continue
+    mcp=$(jq -c --arg n "${m##*/}" --arg c "$m" '.mcpServers[$n] = {command: $c, args: []}' <<<"$mcp")
+  done
   # On the host (a project without a box, COORDD_SOCK set) nothing but the session's permissions stands between it and
   # the owner's machine: it keeps the owner's own Claude Code permission mode (prompts answered in its terminal, which
   # yaaihh shows), with the same hooks. In a box the box is the boundary and agents bypass prompts.
@@ -110,7 +123,7 @@ agent() {  # agent NAME MODEL DIR CLAUDE-ARGS...: a Claude Code session as roste
   [ -s "$COORD/.proxy-key" ] || filter+=' | del(.apiKeyHelper)'
   jq "$filter" "$AGENT_BASE/claude/settings.json" >"$settings.$$" && mv "$settings.$$" "$settings"
   # Claude Code's development-channel warning, the one dialog at each start (design additions 11), is confirmed by the
-  # terminal's holder: a poller here died with roster's caller and left the agent stuck there
+  # terminal's holder: a poller here died with roster's caller and left the agent stuck there (9 Nov)
   open "$name" "$dir" --confirm 'Loading development channels' env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
     LANG=C.UTF-8 AGENT_NAME="$name" AGENT_MODEL="$model" COORD="$COORD" "${sockenv[@]}" "${url[@]}" AGENT_BASE="$AGENT_BASE" \
     PATH="$AGENT_BASE/bin:$PATH" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
@@ -174,7 +187,7 @@ codex_agent() {  # codex_agent NAME MODEL DIR THREAD PROMPT: Codex roster agent 
 
 start() {  # start NAME MODEL PROMPT DIR
   case $(state "$1") in '' | stopped) ;; *) echo "$1: already running"; return ;; esac
-  # the hierarchy: NAME's parent is whoever registers it first, an agent or the owner (coordd knows the
+  # the hierarchy (owner, 7 Nov): NAME's parent is whoever registers it first, an agent or the owner (coordd knows the
   # caller by its cgroup)
   local kind=claude; case $2 in gpt-*) kind=codex ;; esac
   coordc add "$1" "$kind" "$2" >/dev/null
@@ -190,8 +203,12 @@ start() {  # start NAME MODEL PROMPT DIR
   echo "$1: started ($2)"
 }
 
-restart() {  # restart NAME: its own session again, from session.json
-  local s=$COORD/agents/$1/session.json sid dir model
+restart() {  # restart NAME: its own session again, from session.json; a program (roster tab) its command again
+  local s=$COORD/agents/$1/session.json sid dir model t=$COORD/agents/$1/tab.json
+  if [ -f "$t" ]; then  # a reboot ended the runner too, and nothing started it again (owner m225, 9 Nov)
+    local -a cmd; mapfile -t cmd < <(jq -r '.cmd[]' "$t")
+    tab "$1" "$(jq -r .dir "$t")" "${cmd[@]}"; return
+  fi
   [ -f "$s" ] || { echo "$1: no $s (roster add starts a new agent)" >&2; exit 1; }
   sid=$(jq -r '.session_id // empty' "$s"); dir=$(jq -r '.cwd // empty' "$s"); model=$(jq -r '.model // empty' "$s")
   [ -n "$sid" ] && [ -n "$dir" ] || { echo "$1: $s has no session_id or cwd" >&2; exit 1; }
@@ -206,6 +223,43 @@ restart() {  # restart NAME: its own session again, from session.json
   for _ in $(seq 40); do [ "$(state "$1")" = stopped ] && break; sleep 0.25; done
   agent "$1" "${model:-claude-opus-5-5}" "$dir" --resume "$sid"
   echo "$1: restarted (session $sid)"
+}
+
+fork() {  # fork NAME [--name NEW] [--model MODEL] [TEXT...]: NAME's conversation, copied, as agent NEW
+  local from=$1 new='' model='' s sid dir; shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+    --name) new=${2:?--name needs a name}; shift 2 ;;
+    --model) model=${2:?--model needs a model}; shift 2 ;;
+    *) break ;;
+    esac
+  done
+  s=$COORD/agents/$from/session.json
+  [ -f "$s" ] || { echo "$from: no $s" >&2; exit 1; }
+  [ "$(jq -r '.kind // empty' "$s")" != codex ] || { echo "$from: forking a Codex agent is not supported yet" >&2; exit 1; }
+  sid=$(jq -r '.session_id // empty' "$s"); dir=$(jq -r '.cwd // empty' "$s")
+  [ -n "$sid" ] && [ -n "$dir" ] || { echo "$from: $s has no session_id or cwd" >&2; exit 1; }
+  model=${model:-$(jq -r '.model // empty' "$s")}; model=${model:-claude-opus-5-5}
+  if [ -z "$new" ]; then
+    new=$from-fork; local n=2
+    while [ -n "$(state "$new")" ]; do new=$from-fork$n; n=$((n + 1)); done
+  fi
+  case $(state "$new") in '' | stopped) ;; *) echo "$new: already running" >&2; exit 1 ;; esac
+  coordc add "$new" claude "$model" >/dev/null
+  local text="You are now $new: a fork of $from, made at this point of its conversation (a copy of it; $from goes on \
+on its own, and nothing you do changes its session). Your name for mail is $new; mail to $from reaches $from, not you."
+  if [ $# -gt 0 ]; then text+=$'\n\n'"$*"; else text+=" Say in one line that you are the fork, then wait for mail."; fi
+  agent "$new" "$model" "$dir" --resume "$sid" --fork-session "$text"
+  echo "$new: forked from $from (session $sid)"
+}
+
+tab() {  # tab NAME DIR CMD...: a program on terminal NAME, its command kept for restart (and so for resume)
+  # registered as a program and claimed like an agent, so it has a delegated cgroup of its own (agents/NAME): the
+  # runner's memory-limited jobs go beside it, counted as the runner's, not its starter's
+  local n=$1 d=$2; shift 2; close "$n"; coordc add "$n" program - >/dev/null
+  mkdir -p "$COORD/agents/$n" && jq -n --arg d "$d" '{dir: $d, cmd: $ARGS.positional}' --args "$@" >"$COORD/agents/$n/tab.json"
+  open "$n" "$d" env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" "${sockenv[@]}" "$AGENT_BASE/bin/coordc" run "$n" -- "$@"
+  echo "$n: started"
 }
 
 rename() {  # rename NAME NEW: wait for NAME's turn to end, stop it, rename it, resume it as NEW
@@ -239,14 +293,11 @@ resume)  # the agents that ran when coordd last went down, each from its own ses
   for n in $(jq -r '.[]' "$f.taking"); do (restart "$n") || true; done
   rm -f "$f.taking"
   ;;
+fork) fork "${2:?roster fork NAME [--name NEW] [--model MODEL] [TEXT]}" "${@:3}" ;;
 rename) rename "${2:?roster rename NAME NEW}" "${3:?roster rename NAME NEW}" ;;
 tab)
   [ $# -ge 4 ] || { echo "usage: roster tab NAME DIR CMD..." >&2; exit 2; }
-  # registered as a program and claimed like an agent, so it has a delegated cgroup of its own (agents/NAME): the
-  # runner's memory-limited jobs go beside it, counted as the runner's, not its starter's
-  n=$2 d=$3; shift 3; close "$n"; coordc add "$n" program - >/dev/null
-  open "$n" "$d" env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" "${sockenv[@]}" "$AGENT_BASE/bin/coordc" run "$n" -- "$@"
-  echo "$n: started"
+  tab "$2" "$3" "${@:4}"
   ;;
 down) close "${2:?roster down NAME}"; app_stop "$2" ;;
 ls) coordc terms ;;

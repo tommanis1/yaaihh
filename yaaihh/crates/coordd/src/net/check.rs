@@ -1,4 +1,4 @@
-//! Checking nets before they are used: types
+//! Checking nets before they are used (vault designs/policy-language-draft-2026-11-08.md §16.6, §16.8): types
 //! against the events and the call templates (§7), matches cover their value's cases and no arm is dead, each net
 //! ends its event as the event requires (proper completion: a turn end is accepted or nudged exactly once on every
 //! path; a message is delivered or rejected at least once), the net compiled to a workflow net whose skeleton is
@@ -14,11 +14,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub const SYSTEM_EVENTS: &str = r#"
 event owner_message { id: String, from: String, text: String, thread: String?, to: [String], open: [Question], context: [Said], quoted: [Quoted] }
 event agent_message { id: String, from: String, to: [String], text: String, thread: String? }
-event turn_end { agent: String, turn: Int, text: String, sent: [Said], waits: [String], open: [Question], continues: Bool, repeat: Bool }
+event turn_end { agent: String, turn: Int, text: String, sent: [Said], asked: String?, waits: [String], open: [Question], continues: Bool, repeat: Bool }
 event question { q: String, from: String, text: String }
 event answer { q: String, from: String, text: String }
 event check_done { check: String, agent: String, result: String }
 event fault { net: String, step: String, name: String, detail: String }
+event tick { at: String, every: String, agent: String? }
+event agent_exit { name: String, pid: Int, kind: String, at: String }
 "#;
 
 
@@ -205,12 +207,12 @@ impl<'a, 'b> Ck<'a, 'b> {
             Expr::Variant(v) => T::Variant(v.clone()),
             Expr::Call { name, args, place, with, at } => {
                 let c = self.env.calls.calls.get(name).ok_or(at_err(at, format!("no call `{name}` (a .call file's `call {name}(...)`)")))?;
-                if let super::syntax::Place::In(s) = place {
+                if let Some(s) = place.context() {
                     if !self.net.sessions.iter().any(|d| &d.name == s) {
-                        return Err(at_err(at, format!("no session `{s}` in net {} (`session {s}: per agent`)", self.net.name)));
+                        return Err(at_err(at, format!("no context `{s}` in net {} (`context {s}: per agent`)", self.net.name)));
                     }
-                    if let Some((f, _)) = with.iter().find(|(f, _)| f != "model") {
-                        return Err(at_err(at, format!("a call in session {s} runs on the session's model: `with {f}` is for fresh calls")));
+                    if let Some((f, _)) = with.iter().find(|(f, _)| f != "model" && f != "use") {
+                        return Err(at_err(at, format!("a call in context {s} runs on the context's model: `with {f}` is for fresh calls")));
                     }
                 }
                 for (f, v) in with {
@@ -251,6 +253,9 @@ impl<'a, 'b> Ck<'a, 'b> {
                     "answer" => (vec![("q".into(), Type::Str)], Type::Named("Wake".into())),
                     "check" => (vec![("check".into(), Type::Str)], Type::Named("Wake".into())),
                     "mail" => (vec![("from".into(), Type::Str)], Type::Named("Wake".into())),
+                    "agents" => (vec![], Type::List(Box::new(Type::Named("Watched".into())))),
+                    "runs_today" => (vec![("field".into(), Type::Str), ("value".into(), Type::Str)], Type::Int),
+                    "marked_today" => (vec![("mark".into(), Type::Str)], Type::Int),
                     "len" => {
                         let [a] = args.as_slice() else { return Err(at_err(at, "len takes one value")) };
                         match self.expr(scope, &a.value, at)? {
@@ -260,7 +265,7 @@ impl<'a, 'b> Ck<'a, 'b> {
                     }
                     _ => {
                         let hint = if self.env.calls.calls.contains_key(name) { format!(" (`{name}` is a call: say where it runs, `{name}(...) fresh` or `in SESSION`)") } else { String::new() };
-                        return Err(at_err(at, format!("no built-in `{name}` (questions, all_questions, nudged_in_row, joined, len, answer, check, mail){hint}")));
+                        return Err(at_err(at, format!("no built-in `{name}` (questions, all_questions, nudged_in_row, joined, len, answer, check, mail, agents, runs_today, marked_today){hint}")));
                     }
                 };
                 self.args_fit(name, scope, &params, args, at)?;
@@ -443,6 +448,8 @@ impl<'a, 'b> Ck<'a, 'b> {
             Effect::Post => vec![s("from", Type::Str), s("text", Type::Str), s("thread", Type::Str)],
             Effect::Tell => vec![s("to", Type::Str), s("text", Type::Str)],
             Effect::Accept => vec![s("wake", Type::Named("Wake".into()))],
+            Effect::Requeue | Effect::Hold => vec![s("job", Type::Str), s("why", Type::Str)],
+            Effect::Evict => vec![s("job", Type::Str), s("entry", Type::Str), s("why", Type::Str)],
             Effect::Fault(_) => {
                 self.raises.insert("fault".into());
                 for a in args {
@@ -451,12 +458,15 @@ impl<'a, 'b> Ck<'a, 'b> {
                 }
                 return Ok(());
             }
-            Effect::Raise(e) => {
+            Effect::Raise(e, after) => {
                 let decl = self.env.events.get(e).ok_or(at_err(at, format!("no event `{e}` (`event {e} {{ ... }}` in a .net file)")))?;
                 if decl.at.file == "system" {
                     return Err(at_err(at, format!("`{e}` is coordd's own event: a net raises only events declared in .net files (faults: `fault NAME(...)`)")));
                 }
-                self.raises.insert(e.clone());
+                // a timer is a wait: it is no arc of the raise-cycle check (a net may set a timer for its own event)
+                if after.is_none() {
+                    self.raises.insert(e.clone());
+                }
                 self.env.event_fields[e].clone()
             }
         };
@@ -685,9 +695,9 @@ pub fn net(env: &Env, net: &Net) -> Result<BTreeSet<String>, String> {
     let mut seen = BTreeSet::new();
     for s in &net.sessions {
         if !seen.insert(&s.name) {
-            return Err(at_err(&s.at, format!("session `{}` declared twice", s.name)));
+            return Err(at_err(&s.at, format!("context `{}` declared twice", s.name)));
         }
-        if s.per == Per::Agent && !matches!(net.event.as_str(), "turn_end" | "agent_message" | "question" | "check_done" | "owner_message") {
+        if s.per == Per::Agent && !matches!(net.event.as_str(), "turn_end" | "agent_message" | "question" | "check_done" | "owner_message" | "tick" | "agent_exit") {
             return Err(at_err(&s.at, format!("`per agent`: event {} names no agent", net.event)));
         }
     }
@@ -732,7 +742,7 @@ pub struct Loaded {
     pub live: LiveSet,
 }
 
-/// The live set: which effects are taken for real, its lines that stand by scope.
+/// The live set: which effects are taken for real, its lines that stand by scope (owner m114).
 #[derive(Clone, Debug, Default)]
 pub struct LiveSet(Vec<(Scope2, Switch)>);
 
@@ -773,10 +783,15 @@ impl Loaded {
     }
 
     /// The net for EVENT of AGENT (none when the event names no agent): the narrowest binding.
+    /// The clocks that stand (`every D use NET`): D in seconds, the agents listed (none: one tick about no agent), the net.
+    pub fn clocks(&self) -> Vec<(u64, Vec<String>, String)> {
+        self.bindings.iter().filter_map(|(_, b)| Some((b.every?, b.agents.clone(), b.net.clone()))).collect()
+    }
+
     pub fn resolve(&self, event: &str, agent: Option<&str>) -> Option<&Net> {
         self.bindings
             .iter()
-            .filter(|(_, b)| b.event == event && (b.agents.is_empty() || agent.is_some_and(|a| b.agents.iter().any(|x| x == a))))
+            .filter(|(_, b)| b.every.is_none() && b.event == event && (b.agents.is_empty() || agent.is_some_and(|a| b.agents.iter().any(|x| x == a))))
             .max_by_key(|(s, _)| *s)
             .and_then(|(_, b)| self.nets.get(&b.net))
     }
@@ -844,6 +859,15 @@ pub fn load(calls: &Calls, decisions: &BTreeMap<String, DecisionType>, files: Ve
                 continue;
             }
             _ => {}
+        }
+        // a clock is one more clock (several run side by side); `tick` comes only from clocks
+        if b.every.is_some() {
+            stood.push((scope, b));
+            continue;
+        }
+        if b.event == "tick" {
+            out.errors.push(at_err(&b.at, "`tick` comes from a clock: `every D use NET`"));
+            continue;
         }
         let clash = stood.iter().find(|(s, x)| {
             *s == scope && x.event == b.event && (x.agents.is_empty() && b.agents.is_empty() || x.agents.iter().any(|a| b.agents.contains(a)))

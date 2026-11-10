@@ -73,6 +73,17 @@
           }
         ]
       }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" permission",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   },
   "modelPicker": {
@@ -94,8 +105,12 @@
   "autoCompactWindow": 350000,
   "env": {
     "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
-    "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
+    "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"
   },
   "theme": "auto",
-  "promptCacheTtl": "1h"
+  "promptCacheTtl": "1h",
+  "skillOverrides": {
+    "auto-mode-setup": "off"
+  }
 }

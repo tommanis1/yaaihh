@@ -418,6 +418,16 @@ impl Calls {
         }
     }
 
+    /// CALL with PREFACE before its template (a context's digest or the owner's note, supervision-nets §8a); CALL
+    /// itself when PREFACE is empty.
+    pub fn prefaced(call: &Call, preface: &str) -> Call {
+        let mut c = call.clone();
+        if !preface.is_empty() {
+            c.template.insert(0, Node::Text(format!("{preface}\n\n")));
+        }
+        c
+    }
+
     /// CALL's prompt for INPUT (its parameters by name; INPUT has been checked to conform).
     pub fn render(&self, call: &Call, input: &Value) -> String {
         let mut out = String::new();
@@ -516,12 +526,12 @@ pub fn run(calls: &Calls, call: &Call, input: &Value, model: &str, proxy: &super
 }
 
 /// Run CALL as the next turn of a harness session (`super::harness`): HARNESS and MODEL, session RESUME (none: start
-/// one). Its answer, checked, and the session's id.
+/// one), on a throwaway fork of it when FORK. Its answer, checked, and the session's id.
 #[allow(clippy::too_many_arguments)]
-pub fn run_session(calls: &Calls, call: &Call, input: &Value, harness: &str, model: &str, proxy: &super::facts::Proxy, coord: &str, resume: Option<&str>) -> Result<(Value, String), Failure> {
+pub fn run_session(calls: &Calls, call: &Call, input: &Value, harness: &str, model: &str, proxy: &super::facts::Proxy, coord: &str, resume: Option<&str>, fork: bool) -> Result<(Value, String), Failure> {
     let prompt = calls.render(call, input);
     let schema = json!({"type": "object", "properties": {"answer": calls.schema(&call.returns)}, "required": ["answer"], "additionalProperties": false});
-    let (v, id) = super::harness::turn(harness, coord, proxy, model, &prompt, &schema, resume)?;
+    let (v, id) = super::harness::turn(harness, coord, proxy, model, &prompt, &schema, resume, fork)?;
     let a = v.get("answer").cloned().ok_or(Failure::Invalid("no `answer`".into()))?;
     calls.conforms(&call.returns, &a).map_err(Failure::Invalid)?;
     Ok((a, id))

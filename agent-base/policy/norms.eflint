@@ -1,0 +1,21 @@
+// The team's norms (vault designs/policy-language-draft-2026-11-08.md §3), compiled by coordd policy/norms.rs. coordd
+// asks them on each `coord msg` an agent sends and on each `coord log`; the owner is not bound by them.
+
+// One agent mailing another (owner, 9 Nov): anyone may mail anyone, except a consultant, whose mail is advice its
+// members do not answer. A member who disagrees takes it to their lead, who may answer the consultant; anyone may
+// answer it in a thread the owner brought the consultant into.
+Act send-mail
+  Actor agent
+  Recipient agent
+  Related to thread
+  Holds when not role(recipient, "consultant")
+  Holds when role(actor, "lead")
+  Holds when role(actor, "consultant")
+  Holds when brought-in(recipient, thread)
+
+// Reading another agent's session beyond those below you (`coord log`; the agents above one always may): the
+// consultant reads everyone's, as it advises the whole team.
+Act read-session
+  Actor agent
+  Recipient agent
+  Holds when role(actor, "consultant")

@@ -37,6 +37,11 @@ pub struct Header {
     /// The folder of the item notes: `coord item open` writes ID-SLUG.md there (design §4).
     #[serde(default)]
     pub notes: Option<String>,
+    /// A command printing the project's events, one JSON object per line as they happen, each naming its `event`
+    /// (vault designs/supervision-nets-2026-11-10.md, step 1). coordd raises each to the nets; one with
+    /// `"notify": "owner"` is also mailed to the owner, once per `fingerprint` an hour.
+    #[serde(default)]
+    pub events: Option<String>,
 }
 
 fn default_prefix() -> String {
@@ -73,11 +78,17 @@ impl Project {
 
     /// What the waits source says each agent waits on (an empty map when there is none or it fails).
     pub async fn waits(&self) -> HashMap<String, Vec<String>> {
-        let Some(cmd) = &self.project.waits else { return HashMap::new() };
+        self.read_waits().await.unwrap_or_default()
+    }
+
+    /// The waits command's answer, or None when it has none (no command, failed, no answer in 20 s, not JSON): a
+    /// refresh then leaves the states as they are rather than taking every wait as gone.
+    pub async fn read_waits(&self) -> Option<HashMap<String, Vec<String>>> {
+        let cmd = self.project.waits.as_ref()?;
         let run = Command::new("sh").arg("-c").arg(cmd).current_dir(&self.dir).stdin(Stdio::null()).output();
         match tokio::time::timeout(Duration::from_secs(20), run).await {
-            Ok(Ok(out)) if out.status.success() => serde_json::from_slice(&out.stdout).unwrap_or_default(),
-            _ => HashMap::new(),
+            Ok(Ok(out)) if out.status.success() => serde_json::from_slice(&out.stdout).ok(),
+            _ => None,
         }
     }
 

@@ -1,0 +1,38 @@
+// Teams and model tiers (vault designs/teams-and-tiers-2026-11-10.md), the owner's install (10 Nov, m312-m329). coordd
+// asks these acts; an act left out is not checked.
+
+// The order of models within a family: a subagent runs a lower tier than the agent that starts it.
+Fact tier Identified by model * Int
++tier("claude-haiku-5-5", 1).
++tier("claude-sonnet-5-5", 2).
++tier("claude-sonnet-5", 2).
++tier("claude-opus-5-5", 3).
++tier("claude-opus-5", 3).
++tier("claude-fable-5-1", 4).
++tier("claude-fable-5-2", 4).
++tier("gpt-6-luna", 1).
++tier("gpt-6-astra", 2).
+
+// Claude Code's Agent tool (the PreToolUse hook): within the agent's family and a lower tier; another family is a
+// team's job. A call naming no model runs the agent's own model, so it is refused here.
+Act start-subagent
+  Actor agent
+  Related to model
+  Holds when family(model) == family(runs(actor)) and tier(model) < tier(runs(actor))
+
+// `coord team ask`: any agent but a team member (depth: owner, orch, its agents, an agent's team).
+Act ask-team
+  Actor agent
+  Holds when not member(actor)
+
+// Who an ask goes to and who may grant it: the asker's lead (its parent). The owner always may.
+Act approve-team
+  Actor agent
+  Recipient agent
+  Holds when parent(recipient, actor)
+
+// An agent registering a new agent (roster add, roster fork): the lead staffs; others within their team grant.
+Act add-agent
+  Actor agent
+  Holds when role(actor, "lead")
+  Holds when used(actor) < granted(actor)

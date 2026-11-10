@@ -1,4 +1,4 @@
-//! The Clerk page: what the clerk and any other net did on
+//! The Clerk page (vault designs/policy-language-draft-2026-11-08.md §15–§16): what the clerk and any other net did on
 //! each event, newest first, in plain words: who ended a turn or sent what, what it filed (with Undo) and what it would
 //! do were that effect turned on. A run's details (each call and decision with the model and a "Why" that opens the
 //! decision, ask.rs `why`) open on demand. Above the runs: what is turned on (the `live` files), and the nets, each
@@ -12,7 +12,7 @@ use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Kit, SegmentedControl
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
-/// The nets shown, edited and tried on the page: the files and nets as coordd read them, the net open
+/// The nets shown, edited and tried on the page (owner m116): the files and nets as coordd read them, the net open
 /// for editing, the edited texts by file, what to try it on (typed, or a past run), the two runs (edited, current)
 /// and what saving said.
 #[derive(Default)]
@@ -33,18 +33,18 @@ pub struct Editor {
     pub graphs: HashMap<String, (Option<Vec<coord_types::NetGraph>>, Option<String>)>,
     /// Per net file: the text last sent to be drawn.
     pub drawn: HashMap<String, String>,
-    /// Per net file: the open net's own lines being edited.
+    /// Per net file: the open net's own lines being edited (owner m130).
     pub pieces: HashMap<String, Piece>,
     /// The call files shown whole to edit, not only the calls and types the open net uses.
     pub whole: HashSet<String>,
-    /// The part being marked wrong, with the note being written.
+    /// The part being marked wrong, with the note being written (owner m168: corrections, live or dry alike).
     pub noting: Option<(NetMark, TextEdit)>,
     /// The marked runs run again with the edits (`Request::NetReplay`): none while running; what the marks refused.
     pub replayed: Option<Option<Result<Vec<Replayed>, String>>>,
     pub mark_error: Option<String>,
 }
 
-/// Net NAME's own lines in its file, edited apart from the rest: the text before and after them stays as
+/// Net NAME's own lines in its file, edited apart from the rest (owner m130): the text before and after them stays as
 /// it is, and the file's text is the three joined again on every change, so Save writes those lines back in place.
 /// LINE: how many lines come before them.
 pub struct Piece {
@@ -137,7 +137,7 @@ fn piece_changed(s: &mut App, path: &str) {
     ask_drawing(s, path);
 }
 
-/// The parts of call file text T a net with calls CALLS uses: those calls and the types they name, and the
+/// The parts of call file text T a net with calls CALLS uses (owner m130): those calls and the types they name, and the
 /// types those name, each with the comment lines right above it, in the file's order.
 pub fn used_part(t: &str, calls: &[String]) -> String {
     // the file's items: each from its comment lines to the line before the next item's comments

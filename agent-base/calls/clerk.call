@@ -1,7 +1,7 @@
-// The clerk's calls: read by the nets in nets/clerk.net.
+// The clerk's calls (vault designs/policy-language-draft-2026-11-08.md §15–§16): read by the nets in nets/clerk.net.
 // Question (id, from, text, thread), Said (a mail: id, from, to, text, thread, question) and Quoted (source, text) are
 // the system's types. The facts coordd knows (what an agent sent, what it waits on, the conversation a message is
-// written in) come as inputs; the model judges only what no fact says.
+// written in) come as inputs; the model judges only what no fact says (owner m164–m166, 9 Nov).
 
 type Piece {
   text: String

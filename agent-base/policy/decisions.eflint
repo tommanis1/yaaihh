@@ -1,6 +1,7 @@
 // The system's default preferences (scope global; a project's policy/*.eflint and policy/agents/NAME.eflint rank
-// above). Earlier ranks first: the family, then the price.
-Prefer for model-for When call.task == "recognise-question":
-  family(option, "codex") > family(option, "claude")
+// above).
+// Owner 10 Nov: the clerk runs on Codex only, never a Claude model, for every call and every task.
+Only for model-for:
+  family(option, "codex")
 Prefer for model-for:
   minimise price(option)

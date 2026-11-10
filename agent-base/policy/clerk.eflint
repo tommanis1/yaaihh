@@ -1,9 +1,9 @@
-// The clerk's decisions: asked by nets/clerk.net.
+// The clerk's decisions (vault designs/policy-language-draft-2026-11-08.md §15–§16): asked by nets/clerk.net.
 
 // How an agent's turn end is taken when it waits on nothing coordd knows of: accepted (it waits for its wake),
 // nudged ("do that next") or, past the cap, told to the owner. The net gives the clerk's reading of the turn (state:
 // Done, Next, Blocked, Waiting), the nudges in a row so far (nudged) and the length of what it wrote (said). Each
-// case is said outright.
+// case is said outright (9 Nov: the cap escalated only because "nudge > escalate" ranked the unnamed accept last).
 Decision end-of-turn
   Options accept | nudge | escalate
 // Only a turn that names its own next step and stops (Next) is nudged or told; any other is accepted.

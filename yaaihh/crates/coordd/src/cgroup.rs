@@ -47,7 +47,7 @@ pub fn setup() -> std::io::Result<()> {
 /// ROOT) may use together; the rest stays for coordd, yaaihh's link and the system.
 const WORKLOAD_SHARE: f64 = 0.9;
 
-/// Cap ROOT at [`WORKLOAD_SHARE`] of the memory coordd's machine has: when the workload together runs
+/// Cap ROOT at [`WORKLOAD_SHARE`] of the memory coordd's machine has (owner 8 Nov): when the workload together runs
 /// the machine short, the kernel's OOM killer acts inside ROOT, on its biggest process (an agent or a job), not
 /// machine-wide. In a box coordd runs outside ROOT; on the host it runs in ROOT's leaf `coordd` (host-coordd), where
 /// it is the process killed only when it is itself the one that took the memory, as it is machine-wide. The

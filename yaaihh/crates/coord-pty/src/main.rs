@@ -1,5 +1,5 @@
-//! coord-pty: the holder of one agent's terminal
-//! .
+//! coord-pty: the holder of one agent's terminal (vault designs/yaaihh-2026-11-07.md, "Terminals: a holder per
+//! agent").
 //!
 //!   coord-pty NAME [--rows R] [--cols C] [--confirm TEXT] -- COMMAND...
 //!
@@ -18,6 +18,15 @@
 //! With `--confirm TEXT` the holder presses Enter once, the first time TEXT is on the screen, unless someone typed
 //! first: the start dialog a program shows every time (Claude Code's development-channel warning). It is the
 //! holder's because the holder outlives whoever started the program (roster's poller died with its caller, 9 Nov).
+//!
+//! Any other dialog on the screen (a numbered choice with its pointer, `❯ 1.`) is told to coordd (`Request::Popup`):
+//! its title, the line above its options, and the screen's last lines. The holder never answers it; coordd tells the
+//! owner the first time a title appears, so a new popup of a new Claude Code version is noticed (owner, 10 Nov).
+//!
+//! Whether a turn runs is on the screen too: Claude Code's footer reads "esc to interrupt" exactly while one does.
+//! The holder looks every [`BUSY_EVERY`] and tells coordd each change (`Request::Busy`), an end only once it has held
+//! for [`IDLE_AFTER`]: a Claude Code agent's working or idle is what its screen shows (owner, 10 Nov; a transcript
+//! can end on a prompt Claude Code never ran a turn for, a stopped background task's notice).
 
 use coord_types::pty::{self, Info};
 use coord_types::{Reply, Request};
@@ -35,6 +44,14 @@ use std::time::Duration;
 
 /// How long after the `--confirm` text appears its Enter is pressed.
 const CONFIRM_AFTER: Duration = Duration::from_millis(500);
+
+/// How often the screen's footer is looked at for a running turn (`Request::Busy`).
+const BUSY_EVERY: Duration = Duration::from_millis(250);
+/// How long the footer must show no running turn before the turn counts as ended.
+const IDLE_AFTER: Duration = Duration::from_millis(1500);
+
+/// How often the screen is looked at for a dialog (`Request::Popup`).
+const POPUP_EVERY: Duration = Duration::from_secs(1);
 
 /// How long a holder whose program ended still shows the last screen to clients that attach.
 const HOLD: Duration = Duration::from_secs(10);
@@ -169,6 +186,8 @@ fn hold(name: String, coord: String, rows: u16, cols: u16, confirm: Option<Strin
         exited: None,
         confirm,
         confirming: false,
+        popup_at: std::time::Instant::now(),
+        popup: None,
     }));
     {
         let (term, input) = (term.clone(), input.clone());
@@ -182,6 +201,10 @@ fn hold(name: String, coord: String, rows: u16, cols: u16, confirm: Option<Strin
     {
         let (term, input) = (term.clone(), input.clone());
         std::thread::spawn(move || read_output(&term, &input, output));
+    }
+    {
+        let term = term.clone();
+        std::thread::spawn(move || watch_busy(&term));
     }
     let status = wait(child);
     std::thread::sleep(Duration::from_millis(200)); // the program's last output, still being read
@@ -230,6 +253,9 @@ struct Term {
     confirm: Option<String>,
     /// The `--confirm` text was seen and its Enter is on its way.
     confirming: bool,
+    /// When the screen was last looked at for a dialog, and the title of the last one told.
+    popup_at: std::time::Instant,
+    popup: Option<String>,
 }
 
 /// A terminal query the holder answers.
@@ -516,13 +542,25 @@ fn read_output(term: &Arc<Mutex<Term>>, input: &Arc<File>, mut master: File) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => return, // EIO: the program's side is closed
         };
-        let (answers, seen) = {
+        let (answers, seen, popup) = {
             let mut t = term.lock().unwrap();
             let a = t.output(&buf[..n]);
             let seen = !t.confirming && t.confirm.as_ref().is_some_and(|c| t.parser.screen().contents().contains(c.as_str()));
             t.confirming |= seen;
-            (a, seen)
+            let mut popup = None;
+            if t.popup_at.elapsed() >= POPUP_EVERY {
+                t.popup_at = std::time::Instant::now();
+                let found = dialog(&t.parser.screen().contents()).filter(|(title, _)| t.confirm.as_ref().is_none_or(|c| !title.contains(c.as_str())));
+                if found.as_ref().map(|f| &f.0) != t.popup.as_ref() {
+                    t.popup = found.as_ref().map(|f| f.0.clone());
+                    popup = found.map(|(title, screen)| (t.name.clone(), title, screen));
+                }
+            }
+            (a, seen, popup)
         };
+        if let Some((name, title, screen)) = popup {
+            std::thread::spawn(move || tell_popup(name, title, screen));
+        }
         if seen {
             // Enter once the dialog has drawn and reads its keys, unless someone typed meanwhile (KEYS clears it)
             let (term, input) = (term.clone(), input.clone());
@@ -633,6 +671,71 @@ fn spawn(command: &[String], rows: u16, cols: u16) -> Result<(File, i32), String
             }
         }
     }
+}
+
+/// The dialog on screen TEXT, if one is: a numbered option with Claude Code's pointer (`❯ 1.`). Its title (the nearest
+/// line above its options, its frame taken off) and the screen's last 20 lines.
+fn dialog(text: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let first = lines.iter().position(|l| {
+        let l = l.trim_start_matches(['│', ' ']);
+        l.starts_with("❯ 1.") || l.starts_with("› 1.")
+    })?;
+    let clean = |l: &str| l.trim().trim_matches(['│', '╭', '╮', '╰', '╯', '─', ' ']).trim().to_string();
+    let title = lines[..first].iter().rev().map(|l| clean(l)).find(|l| !l.is_empty()).unwrap_or_default();
+    let screen = lines[lines.len().saturating_sub(20)..].iter().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n");
+    Some((title, screen.trim().to_string()))
+}
+
+/// Whether the screen's footer (its last three lines with text) shows a turn running: Claude Code's "esc to interrupt".
+fn busy(text: &str) -> bool {
+    text.lines().rev().filter(|l| !l.trim().is_empty()).take(3).any(|l| l.contains("esc to interrupt"))
+}
+
+/// Look at the footer every [`BUSY_EVERY`] and tell coordd each change of whether a turn runs; idle only once it held
+/// for [`IDLE_AFTER`].
+fn watch_busy(term: &Mutex<Term>) {
+    let (mut told, mut idle_since): (Option<bool>, Option<std::time::Instant>) = (None, None);
+    // told again every minute unchanged, so a coordd that restarted (and lost it) learns it soon
+    let mut told_at = std::time::Instant::now();
+    loop {
+        std::thread::sleep(BUSY_EVERY);
+        let (name, now) = {
+            let t = term.lock().unwrap();
+            if t.exited.is_some() {
+                return;
+            }
+            (t.name.clone(), busy(&t.parser.screen().contents()))
+        };
+        let state = if now {
+            idle_since = None;
+            true
+        } else {
+            let since = *idle_since.get_or_insert_with(std::time::Instant::now);
+            if told == Some(true) && since.elapsed() < IDLE_AFTER { true } else { false }
+        };
+        if (told != Some(state) || told_at.elapsed() >= Duration::from_secs(60)) && tell(&Request::Busy { name, busy: state }) {
+            told = Some(state);
+            told_at = std::time::Instant::now();
+        }
+    }
+}
+
+/// Send REQ to coordd and wait for its answer; whether it answered.
+fn tell(req: &Request) -> bool {
+    let path = std::env::var("COORDD_SOCK").unwrap_or_else(|_| coord_types::SOCKET.into());
+    let Ok(mut s) = UnixStream::connect(&path) else { return false };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+    if writeln!(s, "{}", serde_json::to_string(req).unwrap_or_default()).is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    BufReader::new(s).read_line(&mut line).is_ok_and(|n| n > 0)
+}
+
+/// Tell coordd of a dialog on NAME's screen (`Request::Popup`); nothing more when coordd does not answer.
+fn tell_popup(name: String, title: String, screen: String) {
+    tell(&Request::Popup { name, title, screen });
 }
 
 /// Ask coordd to put this process in the cgroup `pty`.

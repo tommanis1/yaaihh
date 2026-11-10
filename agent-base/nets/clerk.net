@@ -1,7 +1,7 @@
-// The clerk: the owner's messages and the agents' turn
+// The clerk (vault designs/policy-language-draft-2026-11-08.md §15–§16): the owner's messages and the agents' turn
 // ends. Its calls are in calls/clerk.call, its decisions in policy/clerk.eflint; the bindings in nets/bindings.
 // What coordd knows is a fact in the event (an owner message's conversation and open questions; a turn's sent mail
-// and waits); the model judges only the rest.
+// and waits); the model judges only the rest (owner m164–m166, 9 Nov).
 
 net owner_message on owner_message(m)
 session clerk: per owner
@@ -49,7 +49,14 @@ session clerk: per agent
         let r = turn(t.agent, t.text, t.sent, t.waits, t.open) in clerk
         for p in r.pieces {                                   // filing (§15.3): each piece into its thread
             match p.label {
-                Question => ask(t.agent, p.text, p.thread)    // asked in plain text: its qN (a follow-up in its thread)
+                Question => match p.thread {
+                    q? => ask(t.agent, p.text, q)             // a follow-up of one of its questions, in its thread
+                    none => match t.asked {
+                        q? => post(t.agent, p.text, q)        // it asked with coord ask in this turn: the tool is the
+                                                              // record, this is its restatement (owner m219: q67)
+                        none => ask(t.agent, p.text, none)    // asked in plain text only: a question of its own
+                    }
+                }
                 Status => {}
                 _ => match p.thread {                         // an answer or report about one of its questions
                     q? => post(t.agent, p.text, q)

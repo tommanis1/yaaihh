@@ -1,0 +1,25 @@
+// agent_watch (vault designs/supervision-nets-2026-11-10.md, owner m359 answers 4–5): on a clock (nets/bindings:
+// every 30m), each running agent's problem, if any: mail held too long, idle while it has items, a turn gone quiet
+// (no tool running, none begun), a tool running far too long. What counts is policy (policy/watch.eflint, the
+// thresholds there); who is told is policy too: the agent first, its lead if the problem is still there at a later
+// tick, the owner only past that, each once a day per agent and problem. The net keeps no state: who was told is
+// read back from its own runs today (the mark in each text). `tell` is dry until the owner switches it on.
+
+net agent_watch on tick(t)
+{
+    for a in agents() {
+        let problem = decide watch-agent(state: a.state, held: a.held_min, idle: a.idle_min, items: a.items, quiet: a.quiet_min, tool: a.tool_min)
+        match problem {
+          fine => {}
+          _ => {
+            let mark = "[watch {{ problem }} {{ a.name }}]"
+            match decide watch-tell(problem: problem, agent_told: marked_today("{{ mark }} to agent"), lead_told: marked_today("{{ mark }} to lead"), owner_told: marked_today("{{ mark }} to owner")) {
+                agent => tell(a.name, "{{ mark }} to agent: {{ problem }} (held {{ a.held_min }} min, idle {{ a.idle_min }} min with {{ a.items }} items, quiet {{ a.quiet_min }} min, a tool running {{ a.tool_min }} min). If you are stuck, say so to {{ a.parent }}.")
+                lead => tell(a.parent, "{{ mark }} to lead: {{ a.name }}: {{ problem }} (state {{ a.state }}; held {{ a.held_min }} min, idle {{ a.idle_min }} min with {{ a.items }} items, quiet {{ a.quiet_min }} min, a tool running {{ a.tool_min }} min).")
+                owner => tell(owner, "{{ mark }} to owner: {{ a.name }} (lead {{ a.parent }}): {{ problem }}, still after its lead was told (state {{ a.state }}; held {{ a.held_min }} min, idle {{ a.idle_min }} min, quiet {{ a.quiet_min }} min, a tool running {{ a.tool_min }} min).")
+                done => {}
+            }
+          }
+        }
+    }
+}

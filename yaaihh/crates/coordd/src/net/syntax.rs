@@ -1,4 +1,4 @@
-//! The net language's surface: events, nets and bindings.
+//! The net language's surface (vault designs/policy-language-draft-2026-11-08.md §16): events, nets and bindings.
 //!
 //! ```text
 //! event reminder { agent: String, text: String }           // an event a net may raise (system events are built in)
@@ -19,10 +19,13 @@
 //!
 //! Statements: `let x = e`, `path := e` (replace), `path += e` (add to a list), `if c { } else { }`, `match e { arm
 //! => stmt }`, `for x in e [where c] { }` (one by one) and `par for` (at once), and the effects `deliver`, `reject`,
-//! `nudge`, `ask`, `tell`, `accept`, `fault NAME(...)`, `raise NAME(...)`. A call is `f(args) fresh` or `f(args) in
+//! `nudge`, `ask`, `tell`, `accept`, `fault NAME(...)`, `raise NAME(...)` and `raise NAME(...) after D` (a timer: the
+//! event comes D later, `30s`, `20m`, `2h`, `1d`). A call is `f(args) fresh` or `f(args) in
 //! S`, optionally `with field: value, ...`; `decide d(name: value, ...)` is a policy decision; `f(args)` alone is a
 //! built-in (`questions`, `nudged_in_row`, `joined`, `len`, and the wakes `answer`, `check`, `mail`). Strings take `{{ e }}`
-//! holes. Comments run from `//` to the line's end. Bindings are lines `on EVENT [where agent in {a, b}] use NET`.
+//! holes. Comments run from `//` to the line's end. Bindings are lines `on EVENT [where agent in {a, b}] use NET`, and
+//! clocks `every D [where agent in {a, b}] use NET`: NET, on the system event `tick`, runs every D (once per agent
+//! listed, else once about no agent).
 
 use std::fmt;
 
@@ -66,19 +69,49 @@ pub struct Net {
 pub enum Per {
     Agent,
     Owner,
+    /// One context a day (UTC): a scheduler's view of the day (supervision-nets §8).
+    Day,
+}
+
+impl Per {
+    pub fn word(self) -> &'static str {
+        match self {
+            Per::Agent => "agent",
+            Per::Owner => "owner",
+            Per::Day => "day",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
+/// A context (`context NAME: per KEY [for N calls | for D]`; `session NAME: per KEY` is the same without a lifetime):
+/// one harness session per KEY, begun again after CALLS calls or TTL seconds.
 pub struct SessionDecl {
     pub name: String,
     pub per: Per,
+    pub calls: Option<u64>,
+    pub ttl: Option<u64>,
     pub at: At,
 }
 
+/// How a call uses context (supervision-nets §8a): `fresh` (facts only), `digest` (fresh, with a digest of the net's
+/// runs today written by code), `with c` (a fork of context c, left as it was), `in c` (c, advanced).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Place {
     Fresh,
+    Digest,
     In(String),
+    With(String),
+}
+
+impl Place {
+    /// The context it names, if any.
+    pub fn context(&self) -> Option<&String> {
+        match self {
+            Place::In(s) | Place::With(s) => Some(s),
+            Place::Fresh | Place::Digest => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,8 +193,14 @@ pub enum Effect {
     Post,
     Tell,
     Accept,
+    /// The runner's job effects (supervision-nets §Shape): run JOB again; drop a cache ENTRY and run it again; hold
+    /// JOB until the owner lets it go. coordd does not take them yet: they are logged (dry).
+    Requeue,
+    Evict,
+    Hold,
     Fault(String),
-    Raise(String),
+    /// `raise NAME(args)`, or with `after D` (seconds) a timer: NAME is raised D later.
+    Raise(String, Option<u64>),
 }
 
 impl Effect {
@@ -174,8 +213,12 @@ impl Effect {
             Effect::Post => "post".into(),
             Effect::Tell => "tell".into(),
             Effect::Accept => "accept".into(),
+            Effect::Requeue => "requeue".into(),
+            Effect::Evict => "evict".into(),
+            Effect::Hold => "hold".into(),
             Effect::Fault(n) => format!("fault {n}"),
-            Effect::Raise(n) => format!("raise {n}"),
+            Effect::Raise(n, None) => format!("raise {n}"),
+            Effect::Raise(n, Some(d)) => format!("raise {n} after {}", show_duration(*d)),
         }
     }
 }
@@ -256,13 +299,25 @@ impl Stmt {
     }
 }
 
-/// A binding: EVENT's net, for the agents listed (all when none).
+/// A binding: EVENT's net, for the agents listed (all when none). A clock (`every D use NET`) has EVERY, D in
+/// seconds, and the event `tick`.
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub event: String,
     pub agents: Vec<String>,
     pub net: String,
+    pub every: Option<u64>,
     pub at: At,
+}
+
+/// D seconds as written: the largest unit that divides it (`90s`, `20m`, `2h`, `1d`).
+pub fn show_duration(d: u64) -> String {
+    match d {
+        d if d > 0 && d % 86400 == 0 => format!("{}d", d / 86400),
+        d if d > 0 && d % 3600 == 0 => format!("{}h", d / 3600),
+        d if d > 0 && d % 60 == 0 => format!("{}m", d / 60),
+        d => format!("{d}s"),
+    }
 }
 
 // ---- lexer ---------------------------------------------------------------------------------------------------------
@@ -471,18 +526,29 @@ impl<'a> P<'a> {
         let var = self.ident()?;
         self.sym(")")?;
         let mut sessions = Vec::new();
-        while self.is_word("session") {
+        while self.is_word("session") || self.is_word("context") {
             let at = self.at();
-            self.i += 1;
+            let context = self.ident()? == "context";
             let name = self.ident()?;
             self.sym(":")?;
             self.word("per")?;
             let per = match self.ident()?.as_str() {
                 "agent" => Per::Agent,
                 "owner" => Per::Owner,
-                x => return self.err(format!("`session NAME: per agent` or `per owner`, not `per {x}`")),
+                "day" => Per::Day,
+                x => return self.err(format!("`per agent`, `per owner` or `per day`, not `per {x}`")),
             };
-            sessions.push(SessionDecl { name, per, at });
+            let (mut calls, mut ttl) = (None, None);
+            if context && self.eat_word("for") {
+                if matches!(self.peek_at(1), Some(Tok::Ident(w)) if w == "calls") {
+                    let Some(Tok::Int(n)) = self.peek().cloned() else { return self.err("`for N calls`") };
+                    self.i += 2;
+                    calls = Some(u64::try_from(n).ok().filter(|n| *n > 0).ok_or("a context lasts at least one call")?);
+                } else {
+                    ttl = Some(self.duration()?);
+                }
+            }
+            sessions.push(SessionDecl { name, per, calls, ttl, at });
         }
         let body = self.block()?;
         Ok(Net { name, event, var, sessions, body, at })
@@ -555,7 +621,11 @@ impl<'a> P<'a> {
             let kw = self.ident()?;
             let name = self.ident()?;
             let args = self.args()?;
-            let effect = if kw == "fault" { Effect::Fault(name) } else { Effect::Raise(name) };
+            let effect = if kw == "fault" {
+                Effect::Fault(name)
+            } else {
+                Effect::Raise(name, if self.eat_word("after") { Some(self.duration()?) } else { None })
+            };
             return Ok(Stmt::Effect { effect, args, at });
         }
         if let Some(Tok::Ident(w)) = self.peek() {
@@ -567,6 +637,9 @@ impl<'a> P<'a> {
                     "ask" => Effect::Ask,
                     "post" => Effect::Post,
                     "tell" => Effect::Tell,
+                    "requeue" => Effect::Requeue,
+                    "evict" => Effect::Evict,
+                    "hold" => Effect::Hold,
                     _ => Effect::Accept,
                 };
                 self.i += 1;
@@ -611,6 +684,23 @@ impl<'a> P<'a> {
             return Ok(Pat::Variant(n, binds));
         }
         Ok(Pat::Option(n))
+    }
+
+    /// A duration, `N` and a unit `s`, `m`, `h` or `d`, in seconds; more than none.
+    fn duration(&mut self) -> Result<u64, String> {
+        let Some(Tok::Int(n)) = self.peek().cloned() else { return self.err(format!("a duration (`20m`) expected, found {}", self.found())) };
+        self.i += 1;
+        let unit = match self.ident()?.as_str() {
+            "s" => 1,
+            "m" => 60,
+            "h" => 3600,
+            "d" => 86400,
+            u => return self.err(format!("`{u}` is not a unit of time (s, m, h, d)")),
+        };
+        match u64::try_from(n) {
+            Ok(n) if n > 0 => Ok(n * unit),
+            _ => self.err("a duration is more than none"),
+        }
     }
 
     fn args(&mut self) -> Result<Vec<Arg>, String> {
@@ -718,9 +808,15 @@ impl<'a> P<'a> {
                     let args = self.args()?;
                     let place = if self.eat_word("fresh") {
                         Some(Place::Fresh)
+                    } else if self.eat_word("digest") {
+                        Some(Place::Digest)
                     } else if self.is_word("in") && matches!(self.peek_at(1), Some(Tok::Ident(_))) {
                         self.i += 1;
                         Some(Place::In(self.ident()?))
+                    } else if self.is_word("with") && matches!(self.peek_at(1), Some(Tok::Ident(_))) && !matches!(self.peek_at(2), Some(Tok::Sym(":"))) {
+                        // `with c` (a context) — `with field: value` is the call's fields, after the place
+                        self.i += 1;
+                        Some(Place::With(self.ident()?))
                     } else {
                         None
                     };
@@ -776,7 +872,7 @@ pub fn parse(file: &str, text: &str) -> Result<File, String> {
     P { file, toks, i: 0 }.file()
 }
 
-/// Parse a bindings file: `on EVENT [where agent in {a, b}] use NET`, one per line.
+/// Parse a bindings file: `on EVENT [where agent in {a, b}] use NET` or `every D [where ...] use NET`, one per line.
 pub fn bindings(file: &str, text: &str) -> Result<Vec<Binding>, String> {
     let mut out = Vec::new();
     for (n, raw) in text.lines().enumerate() {
@@ -787,8 +883,12 @@ pub fn bindings(file: &str, text: &str) -> Result<Vec<Binding>, String> {
         let toks = lex(file, line, n + 1)?;
         let mut p = P { file, toks, i: 0 };
         let at = p.at();
-        p.word("on")?;
-        let event = p.ident()?;
+        let (event, every) = if p.eat_word("every") {
+            ("tick".to_string(), Some(p.duration()?))
+        } else {
+            p.word("on")?;
+            (p.ident()?, None)
+        };
         let mut agents = Vec::new();
         if p.eat_word("where") {
             p.word("agent")?;
@@ -807,7 +907,7 @@ pub fn bindings(file: &str, text: &str) -> Result<Vec<Binding>, String> {
         if p.peek().is_some() {
             return p.err(format!("more after `use {net}`"));
         }
-        out.push(Binding { event, agents, net, at });
+        out.push(Binding { event, agents, net, every, at });
     }
     Ok(out)
 }

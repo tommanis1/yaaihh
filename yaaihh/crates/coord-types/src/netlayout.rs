@@ -1,4 +1,4 @@
-//! The geometry of a drawn net: where each step, arm label and line of a [`NetGraph`] goes, in
+//! The geometry of a drawn net (owner m127, m130): where each step, arm label and line of a [`NetGraph`] goes, in
 //! points, so the Clerk page draws it with absolute positions and a test can walk the lines. Text sizes come from the
 //! caller ([`Measure`]: the UI's text engine, a test's estimate).
 //!

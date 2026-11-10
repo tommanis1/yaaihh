@@ -1,9 +1,9 @@
-//! A chat as the owner reads it: what the agent says, prompts, mail and questions stay in view;
+//! A chat as the owner reads it (owner 7 Nov night): what the agent says, prompts, mail and questions stay in view;
 //! each run of tool calls between them is one line of work. While it is the agent's latest and the agent works, the
 //! line turns a spinner and shows the call it is on (its tool and the first characters of what it runs); otherwise it
 //! sums the run up (how many calls, of which tools, over what time). A click opens the run as one line per call; a
 //! click on a call shows the call and its result (each a few lines, the rest on another click, chat.rs `entry`); an
-//! edit's line counts the lines it added and removed, and its open call shows the diff.
+//! edit's line counts the lines it added and removed, and its open call shows the diff (owner 8 Nov).
 //!
 //! A call's result is the next result in the run not yet taken: Claude Code writes parallel calls first and their
 //! results after, in the same order.

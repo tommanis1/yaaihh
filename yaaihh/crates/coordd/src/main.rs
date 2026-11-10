@@ -1,4 +1,4 @@
-//! coordd: the one live watcher of a box. It owns the box's agents (process,
+//! coordd: the one live watcher of a box (vault designs/yaaihh-2026-11-07.md §7). It owns the box's agents (process,
 //! turn, waits, items), their mail, the project's items and rights, and the project's view sources, and tells every
 //! change as a numbered event (`coord watch`). Started with the box, as root (cgroups); its socket is
 //! /run/coordd.sock, and a caller is known by its process's cgroup, never by a name it gives. A project without a box
@@ -10,6 +10,7 @@
 
 mod cgroup;
 mod core;
+mod follow;
 mod jsonl;
 mod net;
 mod policy;
@@ -17,9 +18,10 @@ mod project;
 mod transcript;
 
 use crate::cgroup::Caller;
-use crate::core::{err, ok, Core, HookNext, TurnEndMail, Who};
+use crate::core::{err, ok, Core, HookNext, Job, Who};
 use crate::transcript::{ByModel, Ended, TranscriptUsage};
 use coord_types::{Event, ModelUsage, Reply, Request, SOCKET};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
@@ -40,6 +42,7 @@ async fn main() {
         std::process::exit(1);
     }
     let mut core = Core::load(&coord, &base);
+    jsonl::start_writer();
     match project::Project::load(&coord) {
         Ok(p) => core.project = p,
         Err(e) => eprintln!("coordd: {e}"),
@@ -51,42 +54,30 @@ async fn main() {
         .as_ref()
         .map(|p| p.views.iter().filter_map(|v| v.source.clone().map(|s| (v.id.clone(), p.dir.clone(), s))).collect())
         .unwrap_or_default();
+    let events = core.project.as_ref().and_then(|p| Some((p.dir.clone(), p.project.events.clone()?)));
     let shared: Shared = Arc::new(Mutex::new(core));
     for (name, pid) in recovered {
         watch_exit(shared.clone(), name, pid);
     }
-    {
-        let s = shared.clone();
-        tokio::spawn(async move {
-            let mut core = s.lock().await;
-            for name in core.idle_with_mail() {
-                core.deliver_held(&name).await;
-            }
-        });
-    }
+    shared.lock().await.jobs = Some(senders(shared.clone()));
+    follow(shared.clone());
     count_usage(shared.clone());
-    // the question recogniser is built but not started: the owner wants to talk it through first
+    read_models(shared.clone());
+    // the question recogniser is built but not started: the owner wants to talk it through first (8 Nov, m93)
     let _ = recognise;
     start_nets(shared.clone()).await;
     for (id, dir, cmd) in views {
-        let s = shared.clone();
-        // a source that ends is started again, after a pause doubling from 5 s to 5 min while it keeps failing at
-        // once: a view whose script died (KeyError after a repository's rename, 8 Nov) stayed dead until coordd's
-        // next restart; its last error stays shown meanwhile
-        tokio::spawn(async move {
-            let rt = tokio::runtime::Handle::current();
-            let mut pause = std::time::Duration::from_secs(5);
-            loop {
-                let began = std::time::Instant::now();
-                let (s2, id2, rt2) = (s.clone(), id.clone(), rt.clone());
-                project::run_source(dir.clone(), cmd.clone(), move |data, error| {
-                    let (s, id) = (s2.clone(), id2.clone());
-                    rt2.spawn(async move { s.lock().await.set_view(&id, data, error) });
-                })
-                .await;
-                pause = if began.elapsed() > std::time::Duration::from_secs(60) { std::time::Duration::from_secs(5) } else { (pause * 2).min(std::time::Duration::from_secs(300)) };
-                tokio::time::sleep(pause).await;
-            }
+        let (s, rt) = (shared.clone(), tokio::runtime::Handle::current());
+        keep_source(dir, cmd, move |data, error| {
+            let (s, id) = (s.clone(), id.clone());
+            rt.spawn(async move { s.lock().await.set_view(&id, data, error) });
+        });
+    }
+    if let Some((dir, cmd)) = events {
+        let (s, rt) = (shared.clone(), tokio::runtime::Handle::current());
+        keep_source(dir, cmd, move |data, error| {
+            let s = s.clone();
+            rt.spawn(project_event(s, data, error));
         });
     }
     let _ = std::fs::remove_file(&sock);
@@ -100,15 +91,72 @@ async fn main() {
     }
 }
 
+/// Run a project source (`project::run_source`) for as long as coordd runs: one that ends is started again, after a
+/// pause doubling from 5 s to 5 min while it keeps failing at once. A view whose script died (KeyError after a
+/// repository's rename, 8 Nov) stayed dead until coordd's next restart; its last error stays shown meanwhile.
+fn keep_source(dir: String, cmd: String, send: impl Fn(Option<Value>, Option<String>) + Clone + Send + Sync + 'static) {
+    tokio::spawn(async move {
+        let mut pause = std::time::Duration::from_secs(5);
+        loop {
+            let began = std::time::Instant::now();
+            project::run_source(dir.clone(), cmd.clone(), send.clone()).await;
+            pause = if began.elapsed() > std::time::Duration::from_secs(60) { std::time::Duration::from_secs(5) } else { (pause * 2).min(std::time::Duration::from_secs(300)) };
+            tokio::time::sleep(pause).await;
+        }
+    });
+}
+
+/// A line of the project's event source (`Core::project_event`). The runner seen at start, going up or down, or a check or job
+/// ending, changes what agents wait on: the project's waits are read again, off the lock, and restated
+/// (`Core::refresh_waits`), so no agent stays "waiting on" a check no living runner holds.
+async fn project_event(shared: Shared, data: Option<Value>, error: Option<String>) {
+    let Some(v) = data else { return eprintln!("coordd: project events: {}", error.unwrap_or_default()) };
+    let refresh = matches!(v.get("event").and_then(Value::as_str), Some("runner_seen" | "runner_up" | "runner_down" | "check_end" | "job_end"));
+    shared.lock().await.project_event(v).await;
+    if !refresh {
+        return;
+    }
+    let project = shared.lock().await.project.clone();
+    if let Some(domain) = match project {
+        Some(p) => p.read_waits().await,
+        None => None,
+    } {
+        shared.lock().await.refresh_waits(domain).await;
+    }
+}
+
 /// Count each agent's tokens from its sessions' transcripts (transcript.rs), reading on every few seconds, off the lock
 /// (the first round reads every transcript whole), and keep the requests read (`Core::add_sent`). An agent's view changes when its counts do, at most once a round, so
 /// a busy session does not flood the stream.
+/// The proxy's models and their families for the norms (`Core::set_models`), read off the lock once a minute.
+fn read_models(shared: Shared) {
+    tokio::spawn(async move {
+        loop {
+            let coord = shared.lock().await.coord.clone();
+            let read = tokio::task::spawn_blocking(move || policy::facts::models(&policy::facts::Proxy::of(&coord))).await;
+            if let Ok(Ok(facts)) = read {
+                let families = facts
+                    .into_iter()
+                    .filter(|(f, _)| f == "family")
+                    .filter_map(|(_, a)| Some((a.first()?.as_str()?.to_string(), a.get(1)?.as_str()?.to_string())))
+                    .collect();
+                shared.lock().await.set_models(families);
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    });
+}
+
 fn count_usage(shared: Shared) {
     tokio::spawn(async move {
         let mut files: HashMap<String, TranscriptUsage> = HashMap::new();
         loop {
-            let sessions = shared.lock().await.sessions();
+            let (sessions, running) = {
+                let core = shared.lock().await;
+                (core.sessions(), core.running_names())
+            };
             let round = tokio::task::spawn_blocking(move || {
+                let cgroups: Vec<(String, (Option<u64>, Option<f64>))> = running.into_iter().map(|n| { let u = cgroup::usage(&n); (n, u) }).collect();
                 let counted: Vec<(String, Vec<ModelUsage>, Option<String>, Vec<Ended>)> = sessions
                     .into_iter()
                     .map(|(name, paths)| {
@@ -132,11 +180,14 @@ fn count_usage(shared: Shared) {
                         (name, usage, last, ended)
                     })
                     .collect();
-                (files, counted)
+                (files, counted, cgroups)
             });
-            let Ok((f, counted)) = round.await else { return };
+            let Ok((f, counted, cgroups)) = round.await else { return };
             files = f;
             let mut core = shared.lock().await;
+            for (name, (mem, cpu)) in cgroups {
+                core.set_cgroup(&name, mem, cpu);
+            }
             for (name, usage, last, ended) in counted {
                 core.set_usage(&name, usage, last);
                 core.add_sent(&name, ended);
@@ -288,31 +339,6 @@ async fn handle(shared: &Shared, caller: &Caller, pid: i32, req: Request) -> Rep
         let next = shared.lock().await.hook(name, event, input);
         return match next {
             HookNext::Done(out) => ok(out),
-            HookNext::TurnEnd | HookNext::TurnFailed => {
-                // the turn as it ended, before held mail starts the next one; its final message from the hook's input
-                let value = shared.lock().await.turn_end_value(name, input.get("last_assistant_message").and_then(|v| v.as_str()));
-                // the hook answers at once (its timeout is short); the waits and the idle notice follow on their own
-                let continue_ = matches!(next, HookNext::TurnEnd);
-                let ended = shared.lock().await.turn_end_mail(name, continue_).await;
-                match ended {
-                    TurnEndMail::Continue(text) => {
-                        if let Some(v) = value {
-                            shared.lock().await.turn_end_to_nets(name, v, true, Vec::new());
-                        }
-                        ok(text)
-                    }
-                    TurnEndMail::Delivered => {
-                        if let Some(v) = value {
-                            shared.lock().await.turn_end_to_nets(name, v, true, Vec::new());
-                        }
-                        ok(String::new())
-                    }
-                    TurnEndMail::Ended(turn, bg) => {
-                        tokio::spawn(turn_waits(shared.clone(), name.clone(), turn, bg, value));
-                        ok(String::new())
-                    }
-                }
-            }
             HookNext::CodexStop => {
                 let (s, n) = (shared.clone(), name.clone());
                 tokio::spawn(async move {
@@ -328,15 +354,9 @@ async fn handle(shared: &Shared, caller: &Caller, pid: i32, req: Request) -> Rep
                     let mut rpc = rpc;
                     let _ = rpc.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
                     // the Codex turn has ended: its transcript holds the whole turn
-                    let value = s.lock().await.turn_end_value(&n, None);
-                    let ended = s.lock().await.turn_end_mail(&n, false).await;
-                    match ended {
-                        TurnEndMail::Ended(turn, bg) => turn_waits(s, n, turn, bg, value).await,
-                        _ => {
-                            if let Some(v) = value {
-                                s.lock().await.turn_end_to_nets(&n, v, true, Vec::new());
-                            }
-                        }
+                    let ended = s.lock().await.end_turn(&n);
+                    if let Some((turn, bg, snap)) = ended {
+                        turn_waits(s, n, turn, bg, snap).await;
                     }
                 });
                 ok(String::new())
@@ -353,6 +373,22 @@ async fn handle(shared: &Shared, caller: &Caller, pid: i32, req: Request) -> Rep
             Err(e) => err(format!("coordd: cgroup pty: {e}")),
         };
     }
+    if let Request::Busy { name, busy } = &req {
+        // a terminal holder's (or anyone's but a project source's): a Claude Code agent's state is what its screen shows
+        if *caller == Caller::Project {
+            return err("coordd: a project source does not report screens".into());
+        }
+        shared.lock().await.busy(name, *busy);
+        return ok(String::new());
+    }
+    if let Request::Popup { name, title, screen } = &req {
+        // a terminal holder's report (or anyone's but a project source's): told to the owner once per title
+        if *caller == Caller::Project {
+            return err("coordd: a project source does not report dialogs".into());
+        }
+        shared.lock().await.popup(name, title, screen);
+        return ok(String::new());
+    }
     if let Request::Older { id, before } = &req {
         // runs a source (seconds): off the lock
         if who(caller).is_none() {
@@ -367,14 +403,14 @@ async fn handle(shared: &Shared, caller: &Caller, pid: i32, req: Request) -> Rep
     let Some(w) = who(caller) else { return err("coordd: a terminal holder's program or a project source cannot do that".into()) };
     let mut core = shared.lock().await;
     match req {
-        Request::Msg { to, body, esc, as_host, re, quotes } => core.msg(&w, as_host, to, &body, esc, re, quotes).await,
-        Request::Ask { body, on } => core.ask(&w, &body, on),
+        Request::Msg { to, body, esc, soon, as_host, re, quotes } => core.msg(&w, as_host, to, &body, esc, soon, re, quotes).await,
+        Request::Ask { body, on } => core.ask(&w, &body, on).await,
         Request::Drop { id, why } => core.drop_question(&w, &id, why),
         Request::Unfile { id } => core.unfile(&w, &id),
         Request::Release { id } => core.release(&w, &id).await,
         Request::Nets | Request::NetTry { .. } | Request::NetSave { .. } | Request::NetReplay { .. } | Request::NetMark { .. } | Request::NetGraph { .. } => unreachable!("handled before the lock"),
         Request::Unsend { id } => core.unsend(&w, &id),
-        Request::Now { id } => core.send_now(&w, &id).await,
+        Request::Now { id, soon } => core.send_now(&w, &id, soon).await,
         Request::Questions => core.questions(&w),
         Request::Mail { id } => core.mail_list(&w, id.as_deref()),
         Request::State => core.state_lines(),
@@ -382,6 +418,10 @@ async fn handle(shared: &Shared, caller: &Caller, pid: i32, req: Request) -> Rep
         Request::Item { action, arg, why } => core.item(&w, &action, &arg, why),
         Request::Add { name, kind, model } => core.add(&w, &name, &kind, &model),
         Request::Rename { name, to } => core.rename(&w, &name, &to),
+        Request::Role { name, role } => core.set_role(&w, &name, &role),
+        Request::TeamAsk { text } => core.team_ask(&w, &text).await,
+        Request::TeamGrant { name, granted } => core.team_grant(&w, &name, granted).await,
+        Request::Norm { act, args, thread } => core.norm(&act, &args, &thread),
         Request::Session { name, session } => core.session(&w, &name, &session),
         Request::Transcript { name, before, after } => core.transcript_page(&w, &name, before, after),
         Request::Image { name, session, offset, n } => core.transcript_image(&w, &name, &session, offset, n),
@@ -393,7 +433,7 @@ async fn handle(shared: &Shared, caller: &Caller, pid: i32, req: Request) -> Rep
         Request::Attach { .. } | Request::Keys { .. } | Request::Resize { .. } | Request::Detach { .. } => {
             err("coordd: terminals are reached through coordc (attach, or the bridge), not coordd".into())
         }
-        Request::Run { .. } | Request::Hook { .. } | Request::Watch { .. } | Request::Pty | Request::Older { .. } => unreachable!(),
+        Request::Run { .. } | Request::Hook { .. } | Request::Watch { .. } | Request::Pty | Request::Popup { .. } | Request::Busy { .. } | Request::Older { .. } => unreachable!(),
     }
 }
 
@@ -401,7 +441,21 @@ async fn handle(shared: &Shared, caller: &Caller, pid: i32, req: Request) -> Rep
 /// parent is told.
 /// What agent NAME waits on after its turn TURN ended with background work BG: the project's waits too, then its
 /// state, and the turn end VALUE to the nets with all it waits on (so the clerk takes the waits as facts).
-async fn turn_waits(shared: Shared, name: String, turn: u64, bg: Vec<String>, value: Option<serde_json::Value>) {
+/// The `turn_end` event's value from SNAP: the turn's text read off the lock, then the value under it.
+async fn turn_value(shared: &Shared, snap: Option<core::TurnSnap>) -> Option<serde_json::Value> {
+    let snap = snap?;
+    let (snap, text) = tokio::task::spawn_blocking(move || {
+        let text = snap.text();
+        (snap, text)
+    })
+    .await
+    .ok()?;
+    shared.lock().await.turn_end_value(snap, text)
+}
+
+
+async fn turn_waits(shared: Shared, name: String, turn: u64, bg: Vec<String>, snap: Option<core::TurnSnap>) {
+    let value = turn_value(&shared, snap).await;
     let project = shared.lock().await.project.clone();
     let domain = match project {
         Some(p) => p.waits().await.remove(&name).unwrap_or_default(),
@@ -412,6 +466,148 @@ async fn turn_waits(shared: Shared, name: String, turn: u64, bg: Vec<String>, va
         core.turn_end_to_nets(&name, v, false, bg.iter().chain(&domain).cloned().collect());
     }
     core.turn_end_state(&name, turn, bg, domain).await;
+}
+
+/// Follow the Claude Code agents' transcripts (`follow.rs`), every second and at once when a hook or new mail pokes:
+/// the screen (its holder's `Request::Busy`), else the transcript, decides whether a turn runs; the transcript which tool calls run, a turn end found is taken once
+/// (`Core::end_turn`, then `turn_waits`), and held mail is handed to every agent not in a turn (design
+/// coordd-core-2026-11-10 §3–§4). Files are read off the lock; only new bytes after the first read.
+fn follow(shared: Shared) {
+    tokio::spawn(async move {
+        let poke = shared.lock().await.poke.clone();
+        let mut followers: HashMap<String, follow::Follower> = HashMap::new();
+        loop {
+            let paths: Vec<(String, String)> = {
+                let core = shared.lock().await;
+                core.agents.values().filter(|a| a.running() && a.kind == "claude").filter_map(|a| Some((a.name.clone(), a.transcript()?))).collect()
+            };
+            followers.retain(|n, _| paths.iter().any(|(p, _)| p == n));
+            let mut fs = std::mem::take(&mut followers);
+            let Ok((fs, reads)) = tokio::task::spawn_blocking(move || {
+                let mut reads = Vec::new();
+                for (name, path) in paths {
+                    let f = fs.entry(name.clone()).or_insert_with(|| follow::Follower::new(&path));
+                    if f.path != path {
+                        *f = follow::Follower::new(&path); // a new session, or its file found elsewhere
+                    }
+                    let r = f.read();
+                    let tools = r.tools.then(|| f.tools.values().cloned().collect::<Vec<_>>());
+                    reads.push((name, r.seen, f.ended, f.running_since.clone(), tools, f.model.clone()));
+                }
+                (fs, reads)
+            })
+            .await
+            else {
+                return;
+            };
+            followers = fs;
+            let mut ends = Vec::new();
+            {
+                let mut core = shared.lock().await;
+                for (name, seen, ended, since, tools, model) in reads {
+                    if !core.agents.get(&name).is_some_and(|a| a.running()) {
+                        continue;
+                    }
+                    // a pick made in this process only: one from before (a fork's copied history, a window read again
+                    // after coordd restarts) does not undo a model set since
+                    if let Some((m, _)) = model.filter(|(_, at)| at.get(..19) >= core.agents[&name].live.started.get(..19)) {
+                        core.set_model(&name, &m);
+                    }
+                    // the screen says whether a turn runs, when its holder tells it (`Core::busy`); else the transcript.
+                    // A turn the transcript began before this process started does not run in it: its entry (a prompt,
+                    // a background task's notice) was left unanswered when the old process went (10 Nov: MEANING
+                    // shown working for hours on a notice from 06:39, restarted 08:46, after coordd restarts forgot
+                    // its screen)
+                    let a = &core.agents[&name];
+                    let stale = !ended && !since.is_empty() && since.get(..19) < a.live.started.get(..19);
+                    let ended = a.live.screen_busy.map_or(ended || stale, |b| !b);
+                    if !seen.is_empty() {
+                        core.seen(&name, &seen);
+                    }
+                    let working = core.agents[&name].live.state == "working";
+                    if !ended && !working {
+                        core.begin_turn(&name);
+                    } else if ended && working {
+                        if let Some(e) = core.end_turn(&name) {
+                            ends.push((name.clone(), e));
+                        }
+                    }
+                    match tools {
+                        Some(t) => core.set_tools(&name, t),
+                        None if !ended && !working => core.changed(&name),
+                        None => {}
+                    }
+                }
+                for name in core.to_hand_over() {
+                    core.hand_over(&name);
+                }
+            }
+            for (name, (turn, bg, snap)) in ends {
+                tokio::spawn(turn_waits(shared.clone(), name, turn, bg, snap));
+            }
+            tokio::select! {
+                _ = poke.notified() => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+            }
+        }
+    });
+}
+
+/// The agents' senders: each agent's jobs (`core::Job`) in order on a task of its own, off the core's lock, their
+/// outcome told back (`Core::handed`).
+fn senders(shared: Shared) -> tokio::sync::mpsc::UnboundedSender<Job> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
+    tokio::spawn(async move {
+        let mut per: HashMap<String, tokio::sync::mpsc::UnboundedSender<Job>> = HashMap::new();
+        while let Some(job) = rx.recv().await {
+            let w = per.entry(job.name().to_string()).or_insert_with(|| {
+                let (wtx, mut wrx) = tokio::sync::mpsc::unbounded_channel::<Job>();
+                let s = shared.clone();
+                tokio::spawn(async move {
+                    while let Some(j) = wrx.recv().await {
+                        run_job(&s, j).await;
+                    }
+                });
+                wtx
+            });
+            let _ = w.send(job);
+        }
+    });
+    tx
+}
+
+async fn run_job(shared: &Shared, job: Job) {
+    match job {
+        Job::Channel { name, ids, sock, line } => {
+            let talk = async {
+                use tokio::io::AsyncReadExt;
+                let mut c = UnixStream::connect(&sock).await.ok()?;
+                c.write_all(line.as_bytes()).await.ok()?;
+                let mut buf = [0u8; 16];
+                let n = c.read(&mut buf).await.ok()?;
+                buf[..n].starts_with(b"ok").then_some(())
+            };
+            let took = tokio::time::timeout(std::time::Duration::from_secs(10), talk).await.ok().flatten().is_some();
+            shared.lock().await.handed(&name, &ids, took, "channel");
+        }
+        Job::Codex { name, ids, base, session, socket, text } => {
+            let took = core::codex_rpc(&base, &session, &socket, &["send", "later", &text]).await;
+            shared.lock().await.handed(&name, &ids, took, "codex");
+        }
+        Job::Interrupt { name, pty, codex } => {
+            match codex {
+                Some((base, session, socket)) => {
+                    core::codex_rpc(&base, &session, &socket, &["interrupt"]).await;
+                }
+                None => {
+                    if let Ok(mut c) = UnixStream::connect(&pty).await {
+                        let _ = c.write_all(&coord_types::pty::frame(coord_types::pty::KEYS, b"\x1b")).await;
+                    }
+                }
+            }
+            shared.lock().await.interrupted(&name);
+        }
+    }
 }
 
 /// Start the nets (`net`): the policy engine they decide with, and coordd's events sent to them. Dry: their effects
@@ -425,7 +621,7 @@ async fn start_nets(shared: Shared) {
     core.nets = Some(tx);
 }
 
-/// The question recogniser: each new thread an agent starts
+/// The question recogniser (vault designs/decisions-policies-forks-2026-11-08.md §8): each new thread an agent starts
 /// with the owner is given to the typed call `recognise-question`, its model decided by the project's policy
 /// (`policy::Engine`); a question it finds makes the mail a question thread, with the decision that chose the model.
 /// One mail at a time, off the core's lock while the model runs.

@@ -1,5 +1,5 @@
-//! File paths in an agent's chat as links
-//! . Before an entry is drawn as Markdown, each path it names (in inline code, or a bare
+//! File paths in an agent's chat as links (owner 7 Nov night: "make that clickable in the chat view so I can have it
+//! open in VS Code directly"). Before an entry is drawn as Markdown, each path it names (in inline code, or a bare
 //! word starting with `/` or `~/`, or a word with a `/` that ends in a file name with an extension), with an optional
 //! `:line` or `:line:col`, becomes a link to `file:PATH`. A click resolves PATH against the agent's folder (its
 //! session's `cwd`) and opens it in VS Code at the line (`code -g`); other links open with the desktop's handler.

@@ -1,4 +1,4 @@
-//! The window's state, kept across a restart or reopen: the split and its panes, the sidebar, what each
+//! The window's state, kept across a restart or reopen (owner 8 Nov): the split and its panes, the sidebar, what each
 //! pane shows (the project and page, the agent, Chat or Terminal), the zoom, every text typed and not sent (the composers, the
 //! answers, the comments waiting and the one being written) and the boxes open (replies, the new-project dialog).
 //! Mail sent and not delivered yet is coordd's and comes back from it.

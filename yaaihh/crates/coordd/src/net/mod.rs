@@ -1,4 +1,4 @@
-//! Nets: process models bound to coordd's events, the
+//! Nets (vault designs/policy-language-draft-2026-11-08.md §15–§16): process models bound to coordd's events, the
 //! clerk among them. [`syntax`] parses `.net` files and bindings; [`check`] refuses a net that is ill-typed, misses a
 //! case, can end its event wrongly, is unsound as a workflow net, or raises events in a cycle; [`run`] runs one on an
 //! event with the policy engine (`crate::policy`) deciding every model and every `decide`.
@@ -9,12 +9,16 @@
 //! - Live set: every run's effects are logged (`$COORD/nets/log.jsonl`, told as `Body::Net`); an effect is also
 //!   taken only when the live set switches it on: `AGENT_BASE/nets/live` (scope global) and `PROJECT/nets/live`
 //!   (scope project), lines `live EFFECT [where agent in {..}]` or `dry EFFECT [...]`, the narrowest line winning as
-//!   for bindings. Everything else is dry. coordd takes
+//!   for bindings. Everything else is dry (owner m114, 8 Nov: switched on step by step, filing first). coordd takes
 //!   [`TAKEN`] so far; a `live` line for another effect is refused.
 //! - One run at a time per agent (and one for events about no agent), so a session takes one call at a time and an
 //!   agent's events are handled in order; agents' runs go on side by side.
 //! - Raised events (`raise`) and faults go back in as events: a fault as `fault`, except from a net on `fault` itself
 //!   (a fault's own fault is only logged, so no fault can feed itself).
+//! - Time (supervision-nets step 2): `raise NAME(...) after D` sets a timer, kept in `$COORD/nets/timers.jsonl`
+//!   (`set` and `fired` lines), so a restart loses none: one due while coordd was down fires when it is back. A clock,
+//!   `every D use NET` in a bindings file, runs NET on `tick` every D from when coordd (or the clock's binding) started.
+//!   Both are looked at once a second.
 
 pub mod check;
 pub mod draw;
@@ -43,6 +47,8 @@ pub struct Raised {
     pub agent: Option<String>,
     pub value: Value,
     pub depth: u32,
+    /// The net to run, for a clock's tick (each clock names its own); else the one bound to EVENT.
+    pub net: Option<String>,
 }
 
 const MAX_DEPTH: u32 = 8;
@@ -126,6 +132,7 @@ pub(crate) fn load(places: &Places, engine: &Engine) -> check::Loaded {
 /// Start the nets: events sent on the returned channel are run by the net bound to them.
 pub fn start(shared: Shared, places: Places, engine: Engine) -> mpsc::UnboundedSender<Raised> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Raised>();
+    clock(places.clone(), engine.clone(), tx.clone());
     let sessions = run::Sessions::new(format!("{}/nets/sessions", places.coord));
     let back = tx.clone();
     let nudged: Arc<std::sync::Mutex<HashMap<String, i64>>> = Arc::new(std::sync::Mutex::new(nudge_counts(&places.coord)));
@@ -157,12 +164,94 @@ pub fn start(shared: Shared, places: Places, engine: Engine) -> mpsc::UnboundedS
     tx
 }
 
+/// Seconds since the epoch.
+fn epoch() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The timers not fired yet: read from `nets/timers.jsonl` when the clock starts, added to as runs set them.
+static PENDING: std::sync::Mutex<Vec<Value>> = std::sync::Mutex::new(Vec::new());
+
+/// Set a timer: EVENT (about AGENT) with VALUE, AFTER seconds from now, set by run RUN.
+fn set_timer(coord: &str, event: &str, agent: Option<&str>, value: Value, after: u64, run: &str) {
+    let id = format!("{}-{}-{}", epoch(), run, event);
+    let line = json!({"ev": "set", "id": id, "due": epoch() + after, "event": event, "agent": agent, "value": value, "run": run, "at": crate::core::now()});
+    if let Err(e) = crate::jsonl::append(&format!("{coord}/nets/timers.jsonl"), &line.to_string()) {
+        eprintln!("coordd: nets: timer {id} not kept over a restart: {e}");
+    }
+    PENDING.lock().unwrap().push(line);
+}
+
+/// The timers set and not fired yet, from `nets/timers.jsonl`.
+fn pending_timers(coord: &str) -> Vec<Value> {
+    let text = std::fs::read_to_string(format!("{coord}/nets/timers.jsonl")).unwrap_or_default();
+    let lines: Vec<Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let fired: std::collections::HashSet<&str> =
+        lines.iter().filter(|l| l["ev"] == "fired").filter_map(|l| l["id"].as_str()).collect();
+    lines.iter().filter(|l| l["ev"] == "set" && !l["id"].as_str().is_some_and(|i| fired.contains(i))).cloned().collect()
+}
+
+/// Time for the nets, once a second: timers due are raised (and marked fired), and each clock ticks when its period
+/// has passed. The clocks are read from the bindings every 30 s, so a new or changed one takes effect within it.
+fn clock(places: Places, engine: Engine, tx: mpsc::UnboundedSender<Raised>) {
+    PENDING.lock().unwrap().extend(pending_timers(&places.coord));
+    tokio::spawn(async move {
+        let mut clocks: Vec<(u64, Vec<String>, String)> = Vec::new();
+        let mut last: HashMap<(u64, String), u64> = HashMap::new();
+        let mut read_at = 0u64;
+        loop {
+            let now = epoch();
+            if now >= read_at + 30 {
+                read_at = now;
+                let (p, e) = (places.clone(), engine.clone());
+                if let Ok(l) = tokio::task::spawn_blocking(move || load(&p, &e)).await {
+                    clocks = l.clocks();
+                }
+            }
+            let due: Vec<Value> = {
+                let mut p = PENDING.lock().unwrap();
+                let (due, wait) = std::mem::take(&mut *p).into_iter().partition(|t: &Value| t["due"].as_u64().is_none_or(|d| d <= now));
+                *p = wait;
+                due
+            };
+            for t in due {
+                let line = json!({"ev": "fired", "id": t["id"], "at": crate::core::now()});
+                let _ = crate::jsonl::append(&format!("{}/nets/timers.jsonl", places.coord), &line.to_string());
+                let event = t["event"].as_str().unwrap_or_default().to_string();
+                let agent = t["agent"].as_str().map(str::to_owned);
+                // a timer is a wait: its event starts a new chain of raises
+                let _ = tx.send(Raised { event, agent, value: t["value"].clone(), depth: 0, net: None });
+            }
+            for (every, agents, net) in &clocks {
+                let key = (*every, net.clone());
+                let since = *last.entry(key.clone()).or_insert(now);
+                if now < since + every {
+                    continue;
+                }
+                last.insert(key, now);
+                let shown = syntax::show_duration(*every);
+                let at = crate::core::now();
+                let targets: Vec<Option<String>> = if agents.is_empty() { vec![None] } else { agents.iter().cloned().map(Some).collect() };
+                for agent in targets {
+                    let value = json!({"at": at, "every": shown, "agent": agent});
+                    let _ = tx.send(Raised { event: "tick".into(), agent, value, depth: 0, net: Some(net.clone()) });
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
+}
+
 /// Handle one event: the net bound to it, run, logged and told; what it raised sent back in.
 async fn one(shared: &Shared, places: &Places, engine: &Engine, sessions: &run::Sessions, back: &mpsc::UnboundedSender<Raised>, nudged: &Arc<std::sync::Mutex<HashMap<String, i64>>>, ev: Raised) {
     let (p, e) = (places.clone(), engine.clone());
     let Ok(loaded) = tokio::task::spawn_blocking(move || load(&p, &e)).await else { return };
     shared.lock().await.net_check(loaded.errors.clone());
-    let Some(net) = loaded.resolve(&ev.event, ev.agent.as_deref()).cloned() else { return };
+    let net = match &ev.net {
+        Some(n) => loaded.nets.get(n),
+        None => loaded.resolve(&ev.event, ev.agent.as_deref()),
+    };
+    let Some(net) = net.cloned() else { return };
     let mut world = shared.lock().await.net_world();
     world.nudged = nudged.lock().unwrap().clone();
     let value = ev.value.clone();
@@ -181,13 +270,14 @@ async fn one(shared: &Shared, places: &Places, engine: &Engine, sessions: &run::
     }
     // the live set's effects taken, in order (each run's effects come before a fault that stopped it, so they stand)
     let mut effects = out.effects;
-    let (mut filed, mut asked) = (Vec::new(), Vec::new());
+    let (mut filed, mut asked, mut leads) = (Vec::new(), Vec::new(), Vec::new());
     let mut core = shared.lock().await;
     for e in effects.iter_mut().filter(|e| loaded.is_live(&e.effect, ev.agent.as_deref())) {
         e.live = true;
         let done = match e.effect.as_str() {
             "ask" => core.net_ask(&e.args).map(|m| {
                 asked.push(json!({"q": m.id, "from": m.from, "text": m.body}));
+                leads.push(m.clone());
                 m.id
             }),
             "post" => core.net_post(&e.args),
@@ -235,22 +325,28 @@ async fn one(shared: &Shared, places: &Places, engine: &Engine, sessions: &run::
     core.mark_filed(&filed, &record.id);
     core.net_ran(record.clone());
     core.deliver_all(deliver).await;
+    for m in &leads {
+        core.ask_lead(m).await;
+    }
     drop(core);
     if ev.depth < MAX_DEPTH {
         for q in asked {
-            let _ = back.send(Raised { event: "question".into(), agent: ev.agent.clone(), value: q, depth: ev.depth + 1 });
+            let _ = back.send(Raised { event: "question".into(), agent: ev.agent.clone(), value: q, depth: ev.depth + 1, net: None });
         }
     }
     if ev.depth >= MAX_DEPTH {
         return;
     }
     for (name, v) in out.raised {
-        let _ = back.send(Raised { event: name, agent: ev.agent.clone(), value: v, depth: ev.depth + 1 });
+        let _ = back.send(Raised { event: name, agent: ev.agent.clone(), value: v, depth: ev.depth + 1, net: None });
+    }
+    for (name, v, after) in out.later {
+        set_timer(&places.coord, &name, ev.agent.as_deref(), v, after, &record.id);
     }
     if let (Some(f), true) = (&out.fault, ev.event != "fault") {
         let step = f.split(':').next().unwrap_or("").to_string();
         let v = json!({"net": net.name, "step": step, "name": step, "detail": f, "run": record.id});
-        let _ = back.send(Raised { event: "fault".into(), agent: ev.agent.clone(), value: v, depth: ev.depth + 1 });
+        let _ = back.send(Raised { event: "fault".into(), agent: ev.agent.clone(), value: v, depth: ev.depth + 1, net: None });
     }
 }
 
@@ -334,7 +430,9 @@ pub fn try_run(places: &Places, edits: &[coord_types::NetEdit], event: &str, age
 /// A dry run of the net LOADED binds to EVENT (for AGENT) on VALUE, in fresh sessions; a field of the event that
 /// VALUE lacks (a run logged before the field was added) gets its type's empty value.
 fn try_loaded(places: &Places, engine: &Engine, loaded: &check::Loaded, event: &str, agent: Option<String>, mut value: Value, world: run::World) -> Result<NetRun, String> {
-    let net = loaded.resolve(event, agent.as_deref()).cloned().ok_or(format!("no net is bound to {event}{}", agent.as_ref().map(|a| format!(" for {a}")).unwrap_or_default()))?;
+    // a tick is tried on its clock's net (the first clock, or the one VALUE's `net` names)
+    let clocked = (event == "tick").then(|| loaded.clocks().into_iter().map(|(_, _, n)| n).find(|n| value["net"].as_str().is_none_or(|w| w == n))).flatten();
+    let net = clocked.and_then(|n| loaded.nets.get(&n)).or_else(|| loaded.resolve(event, agent.as_deref())).cloned().ok_or(format!("no net is bound to {event}{}", agent.as_ref().map(|a| format!(" for {a}")).unwrap_or_default()))?;
     if let (Some(decl), Some(obj)) = (loaded.events.get(event), value.as_object_mut()) {
         for (f, t) in &decl.fields {
             obj.entry(f.clone()).or_insert_with(|| match t.as_str() {

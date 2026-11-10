@@ -14,9 +14,13 @@
 //!   coordc log NAME [LAST]                     an agent's session as text (agents below me), LAST entries (60)
 //!   coordc item start ID | open TITLE | close ID WHY...
 //!   coordc add NAME KIND MODEL                 register an agent; I become its parent
+//!   coordc role NAME ROLE                      (the owner) NAME's role, a word the policy's norms name
+//!   coordc team ask TEXT                       (an agent) ask to form a team: TEXT goes to its approvers (the norms' approve-team)
+//!   coordc team grant NAME N                   NAME's team may have N agents (the owner, or an approver)
+//!   coordc norm ACT [--thread T] ARG...        whether the norms enable ACT(ARG...) now, and why (e.g. send-mail A B none)
 //!   coordc run NAME -- CMD...                  this process becomes agent NAME, then runs CMD
 //!   coordc session NAME JSON                   session facts of NAME before its first hook (roster: a Codex thread)
-//!   coordc hook EVENT                          a hook event (its input on stdin); prompt and stop print hook output
+//!   coordc hook EVENT                          a hook event (its input on stdin); it prints nothing
 //!   coordc watch [FROM]                        the event stream, one JSON line per event
 //!   coordc bridge                              yaaihh's pipe: stdin {"id":N,"req":REQUEST} lines are answered as
 //!                                              {"id":N,"reply":REPLY}, between the stream's {"event":EVENT} lines
@@ -80,15 +84,16 @@ fn main() {
     let cmd = args.remove(0);
     match cmd.as_str() {
         "msg" => {
-            let (mut esc, mut as_host, mut re, mut thread) = (false, None, None, false);
+            let (mut esc, mut soon, mut as_host, mut re, mut thread) = (false, false, None, None, false);
             while args.first().is_some_and(|a| a.starts_with("--")) {
                 match args.remove(0).as_str() {
                     "--esc" => esc = true,
+                    "--soon" => soon = true,
                     "--as" if !args.is_empty() => as_host = Some(args.remove(0)),
                     "--re" if !args.is_empty() && re.is_none() => re = Some(args.remove(0)),
                     "--thread" if !args.is_empty() && re.is_none() => (re, thread) = (Some(args.remove(0)), true),
                     f => {
-                        eprintln!("coord msg: unknown or misplaced flag {f} (coord msg [--esc] [--re ID] NAME[,NAME...] TEXT | msg --thread ID TEXT)");
+                        eprintln!("coord msg: unknown or misplaced flag {f} (coord msg [--esc|--soon] [--re ID] NAME[,NAME...] TEXT | msg --thread ID TEXT)");
                         std::process::exit(2)
                     }
                 }
@@ -98,10 +103,11 @@ fn main() {
                 usage()
             }
             let to = if thread { Vec::new() } else { args.remove(0).split(',').filter(|s| !s.is_empty()).map(String::from).collect() };
-            done(ask(&Request::Msg { to, body: args.join(" "), esc, as_host, re, quotes: Vec::new() }))
+            done(ask(&Request::Msg { to, body: args.join(" "), esc, soon, as_host, re, quotes: Vec::new() }))
         }
         "ask" => {
-            // the flags lead; one it does not know is refused, never asked
+            // the flags lead; one it does not know is refused, never asked (8 Nov: `coord ask --list`, before there
+            // was one, became the owner's question q7, "--list")
             let mut on = None;
             while args.first().is_some_and(|a| a.starts_with("--")) {
                 match args.remove(0).as_str() {
@@ -161,6 +167,35 @@ fn main() {
             }
             done(ask(&Request::Rename { name: args[0].clone(), to: args[1].clone() }))
         }
+        "team" => match (args.first().map(String::as_str), args.len()) {
+            (Some("ask"), n) if n > 1 => done(ask(&Request::TeamAsk { text: args[1..].join(" ") })),
+            (Some("grant"), 3) => match args[2].parse() {
+                Ok(granted) => done(ask(&Request::TeamGrant { name: args[1].clone(), granted })),
+                Err(_) => usage(),
+            },
+            _ => usage(),
+        },
+        "role" => {
+            if args.len() != 2 {
+                usage()
+            }
+            done(ask(&Request::Role { name: args[0].clone(), role: args[1].clone() }))
+        }
+        "norm" => {
+            if args.is_empty() {
+                usage()
+            }
+            let act = args.remove(0);
+            let thread = match args.iter().position(|a| a == "--thread") {
+                Some(i) if i + 1 < args.len() => {
+                    let t = args.remove(i + 1);
+                    args.remove(i);
+                    t
+                }
+                _ => "none".to_string(),
+            };
+            done(ask(&Request::Norm { act, args, thread }))
+        }
         "add" => {
             if args.len() != 3 {
                 usage()
@@ -205,15 +240,15 @@ fn main() {
                 Err(_) => std::process::exit(0), // a hook never blocks a session; coord watch shows coordd is down
             };
             let _ = writeln!(s, "{}", json!({"op": "hook", "event": event, "input": input}));
+            // coordd answers at once and the hook prints nothing: mail goes in through the channel after the turn,
+            // and coordd reads the turn's end from the transcript (owner m254, 9 Nov)
             let mut line = String::new();
             let _ = BufReader::new(s).read_line(&mut line);
-            let r: Reply = serde_json::from_str(&line).unwrap_or(Reply { ok: true, out: String::new() });
-            if event == "prompt" && !r.out.is_empty() {
-                println!("{}", json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": r.out}}));
-            }
-            // held mail at a turn's end: the session goes on with it (Claude Code's Stop hook `decision: block`)
-            if event == "stop" && !r.out.is_empty() {
-                println!("{}", json!({"decision": "block", "reason": r.out}));
+            // what coordd says back is for Claude Code: a refused subagent call (vault designs/teams-and-tiers-2026-11-10.md §4)
+            if let Ok(r) = serde_json::from_str::<Reply>(&line) {
+                if r.ok && !r.out.is_empty() {
+                    println!("{}", r.out);
+                }
             }
         }
         "watch" => {

@@ -327,6 +327,9 @@ pub fn service_tier_multiplier(model: &str) -> f64 {
         || is_model_family(model, "gpt-5.4")
         || is_model_family(model, "gpt-5.4-mini")
         || is_model_family(model, "gpt-5.3-codex")
+        // fast mode on Claude Fable 5.2 and Mythos 5.2: $16 / $80 per MTok over $8 / $40 (pricing page, 9 Nov)
+        || is_model_family(model, "claude-fable-5-2")
+        || is_model_family(model, "claude-mythos-5-2")
     {
         2.0
     } else {

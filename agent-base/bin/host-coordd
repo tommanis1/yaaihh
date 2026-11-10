@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# host-coordd: the coordd of a project without a box,
+# host-coordd: the coordd of a project without a box (vault designs/yaaihh-2026-11-07.md, amendments of 7 Nov evening),
 # on the host as the owner's user: the systemd user unit coordd-NAME, with a delegated cgroup for the agents.
 #
 #   host-coordd start NAME        start coordd-NAME unless it runs; then resume the agents that ran when it last went
@@ -27,7 +27,7 @@ export COORD=$HOME/agent-coord/$NAME AGENT_BASE=$AB COORDD_SOCK=$run/$NAME.sock
 export PATH=$AB/bin:$PATH
 . "$AB/lib/route.sh"
 
-# resumed: the agents that ran when coordd last went down, then done
+# resumed: the agents that ran when coordd last went down (coordd's $COORD/resume.json, owner m172), then done
 resumed() { "$AB/bin/roster" resume; exit 0; }
 
 case $cmd in

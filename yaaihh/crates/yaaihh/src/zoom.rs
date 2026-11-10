@@ -1,4 +1,4 @@
-//! The whole window's zoom: Ctrl+wheel, Ctrl+= and Ctrl+- in tenths, Ctrl+0 back to 100%, and the
+//! The whole window's zoom (owner m188, 9 Nov): Ctrl+wheel, Ctrl+= and Ctrl+- in tenths, Ctrl+0 back to 100%, and the
 //! toolbar's − / % / + buttons (`toolbar`), kept in
 //! ui.json (state.rs). Rune lays the window out, draws its text and hit-tests at the system's scale times the zoom
 //! (`Tx::set_ui_zoom`), so every page follows without knowing.
@@ -34,11 +34,6 @@ impl Zoom {
         self.level = if level.is_finite() { snap(level) } else { 1.0 };
     }
 
-    /// To `level` (snapped); the next poll gives Rune the level (`show`).
-    fn to(&mut self, level: f32) {
-        self.level = snap(level);
-    }
-
     fn set(&mut self, level: f32, tx: &mut Tx) {
         self.level = snap(level);
         self.show(tx);
@@ -59,15 +54,15 @@ fn snap(level: f32) -> f32 {
     ((level * STEPS).round() / STEPS).clamp(MIN, MAX)
 }
 
-/// The toolbar's zoom buttons: out, the level (back to 100% when pressed), in. A press has no `Tx`, so the level
-/// reaches Rune at the next poll (`Zoom::show`).
+/// The toolbar's zoom buttons: out, the level (back to 100% when pressed), in; each gives Rune the level at once
+/// (a level set without the press's `Tx` waited for a poll that no frame ran, owner m231).
 pub fn toolbar(s: &App, k: &rune_kit::Kit) -> [rune::El; 3] {
     use rune_kit::{Button, ButtonVariant};
     let level = s.zoom.level();
     [
-        Button::new("−").variant(ButtonVariant::Ghost).disabled(level <= MIN).on_press(|s: &mut App| s.zoom.to(s.zoom.level() - STEP)).build(k),
-        Button::new(format!("{:.0}%", level * 100.0)).variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.zoom.to(1.0)).build(k),
-        Button::new("+").variant(ButtonVariant::Ghost).disabled(level >= MAX).on_press(|s: &mut App| s.zoom.to(s.zoom.level() + STEP)).build(k),
+        Button::new("−").variant(ButtonVariant::Ghost).disabled(level <= MIN).on_press_tx(|s: &mut App, tx: &mut Tx| { let to = s.zoom.level() - STEP; s.zoom.set(to, tx) }).build(k),
+        Button::new(format!("{:.0}%", level * 100.0)).variant(ButtonVariant::Ghost).on_press_tx(|s: &mut App, tx: &mut Tx| s.zoom.set(1.0, tx)).build(k),
+        Button::new("+").variant(ButtonVariant::Ghost).disabled(level >= MAX).on_press_tx(|s: &mut App, tx: &mut Tx| { let to = s.zoom.level() + STEP; s.zoom.set(to, tx) }).build(k),
     ]
 }
 
@@ -86,9 +81,9 @@ pub fn key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 /// Ctrl+wheel anywhere in the window (Rune's app-level `on_wheel`, ahead of scroll views): up zooms in, down out, a step
-/// a notch. Takes it, so nothing scrolls under it.
+/// a notch. Takes it, so nothing scrolls under it; over an element that takes it itself (`App::wheel_taken`) it passes.
 pub fn wheel(s: &mut App, e: &WheelEvent, tx: &mut Tx) -> bool {
-    if !e.mods.ctrl {
+    if !e.mods.ctrl || s.wheel_taken {
         return false;
     }
     let z = &mut s.zoom;

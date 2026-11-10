@@ -1,5 +1,5 @@
-//! yaaihh's own record, so a window that hung or burned a core can be read afterwards
-//! . Two files in ~/.local/state/yaaihh (yaaihh-dev for `--dev`):
+//! yaaihh's own record, so a window that hung or burned a core can be read afterwards (9 Nov: a window busy all night
+//! left only its CPU total). Two files in ~/.local/state/yaaihh (yaaihh-dev for `--dev`):
 //!
 //! * `frames.jsonl`: Rune's frame log (`RUNE_FRAME_WHY`), one line per second that drew: frames, commits and why,
 //!   what kept it animating, the slowest frame. A window at rest writes nothing.

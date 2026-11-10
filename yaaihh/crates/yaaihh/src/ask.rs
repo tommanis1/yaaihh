@@ -1,18 +1,18 @@
-//! Questions to the owner and the owner's comments on selected text
-//! .
+//! Questions to the owner and the owner's comments on selected text (vault designs/yaaihh-2026-11-07.md, amendments of
+//! 7 Nov 20:3x).
 //!
 //! **Questions.** An agent's `coord ask` is a mail of kind `question` (`qN`) to the owner; answers and follow-ups are
 //! mails `re` it, and coordd keeps the state of each thread on its first question (open, answered, dropped). A
 //! question shows as a card ([`card`]) where it was asked in the agent's chat and in the project's Questions inbox
 //! ([`inbox`]); the card's answer box mails the agent `re` the thread's latest mail.
 //!
-//! **Needing the owner**: the inbox's Open list and the sidebar's count hold the open questions and the
+//! **Needing the owner** (owner 8 Nov): the inbox's Open list and the sidebar's count hold the open questions and the
 //! unread threads: a thread whose latest mail is an agent's, after the owner has already written in it (a reply to
 //! an answer, a follow-up the owner asked for), until the owner writes again or marks it read. The marks are kept in
 //! `~/.config/yaaihh/read.json` (`{"PROJECT/QID": latest mail id read}`). A card's Dismiss drops the question
 //! (coordd's `ask --drop`, as the owner).
 //!
-//! **Who a reply goes to**: a reply box's To row holds the thread's participants (whoever wrote in it or
+//! **Who a reply goes to** (owner 8 Nov): a reply box's To row holds the thread's participants (whoever wrote in it or
 //! was sent mail in it, as coordd counts them) and the agents added for this reply; a click leaves one out of it or
 //! takes it back, Add (a combobox of the project's agents) brings one in, and so does `@NAME` typed in the box: an `@`
 //! opens the agents at the caret ([`mentions`]), arrows pick, Enter or Tab completes. On send each `@NAME` that names
@@ -20,10 +20,10 @@
 //! far with its first mail there.
 //!
 //! A thread the owner answers or marks read stays where it is (its card in the Open list, a chat's reply box open)
-//! until the owner leaves the Questions page.
+//! until the owner leaves the Questions page (owner 8 Nov: "should not kill me having it open", as in Slack).
 //!
 //! **Comments.** Text selected in a chat or a question card offers a Comment bar; each comment keeps the passage, where
-//! it came from and the owner's note, and waits as a card like a queued mail's until the mail to that target (an agent, or a question's
+//! it came from and the owner's note, and waits as a card like a queued mail's (owner m132) until the mail to that target (an agent, or a question's
 //! answer) is sent. Sending makes one mail: each comment as the quoted passage, then the note, then the typed text.
 
 use crate::{App, Proj};
@@ -92,6 +92,10 @@ pub struct Notes {
     pub kept: std::collections::HashSet<String>,
     /// The decisions whose "why" is open ("PROJECT/DID"): None while coordd's answer is on its way.
     pub why: HashMap<String, Option<Result<coord_types::Decision, String>>>,
+    /// The inbox row opened into its card (a thread's first question), or the search hit opened (a mail's id).
+    pub expanded: Option<String>,
+    /// The inbox's search over the project's questions and mail.
+    pub search: TextEdit,
 }
 
 /// An `@NAME` being typed: in box FIELD, the `@` at byte AT, QUERY typed after it, ACTIVE the suggestion picked.
@@ -103,7 +107,7 @@ pub struct Mention {
     pub active: usize,
 }
 
-/// A text box `@NAME` works in: a thread's reply box, the comment box, an agent chat's composer. A tagged
+/// A text box `@NAME` works in (owner m118): a thread's reply box, the comment box, an agent chat's composer. A tagged
 /// agent is one more recipient of what the box sends.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
@@ -328,8 +332,61 @@ pub fn needing<'a>(s: &App, p: &'a Proj) -> Vec<&'a MailView> {
     questions(p, true).into_iter().filter(|q| q.state.as_deref() == Some("open") || unread(s, p, q)).collect()
 }
 
+/// The sidebar's count: the threads where it is the owner's move (not the quiet ones).
 pub fn open_count(s: &App, p: &Proj) -> usize {
-    needing(s, p).len()
+    questions(p, true).into_iter().filter(|q| standing(s, p, q) == Standing::Yours).count()
+}
+
+/// After this long with no mail, a thread waiting on someone is quiet (owner m219, 9 Nov).
+const QUIET_HOURS: i64 = 24;
+
+/// Where a question thread stands for the owner (owner m219, 9 Nov: "my active conversations, where I still need to say
+/// or chase something"), from facts only: its state, who wrote last, and when.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Standing {
+    /// Open or unread, with mail in it in the last [`QUIET_HOURS`]: the owner's move.
+    Yours,
+    /// The owner wrote last (an answer, a question back), in the last [`QUIET_HOURS`]: the agent's move.
+    Theirs,
+    /// Open or unread, but nobody wrote for [`QUIET_HOURS`]: likely overtaken; drop it or answer it.
+    Quiet,
+    /// Answered and gone quiet, or dropped.
+    Settled,
+}
+
+fn hours_since(at: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(at).map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_hours()).unwrap_or(0)
+}
+
+/// The latest mail of question Q's thread (Q itself when nothing answers it).
+fn latest<'a>(p: &'a Proj, q: &'a MailView) -> &'a MailView {
+    p.live.mail.replies(&q.id).last().copied().unwrap_or(q)
+}
+
+pub fn standing(s: &App, p: &Proj, q: &MailView) -> Standing {
+    if q.state.as_deref() == Some("dropped") {
+        return Standing::Settled;
+    }
+    let last = latest(p, q);
+    let fresh = hours_since(&last.at) < QUIET_HOURS;
+    match (q.state.as_deref() == Some("open") || unread(s, p, q), fresh) {
+        (true, true) => Standing::Yours,
+        (true, false) => Standing::Quiet,
+        (false, true) if last.from == "owner" => Standing::Theirs,
+        _ => Standing::Settled,
+    }
+}
+
+/// What question Q's thread asks now: its latest question (a follow-up replaces the first wording), as its subject line.
+pub fn current_ask<'a>(p: &'a Proj, q: &'a MailView) -> &'a MailView {
+    p.live.mail.replies(&q.id).into_iter().rev().find(|m| is_question(m)).unwrap_or(q)
+}
+
+fn subject_of(m: &MailView) -> String {
+    match &m.recognised {
+        Some(r) => r.question.clone(),
+        None => m.body.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().replace("**", "").trim().to_string(),
+    }
 }
 
 /// How long ago AT was, shortly (`just now`, `5 min ago`, `3 h ago`, `2 d ago`).
@@ -563,7 +620,7 @@ pub fn bar(s: &App, pi: usize, target: &str, k: &Kit) -> El {
             .child(Button::new("Edit").variant(ButtonVariant::Ghost).on_press(move |s: &mut App| edit_waiting(s, &t1, i)).build(k))
             .child(Button::new("Cancel").variant(ButtonVariant::GhostMuted).on_press(move |s: &mut App| drop_waiting(s, &t2, i)).build(k));
         if agent {
-            acts = acts.child(Button::new("Send now").variant(ButtonVariant::Warning).on_press(move |s: &mut App| s.send(pi, &t, false)).build(k));
+            acts = acts.child(Button::new("Send now").variant(ButtonVariant::Warning).on_press(move |s: &mut App| s.send(pi, &t, true, false)).build(k));
         }
         row()
             .key(format!("comment-card-{target}-{i}"))
@@ -847,7 +904,7 @@ pub(crate) fn toggle_why(s: &mut App, project: &str, id: &str) {
     }
 }
 
-/// A decision's why: what was chosen and the rule that decided
+/// A decision's why (vault designs/policy-language-draft-2026-11-08.md §8): what was chosen and the rule that decided
 /// it over the runner-up, the models tried before it, and why the others were out.
 pub(crate) fn why(d: &coord_types::Decision, k: &Kit) -> El {
     let line = |t: String| text(t).font(k.ty.small).color(k.c.text_muted).wrap();
@@ -997,7 +1054,7 @@ pub fn reply(s: &mut App, id: &str, to: &str) {
     }
     let (body, quotes) = compose(&comments, &typed);
     let kept = format!("{}/{}", p.id, p.live.mail.top(id));
-    let req = Request::Msg { to, body, esc: false, as_host: None, re: Some(latest), quotes };
+    let req = Request::Msg { to, body, esc: false, soon: false, as_host: None, re: Some(latest), quotes };
     // the thread stays as it is shown (its card in the list, its reply box open), as in Slack
     if s.mail(req) {
         s.notes.kept.insert(kept);
@@ -1113,25 +1170,172 @@ pub fn mail_entry(s: &App, p: &Proj, agent: &str, entry: &str, at: &str, k: &Kit
     Some(c)
 }
 
-/// The project's questions: the open ones (or all), newest first, each as its card.
+/// The project's questions as one line per thread, by where each stands ([`Standing`]): the owner's move first, then
+/// what waits on the agents, then the quiet ones (and, with All, the settled ones); oldest first in each, so what
+/// waited longest is on top. A row opens into the thread's card. With text in the search box, the project's questions
+/// and mail matching every word instead.
 pub fn inbox(s: &App, p: &Proj, k: &Kit) -> El {
-    let kept = |q: &MailView| s.notes.kept.contains(&format!("{}/{}", p.id, q.id));
-    let qs = if s.notes.show_all { questions(p, true) } else { questions(p, true).into_iter().filter(|q| kept(q) || needing(s, p).contains(q)).collect() };
     let pick = SegmentedControl::new(&["Open", "All"], Some(s.notes.show_all as usize)).label("Questions shown").fit().on_pick(|s: &mut App, i, _| s.notes.show_all = i == 1).build(k);
-    let empty = if s.notes.show_all { "No questions yet" } else { "Nothing open or unread" };
-    let mut list = col().w_full().gap(12.0).px(24.0).pb(24.0);
-    if qs.is_empty() {
-        list = list.child(text(empty).font(k.ty.body).color(k.c.text_faint));
-    }
-    for q in qs {
-        list = list.child(card(s, p, q, k));
+    let search = rune_kit::TextInput::new(&s.notes.search).placeholder("Search questions and mail").width(None).on_edit(|s: &mut App| &mut s.notes.search).build(k);
+    let query = s.notes.search.text.trim().to_lowercase();
+    let mut list = col().w_full().gap(6.0).px(24.0).pb(24.0);
+    if !query.is_empty() {
+        list = found(s, p, &query, list, k);
+    } else {
+        let kept = |q: &MailView| s.notes.kept.contains(&format!("{}/{}", p.id, q.id));
+        let mut groups: [(Standing, &str, Vec<&MailView>); 4] = [
+            (Standing::Yours, "Your move", Vec::new()),
+            (Standing::Theirs, "Waiting on agents", Vec::new()),
+            (Standing::Quiet, "Quiet for a day", Vec::new()),
+            (Standing::Settled, "Settled", Vec::new()),
+        ];
+        for q in questions(p, true).into_iter().rev() {
+            // a thread answered on this visit stays in its group until the owner leaves the page
+            let st = if kept(q) { Standing::Yours } else { standing(s, p, q) };
+            if let Some(g) = groups.iter_mut().find(|g| g.0 == st) {
+                g.2.push(q);
+            }
+        }
+        let shown: Vec<_> = groups.iter().filter(|g| s.notes.show_all || g.0 != Standing::Settled).collect();
+        if shown.iter().all(|g| g.2.is_empty()) {
+            list = list.child(text("Nothing waits on you or on the agents").font(k.ty.body).color(k.c.text_faint));
+        }
+        for (st, title, qs) in shown {
+            if qs.is_empty() {
+                continue;
+            }
+            list = list.child(text(format!("{title} · {}", qs.len())).font(k.ty.small_medium).color(k.c.text_muted).pt(10.0));
+            for q in qs {
+                list = list.child(thread_line(s, p, q, *st, k));
+                if s.notes.expanded.as_deref() == Some(q.id.as_str()) {
+                    list = list.child(card(s, p, q, k));
+                }
+            }
+        }
     }
     col()
         .key("questions")
         .w_full()
         .h_full()
-        .child(row().w_full().px(24.0).pt(16.0).pb(10.0).child(pick))
+        .child(row().w_full().gap(12.0).center_y().px(24.0).pt(16.0).pb(10.0).child(pick).child(col().grow(1.0).shrink().child(search)))
         .child(col().key("questions-list").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(list))
+}
+
+/// One thread in the inbox: who asks, what it asks now, how many mails and how long since the last one; pressed, it opens
+/// into its card (or closes).
+fn thread_line(s: &App, p: &Proj, q: &MailView, st: Standing, k: &Kit) -> El {
+    let ask = current_ask(p, q);
+    let last = latest(p, q);
+    let n = p.live.mail.replies(&q.id).len() + 1;
+    let open = s.notes.expanded.as_deref() == Some(q.id.as_str());
+    let since = match st {
+        Standing::Theirs => format!("you wrote {}", ago(&last.at)),
+        _ => format!("last {} {}", if last.from == "owner" { "you".to_string() } else { last.from.clone() }, ago(&last.at)),
+    };
+    let ids = if ask.id == q.id { q.id.clone() } else { format!("{} (now {})", q.id, ask.id) };
+    let mut line = row()
+        .w_full()
+        .gap(10.0)
+        .center_y()
+        .child(text(q.from.clone()).font(k.ty.small_medium).color(k.c.text_accent).w(90.0).truncate())
+        .child(text(one_line(&subject_of(ask), 300)).font(k.ty.ui).color(k.c.text_base).grow(1.0).shrink().truncate())
+        .child(text(format!("{ids} · {n} mail{} · {since}", if n == 1 { "" } else { "s" })).font(k.ty.small).color(k.c.text_faint));
+    if unread(s, p, q) {
+        line = line.child(Badge::new("unread").variant(BadgeVariant::Accent).build(k));
+    }
+    if matches!(st, Standing::Quiet | Standing::Yours) {
+        let (project, id) = (p.id.clone(), q.id.clone());
+        line = line.child(
+            Button::new("Dismiss")
+                .variant(ButtonVariant::GhostMuted)
+                .on_press(move |s: &mut App| {
+                    if let Some(i) = s.projects.iter().position(|x| x.id == project) {
+                        s.mail_in(i, Request::Drop { id: id.clone(), why: Some("dismissed by the owner".into()) });
+                    }
+                })
+                .build(k),
+        );
+    }
+    let id = q.id.clone();
+    k.interactive(
+        row()
+            .key(format!("qline-{}", q.id))
+            .w_full()
+            .px(12.0)
+            .py(8.0)
+            .radius(k.radius.md)
+            .fill(if open { k.c.layer_02 } else { k.c.layer_01 })
+            .border(1.0, if st == Standing::Yours { k.c.border_focus } else { k.c.border_weak })
+            .child(line),
+    )
+    .on_press(move |s: &mut App| toggle_expanded(s, &id))
+}
+
+fn toggle_expanded(s: &mut App, id: &str) {
+    s.notes.expanded = if s.notes.expanded.as_deref() == Some(id) { None } else { Some(id.to_string()) };
+}
+
+/// The search: the project's mails (questions, answers, messages) whose text, sender, recipients or id hold every word of
+/// QUERY, newest first, at most [`HITS`]; each with the passage around its first word, opening into its thread's card
+/// (a question thread) or its whole text.
+fn found(s: &App, p: &Proj, query: &str, mut list: El, k: &Kit) -> El {
+    const HITS: usize = 100;
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let hit = |m: &MailView| {
+        let hay = format!("{} {} {} {}", m.id, m.from, m.to.join(" "), m.body).to_lowercase();
+        words.iter().all(|w| hay.contains(w))
+    };
+    let hits: Vec<&MailView> = p.live.mail.iter().rev().filter(|m| hit(m)).take(HITS + 1).collect();
+    if hits.is_empty() {
+        return list.child(text("Nothing matches").font(k.ty.body).color(k.c.text_faint));
+    }
+    list = list.child(text(if hits.len() > HITS { format!("The newest {HITS} matches") } else { format!("{} match{}", hits.len(), if hits.len() == 1 { "" } else { "es" }) }).font(k.ty.small_medium).color(k.c.text_muted));
+    for m in hits.into_iter().take(HITS) {
+        let root = p.live.mail.root(m);
+        let open = s.notes.expanded.as_deref() == Some(m.id.as_str());
+        let head = row()
+            .w_full()
+            .gap(10.0)
+            .child(text(format!("{} → {}", m.from, m.to.join(", "))).font(k.ty.small_medium).color(k.c.text_accent).shrink().truncate())
+            .child(text(match root {
+                Some(r) if r.id != m.id => format!("{} · in {} · {}", m.id, r.id, ago(&m.at)),
+                _ => format!("{} · {}", m.id, ago(&m.at)),
+            }).font(k.ty.small).color(k.c.text_faint));
+        let id = m.id.clone();
+        list = list.child(
+            k.interactive(
+                col()
+                    .key(format!("hit-{}", m.id))
+                    .w_full()
+                    .gap(4.0)
+                    .px(12.0)
+                    .py(8.0)
+                    .radius(k.radius.md)
+                    .fill(if open { k.c.layer_02 } else { k.c.layer_01 })
+                    .border(1.0, k.c.border_weak)
+                    .child(head)
+                    .child(text(passage(&m.body, words[0])).font(k.ty.small).color(k.c.text_muted).wrap().max_lines(2)),
+            )
+            .on_press(move |s: &mut App| toggle_expanded(s, &id)),
+        );
+        if open {
+            list = list.child(match root {
+                Some(r) => card(s, p, r, k),
+                None => col().w_full().padding(14.0).radius(k.radius.md).fill(k.c.layer_01).child(Markdown::new(m.body.clone()).selectable(true).build(k)),
+            });
+        }
+    }
+    list
+}
+
+/// The words of BODY around the first place WORD (lower case) is, on one line.
+fn passage(body: &str, word: &str) -> String {
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    // lower case can change a character's length: a place that is no boundary of FLAT starts at the beginning
+    let at = flat.to_lowercase().find(word).filter(|&i| flat.is_char_boundary(i)).unwrap_or(0);
+    let from = flat[..at].char_indices().rev().nth(80).map_or(0, |(i, _)| i);
+    let pre = if from > 0 { "…" } else { "" };
+    format!("{pre}{}", one_line(&flat[from..], 240))
 }
 
 /// A chat entry that is `coord ask`'s answer (`qN: asked…`): the question it made, if the mail has it.

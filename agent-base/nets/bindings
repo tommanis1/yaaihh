@@ -3,3 +3,5 @@
 on owner_message use owner_message
 on turn_end use turn_end
 on agent_message use agent_message
+// The agents' watch (vault designs/supervision-nets-2026-11-10.md): a clock, not an event; its tells stay dry.
+every 30m use agent_watch

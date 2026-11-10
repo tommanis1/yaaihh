@@ -1,4 +1,4 @@
-//! Running a checked net on one event. Values
+//! Running a checked net on one event (vault designs/policy-language-draft-2026-11-08.md §16.3–§16.5, §16.9). Values
 //! are JSON; an enum value is an object whose `kind` names its variant. Every call is `model-for` and a run (fresh: a
 //! decision per call; in a session: the session's model, decided at its first call); every `decide` is a policy
 //! decision; both are recorded in the decision log and named in the run's steps. Effects are collected, not taken
@@ -18,6 +18,8 @@ pub struct World {
     pub questions: HashMap<String, Vec<Value>>,
     /// How many of each agent's latest turn ends in a row its net nudged.
     pub nudged: HashMap<String, i64>,
+    /// Each running agent as the watch sees it (`Watched`: name, parent, state, held_min, idle_min, quiet_min, items).
+    pub agents: Vec<Value>,
 }
 
 /// Where the sessions are kept, and a lock per session so one call runs in it at a time.
@@ -36,7 +38,7 @@ impl Sessions {
         self.locks.lock().unwrap().entry(key.into()).or_default().clone()
     }
 
-    fn path(&self, key: &str) -> String {
+    pub fn path(&self, key: &str) -> String {
         format!("{}/{}.json", self.dir, key.replace('/', "_"))
     }
 
@@ -66,9 +68,16 @@ pub struct Outcome {
     pub fault: Option<String>,
     /// Events raised (`raise`), by name with their value; a fault is raised as `fault` by the caller.
     pub raised: Vec<(String, Value)>,
+    /// Timers set (`raise NAME(...) after D`): the event, its value, D in seconds.
+    pub later: Vec<(String, Value, u64)>,
 }
 
 struct Stop(String);
+
+/// Seconds since the epoch.
+fn epoch() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
 
 struct Rt<'a> {
     engine: &'a Engine,
@@ -79,11 +88,13 @@ struct Rt<'a> {
     agent: Option<String>,
     env: HashMap<String, Value>,
     out: Outcome,
+    /// This net's runs today, read once per run (`Rt::today`).
+    today: std::cell::OnceCell<Vec<Value>>,
 }
 
 /// Run NET on the event VALUE about AGENT.
 pub fn run(engine: &Engine, sessions: &Sessions, world: &World, net: &Net, agent: Option<String>, value: Value) -> Outcome {
-    let mut rt = Rt { engine, sessions, world, net, agent, env: HashMap::new(), out: Outcome::default() };
+    let mut rt = Rt { engine, sessions, world, net, agent, env: HashMap::new(), out: Outcome::default(), today: Default::default() };
     rt.env.insert(net.var.clone(), value);
     if let Err(Stop(f)) = rt.block(&net.body) {
         rt.out.fault = Some(f);
@@ -243,7 +254,9 @@ impl<'a> Rt<'a> {
                     Effect::Post => &["from", "text", "thread"],
                     Effect::Tell => &["to", "text"],
                     Effect::Accept => &["wake"],
-                    Effect::Fault(_) | Effect::Raise(_) => &[],
+                    Effect::Requeue | Effect::Hold => &["job", "why"],
+                    Effect::Evict => &["job", "entry", "why"],
+                    Effect::Fault(_) | Effect::Raise(..) => &[],
                 };
                 let mut obj = serde_json::Map::new();
                 for (k, a) in args.iter().enumerate() {
@@ -254,7 +267,8 @@ impl<'a> Rt<'a> {
                 self.out.effects.push(NetEffect { line: at.line, effect: effect.name(), args: args.clone(), ..Default::default() });
                 match effect {
                     Effect::Fault(n) => return Err(Stop(format!("{n}: {}", args.as_object().unwrap().values().map(text).collect::<Vec<_>>().join(", ")))),
-                    Effect::Raise(e) => self.out.raised.push((e.clone(), args)),
+                    Effect::Raise(e, None) => self.out.raised.push((e.clone(), args)),
+                    Effect::Raise(e, Some(d)) => self.out.later.push((e.clone(), args, *d)),
                     _ => {}
                 }
             }
@@ -287,6 +301,127 @@ impl<'a> Rt<'a> {
             out.entry(p.clone()).or_insert(Value::Null);
         }
         Ok(out)
+    }
+
+    /// Call NAME in context S as PLACE says, or as `context-for` decides when the policy has that decision and the call
+    /// did not fix the use (FIXED, `with use: X`). The context's lifetime ends it first (`for N calls`, `for D`);
+    /// the owner's note on it (`KEY.note` beside it) goes before the prompt once.
+    #[allow(clippy::too_many_arguments)]
+    fn in_context(&mut self, name: &str, s: &str, place: &Place, fixed: Option<String>, input: Value, agent: &str, given: Vec<Given>, line: usize) -> Result<Result<crate::policy::Called, String>, Stop> {
+        let decl = self.net.sessions.iter().find(|d| d.name == s).cloned();
+        let per = decl.as_ref().map_or(Per::Owner, |d| d.per);
+        let key = match per {
+            Per::Agent => format!("{s}@{agent}"),
+            Per::Owner => format!("{s}@owner"),
+            Per::Day => format!("{s}@{}", &crate::core::now()[..10]),
+        };
+        let lock = self.sessions.lock(&key);
+        let _held = lock.lock().unwrap();
+        let mut session = self.sessions.load(&key, &key);
+        let now = epoch();
+        let spent = decl.as_ref().is_some_and(|d| d.calls.is_some_and(|n| session.calls >= n) || d.ttl.is_some_and(|t| session.began > 0 && now >= session.began + t));
+        if spent {
+            session = crate::policy::Session { name: key.clone(), ..Default::default() };
+        }
+        let written = match place {
+            Place::With(_) => "with",
+            _ => "in",
+        };
+        let used = match fixed {
+            Some(u) => u,
+            None => self.context_for(name, s, written, &session, now, line)?,
+        };
+        let note_file = format!("{}.note", self.sessions.path(&key).trim_end_matches(".json"));
+        let note = std::fs::read_to_string(&note_file).map(|n| format!("A note from the owner on this context: {}", n.trim())).unwrap_or_default();
+        let r = match used.as_str() {
+            "fresh" => self.engine.call_prefaced(name, input, agent, given, &note),
+            "digest" => {
+                let preface = [note.clone(), self.digest()].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n\n");
+                self.engine.call_prefaced(name, input, agent, given, &preface)
+            }
+            "with" | "in" => {
+                let fork = used == "with";
+                let r = self.engine.call_in(name, input, agent, &mut session, given, &note, fork);
+                if !fork && r.as_ref().is_ok_and(|c| c.answer.is_some()) {
+                    session.began = if session.began == 0 { now } else { session.began };
+                    session.calls += 1;
+                    session.last = now;
+                }
+                self.sessions.save(&key, &session);
+                r
+            }
+            other => return Err(Stop(format!("line {line}: context-for chose `{other}` (fresh, digest, with, in)"))),
+        };
+        if r.as_ref().is_ok_and(|c| c.answer.is_some()) && !note.is_empty() {
+            let _ = std::fs::remove_file(&note_file);
+        }
+        self.out.steps.push(NetStep { line, what: format!("context {key}: {used}"), decision: None, model: None, out: None });
+        Ok(r)
+    }
+
+    /// `context-for` (supervision-nets §8a), when the policy declares it: the use for call NAME in context S, written
+    /// WRITTEN, from the facts: the context's calls, seconds since its last use (-1: never), the net. Else WRITTEN.
+    fn context_for(&mut self, name: &str, s: &str, written: &str, session: &crate::policy::Session, now: u64, line: usize) -> Result<String, Stop> {
+        if !self.engine.decisions().is_ok_and(|d| d.contains_key("context-for")) {
+            return Ok(written.into());
+        }
+        let idle = if session.last == 0 { -1 } else { (now - session.last) as i64 };
+        let fields = std::collections::BTreeMap::from([
+            ("net".to_string(), self.net.name.clone()),
+            ("call".to_string(), name.to_string()),
+            ("context".to_string(), s.to_string()),
+            ("written".to_string(), written.to_string()),
+            ("calls".to_string(), session.calls.to_string()),
+            ("idle".to_string(), idle.to_string()),
+        ]);
+        let d = self.engine.decide("context-for", fields, Vec::new()).map_err(|e| Stop(format!("line {line}: decide context-for: {e}")))?;
+        self.out.steps.push(NetStep { line, what: "decide context-for".into(), decision: Some(d.id.clone()), model: None, out: d.chosen.clone().map(Value::String) });
+        d.chosen.ok_or(Stop(format!("no_route: line {line}: decide context-for ({}): {}", d.id, d.fault.unwrap_or_default())))
+    }
+
+    /// This net's runs today (UTC) before this one, from the nets' log (its last 32 MB, a day of every net's runs
+    /// with room: 10 Nov the clerk's alone wrote about 5 MB a day): the record a stateless net reads its history from
+    /// (supervision-nets §8: the state lives in the logs). Read once per run; a line is parsed only when it names
+    /// this net.
+    fn today(&self) -> &Vec<Value> {
+        self.today.get_or_init(|| {
+            let log = format!("{}/log.jsonl", self.sessions.dir.trim_end_matches("/sessions"));
+            let today = &crate::core::now()[..10];
+            let named = format!("\"net\":\"{}\"", self.net.name);
+            let tail = std::fs::File::open(&log).ok().map(|mut f| {
+                use std::io::{Read, Seek, SeekFrom};
+                let len = f.metadata().map_or(0, |m| m.len());
+                let _ = f.seek(SeekFrom::Start(len.saturating_sub(32 << 20)));
+                let mut b = Vec::new();
+                let _ = f.read_to_end(&mut b);
+                String::from_utf8_lossy(&b).into_owned()
+            });
+            tail.unwrap_or_default()
+                .lines()
+                .filter(|l| l.contains(&named))
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .filter(|r| r["net"] == self.net.name.as_str() && r["at"].as_str().is_some_and(|a| a.starts_with(today)))
+                .collect()
+        })
+    }
+
+    /// The digest a `digest` call is given: this net's runs today, from the nets' log (its last 2 MB), the latest 20,
+    /// each its time, event, agent, effects and fault. Written by code: the facts of the day, not a model's summary.
+    fn digest(&self) -> String {
+        let runs: Vec<String> = self
+            .today()
+            .iter()
+            .map(|r| {
+                let effects: Vec<String> = r["effects"].as_array().into_iter().flatten().map(|e| format!("{} {}", text(&e["effect"]), e["args"])).collect();
+                let fault = r["fault"].as_str().map(|f| format!("; fault: {f}")).unwrap_or_default();
+                format!("- {} {} {}: {}{fault}", text(&r["at"]), text(&r["event"]), text(&r["agent"]), if effects.is_empty() { "no effect".into() } else { effects.join("; ") })
+            })
+            .collect();
+        let latest = &runs[runs.len().saturating_sub(20)..];
+        if latest.is_empty() {
+            return format!("Digest: net {} has not run today before this.", self.net.name);
+        }
+        format!("Digest: net {}'s runs today, oldest first ({} of {}):\n{}", self.net.name, latest.len(), runs.len(), latest.join("\n"))
     }
 
     fn given(&mut self, with: &[(String, Expr)], line: usize) -> Result<Vec<Given>, Stop> {
@@ -350,6 +485,16 @@ impl<'a> Rt<'a> {
                     "answer" => json!({"kind": "Answer", "q": first}),
                     "check" => json!({"kind": "Check", "check": first}),
                     "mail" => json!({"kind": "Mail", "from": first}),
+                    "agents" => json!(self.world.agents),
+                    "runs_today" => {
+                        let (field, value) = (text(&first), vals.get(1).cloned().unwrap_or(Value::Null));
+                        json!(self.today().iter().filter(|r| r["input"][&field] == value).count())
+                    }
+                    "marked_today" => {
+                        let mark = text(&first);
+                        let marked = |r: &Value| r["effects"].as_array().into_iter().flatten().filter(|e| e["args"]["text"].as_str().is_some_and(|t| t.contains(&mark))).count();
+                        json!(self.today().iter().map(marked).sum::<usize>())
+                    }
                     other => return Err(Stop(format!("line {line}: no built-in {other}"))),
                 }
             }
@@ -377,23 +522,20 @@ impl<'a> Rt<'a> {
                 let c = calls.calls.get(name).ok_or(Stop(format!("line {}: no call {name}", at.line)))?.clone();
                 let params: Vec<String> = c.params.iter().map(|(p, _)| p.clone()).collect();
                 let input = Value::Object(self.args(args, &params, at.line)?);
-                let given = self.given(with, at.line)?;
+                // `with use: X` fixes the context's use (no `context-for`); the other fields go to `model-for`
+                let (fixed, fields): (Vec<_>, Vec<_>) = with.iter().cloned().partition(|(f, _)| f == "use");
+                let fixed = match fixed.first() {
+                    Some((_, e)) => Some(text(&self.expr(e, at.line)?)),
+                    None => None,
+                };
+                let given = self.given(&fields, at.line)?;
                 let agent = self.agent.clone().unwrap_or_else(|| "owner".into());
-                let called = match place {
-                    Place::Fresh => self.engine.call(name, input, &agent, given),
-                    Place::In(s) => {
-                        let per = self.net.sessions.iter().find(|d| &d.name == s).map(|d| d.per).unwrap_or(Per::Owner);
-                        let key = match per {
-                            Per::Agent => format!("{s}@{agent}"),
-                            Per::Owner => format!("{s}@owner"),
-                        };
-                        let lock = self.sessions.lock(&key);
-                        let _held = lock.lock().unwrap();
-                        let mut session = self.sessions.load(&key, &key);
-                        let r = self.engine.call_in(name, input, &agent, &mut session, given);
-                        self.sessions.save(&key, &session);
-                        r
+                let called = match place.context() {
+                    None => {
+                        let preface = if *place == Place::Digest { self.digest() } else { String::new() };
+                        self.engine.call_prefaced(name, input, &agent, given, &preface)
                     }
+                    Some(s) => self.in_context(name, s, place, fixed, input, &agent, given, at.line)?,
                 }
                 .map_err(|e| Stop(format!("line {}: call {name}: {e}", at.line)))?;
                 let model = called.decision.chosen.clone().or_else(|| called.decision.attempts.last().map(|a| a.model.clone()));

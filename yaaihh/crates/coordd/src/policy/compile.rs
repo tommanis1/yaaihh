@@ -92,7 +92,7 @@ pub struct Compiled {
 }
 
 /// Names the compiled program uses itself; a fact type may not take one.
-const RESERVED: &[&str] = &["option", "chosen", "decide", "kind", "live", "failed", "given", "field", "violates", "ok", "c", "pen", "call_field"];
+const RESERVED: &[&str] = &["option", "chosen", "decide", "kind", "live", "failed", "given", "field", "violates", "ok", "c", "pen", "call_field", "in", "state", "cond"];
 
 /// A name as an ASP predicate (`quota-left` → `quota_left`).
 pub fn pred(name: &str) -> String {
@@ -102,6 +102,20 @@ pub fn pred(name: &str) -> String {
 /// A string as an ASP string term.
 pub fn quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+}
+
+/// The atom of instance `+FACT(ARGS).` of a declared fact type (FACTS: the declared ones and their identifiers).
+pub fn instance_atom(facts: &BTreeMap<String, Vec<String>>, fact: &str, args: &[Expr]) -> Result<String, String> {
+    let ids = facts.get(fact).ok_or(format!("+{fact}: no fact type `{fact}`"))?;
+    if ids.len() != args.len() {
+        return Err(format!("+{fact}: `{fact}` has {} identifiers, the instance gives {}", ids.len(), args.len()));
+    }
+    let vals: Vec<String> = args.iter().map(|a| match a {
+        Expr::Str(s) => quote(s),
+        Expr::Int(i) => i.to_string(),
+        _ => unreachable!("syntax.rs: an instance's values are strings and integers"),
+    }).collect();
+    Ok(format!("{}({})", pred(fact), vals.join(",")))
 }
 
 /// Compile the declarations of each scope, in order (the prelude and global files first).
@@ -217,7 +231,12 @@ pub fn compile(scopes: &[(Scope, Vec<Decl>)]) -> Result<Compiled, String> {
                     Some(t) => t.judge = Some(using.clone()),
                     None => return Err(format!("{}: Judge {decision}: no such decision", d.at)),
                 },
-                DeclKind::Fact { .. } => {}
+                DeclKind::Instance { fact, args } => {
+                    out += &instance_atom(&c.facts, fact, args).map_err(|e| format!("{}: {e}", d.at))?;
+                    out += ".\n";
+                }
+                // norms are compiled on their own (norms.rs)
+                DeclKind::Fact { .. } | DeclKind::Act { .. } => {}
             }
         }
     }
@@ -263,6 +282,7 @@ impl Vars {
         Ok(match e {
             Expr::Option => ("O".into(), vec![]),
             Expr::Any => return Err("`_` stands only for a fact's argument (`harness(option, _)`)".into()),
+            Expr::Field(f) => return Err(format!("`{f}`: a bare name is an act's field, in a norm only")),
             Expr::Str(s) => (quote(s), vec![]),
             Expr::Int(n) => (n.to_string(), vec![]),
             Expr::Call(f) => {

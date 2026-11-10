@@ -151,7 +151,8 @@ impl Solver {
         let result = (|| -> Result<(), String> {
             while let Some(m) = h.model().map_err(err)? {
                 // a model with nothing to optimise (no preference applies to this instance and none was grounded
-                // before) is optimal as it is: clingo proves optimality only of an optimisation
+                // before) is optimal as it is: clingo proves optimality only of an optimisation (9 Nov: an
+                // end-of-turn on a Waiting turn, which no preference ranks, came out as no option at all)
                 if m.cost().map_err(err)?.is_empty() || m.optimality_proven().map_err(err)? {
                     out.push(m.symbols(ShowType::SHOWN).map_err(err)?);
                 }

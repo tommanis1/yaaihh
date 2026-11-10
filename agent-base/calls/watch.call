@@ -1,0 +1,13 @@
+// agent_watch's view of an agent (nets/watch.net; vault designs/supervision-nets-2026-11-10.md): what coordd knows
+// of each running agent, given by the built-in agents(). No call: the watch decides by policy (policy/watch.eflint).
+
+type Watched {
+  name: String
+  parent: String
+  state: String
+  held_min: Int
+  idle_min: Int
+  quiet_min: Int
+  tool_min: Int
+  items: Int
+}

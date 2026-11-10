@@ -1,4 +1,4 @@
-//! The types coordd and its readers share: the requests on coordd's socket,
+//! The types coordd and its readers share (vault designs/yaaihh-2026-11-07.md §7): the requests on coordd's socket,
 //! their replies, and the numbered events of `coord watch`. yaaihh reads the same stream, so these are defined once.
 
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ pub struct Transcript {
     pub start: u64,
     pub next: u64,
     /// The transcript the offsets are in: an agent's session moves to a new file when it resumes or compacts
-    /// .
+    /// (8 Nov: the chat kept asking after byte 127M of the old file and showed nothing new).
     #[serde(default)]
     pub session: String,
 }
@@ -57,6 +57,10 @@ pub struct AgentView {
     pub id: String,
     pub name: String,
     pub parent: String,
+    /// Its place in its team, a word the policy's norms speak of (agent-base/policy/norms.eflint): `lead`, `senior`,
+    /// `member` (also when empty), `consultant` (the owner's adviser beside the teams, owner 9 Nov).
+    #[serde(default)]
+    pub role: String,
     pub kind: String,
     pub model: String,
     /// working, idle, waiting on …, stopped.
@@ -85,6 +89,20 @@ pub struct AgentView {
     /// Its tokens since it was registered, per model and service tier, summed over all of its sessions.
     #[serde(default)]
     pub usage: Vec<ModelUsage>,
+    /// Its team grant (`coord team grant`): how many agents its team may have, how many it added, who granted it.
+    #[serde(default)]
+    pub team: Option<TeamGrant>,
+    /// The agent whose team it was added to (under that agent's grant).
+    #[serde(default)]
+    pub member_of: Option<String>,
+}
+
+/// A team grant (vault designs/teams-and-tiers-2026-11-10.md): up to GRANTED agents, USED added so far, granted BY.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TeamGrant {
+    pub granted: u32,
+    pub used: u32,
+    pub by: String,
 }
 
 /// Token counts of requests. `input` is the prompt not read from or written to the cache, so the prompt is
@@ -156,6 +174,9 @@ pub struct MailView {
     pub subject: String,
     pub body: String,
     pub esc: bool,
+    /// Sent to go in after the agent's next tool call, its turn not stopped.
+    #[serde(default)]
+    pub soon: bool,
     pub delivered: Vec<String>,
     /// The recipients its sender took it back from before it reached them (`Request::Unsend`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -187,7 +208,7 @@ pub struct MailView {
     pub clerk: Option<String>,
 }
 
-/// A question recognised in a mail: the question in the
+/// A question recognised in a mail (vault designs/decisions-policies-forks-2026-11-08.md §8): the question in the
 /// recogniser's words, the passage of the mail it is, and the policy decision that chose the model which read it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Recognised {
@@ -197,7 +218,7 @@ pub struct Recognised {
     pub model: String,
 }
 
-/// A field of a decision its caller fixed, who gave it, when.
+/// A field of a decision its caller fixed (vault designs/policy-language-draft-2026-11-08.md §14.4), who gave it, when.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Given {
     pub field: String,
@@ -312,7 +333,7 @@ pub struct Snapshot {
     pub net_errors: Vec<String>,
 }
 
-/// One run of a net on an event: its steps, the effects
+/// One run of a net on an event (vault designs/policy-language-draft-2026-11-08.md §15–§16): its steps, the effects
 /// it took (in a dry run: would have taken), a fault that ended it, the events it raised.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct NetRun {
@@ -339,8 +360,8 @@ pub struct NetRun {
     pub marks: Vec<NetMark>,
 }
 
-/// The owner's mark on one part of a run
-/// : the `k`-th step (a call or decision) or effect named `what`, right
+/// The owner's mark on one part of a run (owner m168, 9 Nov: corrections whether the decision is live or not, so a
+/// judgment is tried before it is switched on): the `k`-th step (a call or decision) or effect named `what`, right
 /// or wrong, with a note. Kept in `$COORD/nets/marks.jsonl`; a later mark on the same part replaces it, and one with
 /// verdict `none` takes it back.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -531,6 +552,9 @@ pub enum Request {
         body: String,
         #[serde(default)]
         esc: bool,
+        /// In after the agent's next tool call, its turn not stopped (`esc` wins).
+        #[serde(default)]
+        soon: bool,
         #[serde(default)]
         as_host: Option<String>,
         #[serde(default)]
@@ -542,8 +566,8 @@ pub enum Request {
     /// Refused when it reached every one already.
     Unsend { id: String },
     /// Deliver mail ID now to the recipients still waiting for it, stopping their turns first (its sender only; the
-    /// esc right: agents below the sender).
-    Now { id: String },
+    /// esc right: agents below the sender). SOON: after their next tool calls instead, no turn stopped.
+    Now { id: String, #[serde(default)] soon: bool },
     /// A question to the owner (its first line is its subject); it does not wait: the reply's `out` is its id, the
     /// owner's answer comes as mail. `on` makes it a follow-up in that question's thread.
     Ask { body: String, #[serde(default)] on: Option<String> },
@@ -581,6 +605,14 @@ pub enum Request {
     Add { name: String, kind: String, model: String },
     /// Agent NAME is called TO from now on (stopped agents only; its session, id and history stay).
     Rename { name: String, to: String },
+    /// Agent NAME's role from now on (a word the policy's norms name: `lead`, `consultant`, ...); the owner sets it.
+    Role { name: String, role: String },
+    /// `coord team ask TEXT`: the calling agent asks to form a team; TEXT goes to the approvers the norms name.
+    TeamAsk { text: String },
+    /// `coord team grant NAME N`: agent NAME's team may have N agents from now on.
+    TeamGrant { name: String, granted: u32 },
+    /// The norms' verdict on act ACT with field values ARGS, about mail thread THREAD (`none`), and why.
+    Norm { act: String, args: Vec<String>, thread: String },
     /// The calling process becomes agent NAME (it then execs the agent).
     Run { name: String },
     /// Session facts of agent NAME known before its first hook (a Codex thread id and app-server socket), merged into
@@ -599,6 +631,12 @@ pub enum Request {
     /// The calling process is an agent's terminal holder (`coord-pty`): coordd puts it in the cgroup `pty`, where
     /// what it starts is unclaimed until it runs `coord run`.
     Pty,
+    /// A terminal holder (`coord-pty`) saw a dialog on NAME's screen: TITLE (its question) and the SCREEN's lines
+    /// around it. Only told: the holder answers nothing, coordd tells the owner the first time a title is seen.
+    Popup { name: String, title: String, screen: String },
+    /// A terminal holder (`coord-pty`) tells whether NAME's screen shows a turn running (Claude Code's footer reads
+    /// "esc to interrupt" while one runs): the state of a Claude Code agent (owner, 10 Nov), told on each change.
+    Busy { name: String, busy: bool },
     /// The bridge's own (`coordc bridge`, next to the holders' sockets; coordd refuses them): attach to NAME's
     /// terminal, which answers with a [`PtyEvent::Screen`] and then its output; `rows`/`cols` 0 keep its size.
     Attach { name: String, #[serde(default)] rows: u16, #[serde(default)] cols: u16 },
@@ -634,8 +672,8 @@ pub struct Sent {
     pub cache: Option<CacheUse>,
 }
 
-/// A request's use of the prompt cache, against the previous request of its session
-/// .
+/// A request's use of the prompt cache, against the previous request of its session (owner 8 Nov,
+/// vault/designs/cache-misses-2026-11-08.md).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct CacheUse {
     /// The part of the cache write kept for 1 h (the rest for 5 min).
@@ -687,7 +725,7 @@ impl PtyEvent {
 }
 
 /// The effects of the net language (the parser's keywords before `(`; the Clerk page colours them).
-pub const NET_EFFECTS: &[&str] = &["deliver", "reject", "nudge", "ask", "post", "tell", "accept"];
+pub const NET_EFFECTS: &[&str] = &["deliver", "reject", "nudge", "ask", "post", "tell", "accept", "requeue", "evict", "hold"];
 
 pub mod netlayout;
 
@@ -706,7 +744,7 @@ mod b64 {
     }
 }
 
-/// The holders' wire. `coord-pty NAME` serves
+/// The holders' wire (vault designs/yaaihh-2026-11-07.md, "Terminals: a holder per agent"). `coord-pty NAME` serves
 /// `$COORD/pty/NAME.sock`; each message either way is a frame: one kind byte, the payload's length (4 bytes, big
 /// endian), the payload. A size is rows then cols, two bytes each, big endian. Closing the connection detaches.
 pub mod pty {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# codex in the box: the host's static Codex build kept in $COORD/opt/codex, its state in
+# codex in the box (owner 6 Nov): the host's static Codex build kept in $COORD/opt/codex, its state in
 # $COORD/codex-home (on the host, so a recreated box keeps it), talking to OpenAI through the host proxy with the
 # box's proxy key. No OpenAI login lives in the box; agent-delegate's codex backend runs this.
 set -euo pipefail

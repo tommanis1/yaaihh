@@ -1,4 +1,4 @@
-//! Harness sessions: a net's
+//! Harness sessions (owner m116, 8 Nov; vault designs/policy-language-draft-2026-11-08.md §16.4, §16.10): a net's
 //! session is a real agent harness session, Codex or Claude Code, started on its first call and resumed by its id
 //! on every later one, so the harness keeps the context (not a chat history coordd replays). The harness is the
 //! model's (`harness(model, H)`, a system fact from the model's provider); both talk to the models through the
@@ -11,14 +11,17 @@ use serde_json::Value;
 use std::process::{Command, Stdio};
 
 /// One turn of a harness session: PROMPT to MODEL on HARNESS, in session RESUME (none: a new session), the answer
-/// held to SCHEMA. Its answer (the JSON the harness returned) and the session's id.
-pub fn turn(harness: &str, coord: &str, proxy: &Proxy, model: &str, prompt: &str, schema: &Value, resume: Option<&str>) -> Result<(Value, String), Failure> {
+/// held to SCHEMA. Its answer (the JSON the harness returned) and the session's id. FORK (with RESUME): the turn runs
+/// on a copy of the session that is not kept (`codex exec fork --ephemeral`, `claude --fork-session
+/// --no-session-persistence`), so the session itself does not advance (a context used `with`, §8a).
+#[allow(clippy::too_many_arguments)]
+pub fn turn(harness: &str, coord: &str, proxy: &Proxy, model: &str, prompt: &str, schema: &Value, resume: Option<&str>, fork: bool) -> Result<(Value, String), Failure> {
     let dir = format!("{coord}/nets/{harness}");
     let work = format!("{dir}/work");
     std::fs::create_dir_all(&work).map_err(|e| Failure::Error(format!("{work}: {e}")))?;
     let out = match harness {
-        "codex" => codex(&dir, &work, proxy, model, prompt, schema, resume, coord)?,
-        "claude" => claude(&dir, &work, proxy, model, prompt, schema, resume)?,
+        "codex" => codex(&dir, &work, proxy, model, prompt, schema, resume, coord, fork)?,
+        "claude" => claude(&dir, &work, proxy, model, prompt, schema, resume, fork)?,
         other => return Err(Failure::Error(format!("no harness `{other}` (codex, claude)"))),
     };
     Ok(out)
@@ -38,7 +41,7 @@ fn ran(mut cmd: Command, what: &str) -> Result<String, Failure> {
 /// keeps RESUME), the answer from its last message. The box's Codex is `$COORD/opt/codex` (bin/codex), the host's the
 /// one on PATH.
 #[allow(clippy::too_many_arguments)]
-fn codex(dir: &str, work: &str, proxy: &Proxy, model: &str, prompt: &str, schema: &Value, resume: Option<&str>, coord: &str) -> Result<(Value, String), Failure> {
+fn codex(dir: &str, work: &str, proxy: &Proxy, model: &str, prompt: &str, schema: &Value, resume: Option<&str>, coord: &str, fork: bool) -> Result<(Value, String), Failure> {
     let home = format!("{dir}/home");
     std::fs::create_dir_all(&home).map_err(|e| Failure::Error(format!("{home}: {e}")))?;
     // files of this turn only (turns of different agents' sessions run at the same time)
@@ -50,8 +53,14 @@ fn codex(dir: &str, work: &str, proxy: &Proxy, model: &str, prompt: &str, schema
     let bin = if std::path::Path::new(&boxed).exists() { boxed } else { "codex".into() };
     let mut cmd = Command::new(bin);
     cmd.arg("exec");
-    if let Some(id) = resume {
-        cmd.args(["resume", id]);
+    match (resume, fork) {
+        (Some(id), true) => {
+            cmd.args(["fork", id, "--ephemeral"]);
+        }
+        (Some(id), false) => {
+            cmd.args(["resume", id]);
+        }
+        (None, _) => {}
     }
     let provider = format!("model_providers.nets={{name=\"proxy\",base_url=\"{}/v1\",wire_api=\"responses\",env_key=\"CPA_API_KEY\"}}", proxy.url);
     cmd.args(["--json", "--skip-git-repo-check", "-c", "model_provider=\"nets\"", "-c", &provider, "-c", "sandbox_mode=\"read-only\"", "-m", model])
@@ -77,11 +86,15 @@ fn codex(dir: &str, work: &str, proxy: &Proxy, model: &str, prompt: &str, schema
 
 /// `claude -p [--resume ID] --output-format json --json-schema`, no tools and no settings: the session id and the
 /// structured output from its result.
-fn claude(dir: &str, work: &str, proxy: &Proxy, model: &str, prompt: &str, schema: &Value, resume: Option<&str>) -> Result<(Value, String), Failure> {
+#[allow(clippy::too_many_arguments)]
+fn claude(dir: &str, work: &str, proxy: &Proxy, model: &str, prompt: &str, schema: &Value, resume: Option<&str>, fork: bool) -> Result<(Value, String), Failure> {
     let mut cmd = Command::new("claude");
     cmd.args(["-p", prompt, "--model", model, "--output-format", "json", "--tools", "", "--setting-sources", ""]).args(["--json-schema", &schema.to_string()]);
     if let Some(id) = resume {
         cmd.args(["--resume", id]);
+        if fork {
+            cmd.args(["--fork-session", "--no-session-persistence"]);
+        }
     }
     cmd.current_dir(work).env("CLAUDE_CONFIG_DIR", format!("{dir}/home")).env("ANTHROPIC_BASE_URL", &proxy.url).env("ANTHROPIC_API_KEY", &proxy.key).env_remove("ANTHROPIC_AUTH_TOKEN");
     let out: Value = serde_json::from_str(&ran(cmd, "claude -p")?).map_err(|e| Failure::Invalid(format!("claude -p: not JSON: {e}")))?;

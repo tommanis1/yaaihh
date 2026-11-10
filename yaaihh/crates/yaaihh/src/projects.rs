@@ -60,36 +60,63 @@ pub fn bring_up(s: &mut App, i: usize) {
     let (base, wake) = (s.base.clone(), s.wake.clone());
     let p = &mut s.projects[i];
     let cmd = if p.boxed { vec![format!("{base}/box/box.sh"), "start".into(), p.id.clone()] } else { vec![format!("{base}/bin/host-coordd"), "start".into(), p.id.clone()] };
+    p.starting = Some(background(cmd, wake));
+}
+
+/// CMD run off the frame, its output's last line or why it failed on the receiver, logged, and the window woken.
+fn background(cmd: Vec<String>, wake: Option<rune::Waker>) -> Receiver<Result<String, String>> {
     let (tx, rx) = channel();
-    p.starting = Some(rx);
     std::thread::spawn(move || {
         let said = cmd.join(" ");
-        crate::log::line(&format!("bring up: {said}"));
+        crate::log::line(&format!("run: {said}"));
+        let last = |b: &[u8]| String::from_utf8_lossy(b).lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no message").to_string();
         let r = match Command::new(&cmd[0]).args(&cmd[1..]).stdin(std::process::Stdio::null()).output() {
-            Ok(o) if o.status.success() => Ok(()),
-            Ok(o) => {
-                let err = String::from_utf8_lossy(&o.stderr).to_string() + &String::from_utf8_lossy(&o.stdout);
-                Err(format!("{said} failed ({}): {}", o.status, err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no message")))
-            }
+            Ok(o) if o.status.success() => Ok(last(&o.stdout)),
+            Ok(o) => Err(format!("{said} failed ({}): {}", o.status, last(&[o.stderr, o.stdout].concat()))),
             Err(e) => Err(format!("{said}: {e}")),
         };
-        crate::log::line(&format!("bring up: {said}: {}", r.as_ref().err().map_or("done", |e| e.as_str())));
+        crate::log::line(&format!("run: {said}: {}", r.as_ref().unwrap_or_else(|e| e)));
         let _ = tx.send(r);
         if let Some(w) = wake {
             w();
         }
     });
+    rx
+}
+
+/// Fork agent NAME of the current project: `roster fork NAME` through its box or host coordd, a new agent on a copy of
+/// NAME's conversation with the owner its parent (agent-base bin/roster). Shown when it is up (`brought_up`).
+pub fn fork(s: &mut App, name: &str) {
+    let (base, wake) = (s.base.clone(), s.wake.clone());
+    let Some(p) = s.projects.get_mut(s.cur) else { return };
+    if p.forking.is_some() {
+        return;
+    }
+    let tool = if p.boxed { format!("{base}/box/box.sh") } else { format!("{base}/bin/host-coordd") };
+    p.forking = Some(background(vec![tool, "sh".into(), p.id.clone(), "roster".into(), "fork".into(), name.into()], wake));
 }
 
 /// The bring-ups that ended since the last frame; true when one did.
 pub fn brought_up(s: &mut App) -> bool {
     let mut any = false;
-    for p in &mut s.projects {
+    let mut forked = None;
+    for (i, p) in s.projects.iter_mut().enumerate() {
         if let Some(r) = p.starting.as_ref().and_then(|rx| rx.try_recv().ok()) {
             p.starting = None;
             p.start_error = r.err();
             any = true;
         }
+        if let Some(r) = p.forking.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            p.forking = None;
+            forked = Some((i, r));
+            any = true;
+        }
+    }
+    // roster fork's last line is "NEW: forked from NAME (session ...)": the new agent is shown
+    match forked {
+        Some((i, Ok(said))) if i == s.cur => s.sel = crate::Sel::Agent(said.split(':').next().unwrap_or_default().to_string()),
+        Some((_, Err(e))) => s.notice = Some(e),
+        _ => {}
     }
     any
 }
