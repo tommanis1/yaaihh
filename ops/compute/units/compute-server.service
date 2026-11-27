@@ -1,0 +1,13 @@
+[Unit]
+Description=compute: NativeLink CAS, action cache and scheduler (ops/compute/nl.sh run server)
+
+[Service]
+# where this checkout is (edit to yours); COMPUTE_* settings, e.g. COMPUTE_STATE on the NVMe, in the env file
+EnvironmentFile=-%h/.config/compute/env
+ExecStart=%h/yaaihh/ops/compute/nl.sh run server
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

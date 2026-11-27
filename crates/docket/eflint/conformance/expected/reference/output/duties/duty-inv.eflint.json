@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type tautology\n+tautology()\nNew invariant tautology\nviolations:\n  violated invariant!: contradiction\nNew type contradiction\nNew invariant contradiction\nviolations:\n  violated invariant!: contradiction\n+string(\"Amy\")\nviolations:\n  violated duty!: still-works(string(\"Amy\"),string(\"Amy\"))\n  violated invariant!: contradiction\nNew type still-works\n+still-works(string(\"Amy\"),string(\"Amy\"))\n#5 > "
+ }
+}

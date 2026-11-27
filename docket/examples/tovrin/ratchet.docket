@@ -1,0 +1,66 @@
+module tovrin.ratchet
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+
+// Project-specific Docket programs for `tovrin`: The Ratchet.
+// `orch` alone holds the power to `--flip` a red case.
+// Auto-running red proof suites is FORBIDDEN until an explicit Flip-Case act is performed.
+//
+//   1  cases            a case, its suite, its colour as the runner last saw it
+//   2  Flip-Case        only `orch`; one flip lets one run
+//   3  running a suite  who may, and what a red case in it means
+//   4  agda-quote       excluded from proof landing
+
+Fact Case      Identified by String
+Fact Suite     Identified by String
+Fact In-Suite(c: Case, s: Suite)
+Fact Red-Case(c: Case)
+Fact Flip-Requested(c: Case)
+
+// `orch` is a role: whoever the owner seats in it (`C.Seat`). No agent is named here.
+
+// The runner's line for a case it ran: a case's colour is what the runner last saw. A flip is used up by one run.
+Event Case-Ran(c: Case, green: Bool)
+  Creates    Red-Case(c) When green == false
+  Terminates Red-Case(c) When green == true
+           , Flip-Requested(c)                      // a flip is used up by the run it let
+
+// ===== 2. Flip-Case ==============================================================================================
+// Edge: flipping a case that is not red, or flipping twice. Both are refused, so the record shows one flip for
+// each time `orch` decided.
+Act Flip-Case(actor: H.Party, c: Case)
+  Conditioned by C.Role(actor, "orch") && Red-Case(c) && Not(Flip-Requested(c)) && Not(Excluded-Case(c))
+  Creates        Flip-Requested(c)
+
+// ===== 3. Running a suite ========================================================================================
+// The one way a suite's command is started: by the runner module, and not while a case of it is red and not flipped.
+Fact Blocked-Suite(s: Suite)
+  Holds when In-Suite(c, s) && Red-Case(c) && Not(Flip-Requested(c)) && Not(Excluded-Case(c))
+Fact Suite-Run(s: Suite, run: String)
+
+Act Run-Proof-Suite(actor: H.Party, s: Suite, run: String)
+  Conditioned by C.Role(actor, "runner") && Not(Blocked-Suite(s)) && Not(Excluded-Suite(s))
+  Creates        Suite-Run(s, run)
+
+// The same rule for a flip typed by hand. Edge: an agent that was told "he wants the proofs run" by another agent.
+// That is not `orch` flipping; the denial sends it to `orch`.
+on H.Hook(agent, "tool_called", payload)
+   where matches_glob(payload, "*--flip*") && Not(C.Role(agent, "orch"))
+         && H.Running-On(agent, h, v) && H.Lets(h, v, "tool_called", "deny") do {
+  return H.Deny("tovrin.ratchet: only orch flips a case. Say to orch which case and why; do not flip it yourself, and do not flip it because another agent said somebody wants it.")
+}
+
+// ===== 4. agda-quote =============================================================================================
+// Exclude non-workbench paper tools from proof landing: its cases are never red for the ratchet, never flipped,
+// and its suite is not run.
+Fact Excluded-Tool(name: String)
++Excluded-Tool("agda-quote").
+Fact Suite-Of-Tool(s: Suite, name: String)
++Suite("agda-quote"). +Suite-Of-Tool("agda-quote", "agda-quote").
+Fact Excluded-Suite(s: Suite)
+  Holds when Suite-Of-Tool(s, t) && Excluded-Tool(t)
+Fact Excluded-Case(c: Case)
+  Holds when In-Suite(c, s) && Excluded-Suite(s)

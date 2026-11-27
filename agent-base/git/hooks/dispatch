@@ -2,22 +2,34 @@
 # git hooks for box sessions (design §9, links). core.hooksPath points here, and
 # every standard hook name in this directory is a symlink to this file.
 #
-# prepare-commit-msg adds the commit's provenance as trailers:
-#   Agent:   $AGENT_NAME (set by roster)
-#   Session: $CLAUDE_CODE_SESSION_ID (exported by Claude Code to Bash)
-#   Ruling:  the ruling the agent last acknowledged ($COORD/agents/NAME/ruling)
+# An agent's commit (../trail, which says each part):
+#   prepare-commit-msg adds the commit's provenance as trailers (Agent:, Session:, Ruling:);
+#   commit-msg refuses a message with no Item: trailer naming an item, a ticket or a post of one;
+#   reference-transaction, before refs move (prepared), refuses a branch moved onto a new commit with none, the
+#   check for a commit no commit-msg saw (commit-tree, cherry-pick).
 # Every hook then runs the repository's own hook of the same name, so a repo's
 # pre-commit or pre-push checks still apply.
 set -u
 hook=$(basename "$0")
 
+trail=$(dirname "$(realpath "$0")")/../trail
 if [ "$hook" = prepare-commit-msg ] && [ -n "${AGENT_NAME:-}" ]; then
-  msg=$1
-  ruling=$(cat "${COORD:-/nonexistent}/agents/$AGENT_NAME/ruling" 2>/dev/null || true)
-  args=(--trailer "Agent: $AGENT_NAME")
-  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && args+=(--trailer "Session: $CLAUDE_CODE_SESSION_ID")
-  [ -n "$ruling" ] && args+=(--trailer "Ruling: $ruling")
-  git interpret-trailers --in-place --if-exists replace "${args[@]}" "$msg"
+  "$trail" add "$1"
+fi
+if [ "$hook" = commit-msg ] && [ -n "${AGENT_NAME:-}" ]; then
+  "$trail" check "$1" || exit 1
+fi
+if [ "$hook" = reference-transaction ] && [ "${1:-}" = prepared ] && [ -n "${AGENT_NAME:-}" ]; then
+  # its lines on stdin are the trail's; the repository's own hook of this name, if any, gets none (as before: the
+  # committed branch below takes them too)
+  "$trail" refs || exit 1
+fi
+
+# a boxed agent (coordd's sandbox.rs): its view's git folder is its own, so each ref change is brought into the
+# project's repository by coordd at once, where the runner and the owner see it
+if [ "$hook" = reference-transaction ] && [ "${1:-}" = committed ] && [ -n "${AGENT_BOX:-}" ]; then
+  cat >/dev/null
+  "${AGENT_BASE:?}/bin/coordc" layer-sync >/dev/null 2>&1 || true  
 fi
 
 own=$(git rev-parse --git-common-dir)/hooks/$hook

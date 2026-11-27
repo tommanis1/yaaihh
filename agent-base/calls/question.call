@@ -1,0 +1,23 @@
+// The question kind's steps: the lead's, and the owner's when the lead passes it up.
+call answer(ask: Text, context: Text?) -> Answer(text: Text) | Dismiss(why: Text) | Up(why: Text)
+  task answer
+  template
+    A question for you:
+    {{ ask }}
+    {{ if context }}
+
+    {{ context }}
+    {{ end }}
+
+    Answer it; or dismiss it, saying why; or, if only the owner can answer it, pass it up, saying why.
+
+call reply(ask: Text, context: Text?, why: Text) -> Answer(text: Text) | Dismiss(why: Text)
+  task answer
+  template
+    {{ ask }}
+    {{ if context }}
+
+    {{ context }}
+    {{ end }}
+
+    Passed to you by the lead: {{ why }}

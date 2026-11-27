@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type bad\nNew type duty\n#2 > \n#2 > +duty(int(2),string(\"x\"))\n#3 > duty(int(2),string(\"x\")) = True\n\n#3 > +duty(int(2),string(\"y\"))\n#4 > duty(int(2),string(\"x\")) = True\nduty(int(2),string(\"y\")) = True\n\n#4 > +bad(duty(int(3),string(\"x\")))\n#5 > duty(int(2),string(\"x\")) = True\nduty(int(2),string(\"y\")) = True\nbad(duty(int(3),string(\"x\"))) = True\n\n#5 > violations:\n  violated duty!: duty(int(3),string(\"x\"))\n+duty(int(3),string(\"x\"))\n#6 > duty(int(2),string(\"x\")) = True\nduty(int(2),string(\"y\")) = True\nduty(int(3),string(\"x\")) = True\nbad(duty(int(3),string(\"x\"))) = True\n\n#6 > "
+ }
+}

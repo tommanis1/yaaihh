@@ -1,0 +1,10 @@
+// The limited form's question step (kinds/question.kind here): the owner's, straight from the asker, as `coord ask`
+// reached him before Docket (paper-research m1586, 1).
+call ask_owner(ask: Text, context: Text?) -> Answer(text: Text) | Dismiss(why: Text)
+  task answer
+  template
+    {{ ask }}
+    {{ if context }}
+
+    {{ context }}
+    {{ end }}

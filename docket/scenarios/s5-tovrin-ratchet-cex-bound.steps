@@ -1,0 +1,78 @@
+# Scenario 5: tovrin. A red case is not run without orch's flip; a counterexample that is a printout of Haskell
+# values counts for nothing; a run more than a tenth over its bound is a regression only orch or the owner overrules.
+# The suite's command with the runner's line for the case, a counterexample's text and the replay's answer are the
+# stand-in's. The measurements are stated by the world module; the denial of a flip typed as a command is a
+# handler's answer at `tool_called` and is not in this file yet.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../examples/tovrin/ratchet.docket
+load ../examples/tovrin/runner.docket
+load ../examples/tovrin/cex.docket
+load ../examples/tovrin/budgets.docket
+load ../examples/tovrin/project.docket
+load s5-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+# the ratchet: a red case blocks its suite for everybody, the runner included, until orch flips it
+holds Blocked-Suite(proofs)
+tovrin.runner: Run-Proof-Suite(tovrin.runner, proofs, r0) -> refused policy -> raised Refused
+b1: Run-Proof-Suite(b1, proofs, r0) -> refused policy -> raised Refused
+b1: State-Hypothesis(b1, c1, green) -> performed -> ended ()
+b1: Submit(b1, j1, c1, proofs) -> refused policy -> raised Refused
+b1: Flip-Case(b1, lemma-3) -> refused policy -> raised Refused
+tovrin.runner: Flip-Case(tovrin.runner, lemma-3) -> refused policy -> raised Refused
+or1: Flip-Case(or1, lemma-3) -> performed -> ended ()
+or1: Flip-Case(or1, lemma-3) -> refused policy -> raised Refused
+not Blocked-Suite(proofs)
+# one flip lets one run: the builder submits, the runner module starts the suite at the widest width the box has
+# memory for, the command says red, and the runner's own line for the case uses the flip up
+stand-in: Command(build-runner agda -j8 --suite proofs c1) -> red; Case-Ran(lemma-3, false)
+b1: Submit(b1, j1, c1, proofs) -> performed -> ended ()
+holds Suite-Run(proofs, j1)
+holds runner.Finished(j1, red)
+not Flip-Requested(lemma-3)
+holds Blocked-Suite(proofs)
+tovrin.runner: Run-Proof-Suite(tovrin.runner, proofs, r2) -> refused policy -> raised Refused
+# and the builder reads the result before it may ask again
+b1: State-Hypothesis(b1, c1, red) -> performed -> ended ()
+b1: Submit(b1, j2, c1, proofs) -> refused policy -> raised Refused
+# a counterexample that is a printout of Haskell values: the module reads its text and refutes it before anything
+# is run
+or1: Assign(or1, b1, cex-17) -> performed -> ended ()
+holds Required(cex-17, no_raw_haskell_ast_dump)
+b1: Verify-Condition(b1, tovrin.cex, cex-17, no_raw_haskell_ast_dump) -> refused policy -> raised Refused
+b1: Refute-Condition(tovrin.cex, tovrin.cex, cex-17, no_raw_haskell_ast_dump, dump) -> refused source -> raised Refused
+stand-in: TextOf(cex-17) -> MkForest [MkTree [MkAddress 3]]
+b1: Claim-Done(b1, cex-17) -> performed -> ended ()
+holds Refuted(cex-17, no_raw_haskell_ast_dump)
+violated Owes-Valid-Result(b1, or1, cex-17, no_raw_haskell_ast_dump)
+not Shown-Violated(cex-17)
+not Claimed-Done(b1, cex-17)
+# one in Tovrin's own syntax: the module has it replayed, and the replay saw the property break
+or1: Assign(or1, b1, cex-18) -> performed -> ended ()
+stand-in: TextOf(cex-18) -> control ingress apply drop_all
+stand-in: Command(p4check replay cex-18) -> violated
+b1: Claim-Done(b1, cex-18) -> performed -> ended ()
+holds Verified(cex-18, no_raw_haskell_ast_dump)
+holds Verified(cex-18, distinct_from_p4tv_syntax)
+holds Verified(cex-18, valid_tovrin_p4_syntax)
+holds Shown-Violated(cex-18)
+# the bound: 15 % over is a regression, 9 % is not
+holds Regressed(lemma-3, run_ms)
+not Regressed(lemma-4, run_ms)
+holds Owes-Time-Bound(tovrin.runner, o1, lemma-3, run_ms)
+violated Owes-Time-Bound(tovrin.runner, o1, lemma-3, run_ms)
+unviolated Owes-Time-Bound(tovrin.runner, o1, lemma-4, run_ms)
+b1: Overrule-Bound(b1, lemma-3, run_ms) -> refused policy -> raised Refused
+tovrin.runner: Overrule-Bound(tovrin.runner, lemma-3, run_ms) -> refused policy -> raised Refused
+or1: Overrule-Bound(or1, lemma-3, run_ms) -> performed -> ended ()
+not Regressed(lemma-3, run_ms)
+unviolated Owes-Time-Bound(tovrin.runner, o1, lemma-3, run_ms)

@@ -4,7 +4,7 @@
 # Two agents start from a roster in tmux, then:
 #   1. registration: both write session.json with a live inbox socket;
 #   2. coord msg: a token posted to b mid-turn reaches it (b writes it out);
-#   3. trailers: b's commit carries Agent:, Session: and Ruling: trailers, and
+#   3. trailers: b's commit carries Agent: and Session: trailers, and
 #      the host fetches it from sandbox-BOX;
 #   4. coord status: a row per agent and no alarm.
 # Creates the test repo ~/agent-test-repo if missing. KEEP=1 leaves the box running.
@@ -41,7 +41,7 @@ EOF
 cat >"$COORD/roster/b.md" <<'EOF'
 You are agent b in a smoke test. Run these as separate Bash tool calls, one at a time: `sleep 4; echo tick 1`, then tick 2, and so on up to tick 8.
 If a message from another session arrives meanwhile, write its exact text to $COORD/test/b.txt with one Bash call, then continue the ticks.
-After the ticks: in the current directory (a git repo), run `coord ack 7`, then create b.txt containing hello and commit it with the message "smoke: b". Then stop.
+After the ticks: in the current directory (a git repo), create b.txt containing hello and commit it with the message "smoke: b", then a blank line, then the line "Item: N-1" (an agent's commit names its item; agent-base/git/trail). Then stop.
 EOF
 printf 'a %s a.md\nb %s b.md\n' "$A_MODEL" "$B_MODEL" >"$COORD/roster/roster"
 wd=$(box sh bash -c 'pwd')
@@ -61,7 +61,7 @@ else no "coord msg: b.txt has '$(cat "$COORD/test/b.txt" 2>/dev/null)'"; fi
 committed() { box sh bash -c "cd '$wd' && git log -1 --format=%s | grep -q 'smoke: b'"; }
 if waitfor 240 committed; then
   tr=$(box sh bash -c "cd '$wd' && git log -1 --format=%B")
-  if grep -q '^Agent: b$' <<<"$tr" && grep -q '^Session: ' <<<"$tr" && grep -q '^Ruling: 7$' <<<"$tr"; then ok "trailers: Agent, Session, Ruling on b's commit"
+  if grep -q '^Agent: b$' <<<"$tr" && grep -q '^Session: ' <<<"$tr"; then ok "trailers: Agent, Session on b's commit"
   else no "trailers: $(tr '\n' '|' <<<"$tr")"; fi
   if box fetch >/dev/null 2>&1 && git -C "$REPO" log -1 --format=%s "sandbox-$BOX/main" | grep -q 'smoke: b'; then ok "host fetch: sandbox-$BOX/main has b's commit"
   else no "host fetch from sandbox-$BOX"; fi

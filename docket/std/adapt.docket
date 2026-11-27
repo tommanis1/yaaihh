@@ -1,0 +1,249 @@
+module std.adapt
+
+import std.hooks as H
+import std.budgets as B
+import std.comms as C
+import std.rails as R
+import std.control as Ctrl
+
+// Model-adaptive programs: to a model its harness is one more user, so a different model is sent a different program.
+// No rule here names a model, a maker or a program: profiles are the project's, templates are the packs' (std/programs/).
+//
+//   1  profiles and tasks   what the project says of each model and each kind of task
+//   2  templates            what a pack says of its program, and for which tiers and classes it is
+//   3  selection            the project's choice, else the leanest pack that fits
+//   4  effort               the U-curve: the template's, raised for deep work and a step for each refutation, within
+//                           what the model takes; refuted at its top, the work goes to a party of another family
+//   5  review               by a seated party of another family, the project's pairing first
+//   6  the brief            a pack's words, shown once or every turn, and its hint at each change
+
+// ===== 1. Profiles and tasks =====================================================================================
+
+Fact Tier      Identified by String
+Fact Class     Identified by String   // scoped, deep (architecture, proofs), review
+Fact Task-Kind Identified by String
+
+Fact Model-Profile(model: String, autonomy_tier: Tier, context_tier: Tier)   // the project's
+Fact Task-Class(kind: Task-Kind, class: Class)                                                 // the project's
+Fact Of-Kind(target: R.Artifact, kind: Task-Kind)                                              // said with the work
+
+// The model is the one std.budgets says the agent runs, its family the one std.rails was told when it was seated,
+// so the reviewer chosen here is one rails lets find; the work is what std.rails assigned it.
+Fact Profile-Of(agent: H.Party, autonomy: Tier, context: Tier)
+  Holds when B.On-Model(agent, m) && Model-Profile(m, autonomy, context)
+Fact Family-Of(agent: H.Party, family: R.Family)
+  Holds when R.Of-Family(agent, family)
+Fact Working-On(agent: H.Party, kind: Task-Kind)
+  Holds when R.Assigned(agent, t) && Of-Kind(t, kind)
+
+// ===== 2. Templates ==============================================================================================
+
+Fact Template    Identified by String
+Fact Passthrough Identified by String
+Fact Scaffolding Identified by String
+Fact Effort      Identified by String
+
+// direct: nothing of this text on a tool call; hinted: the pack's Tool-Hint at each call that changes a file.
++Passthrough("direct"). +Passthrough("hinted").
+
+Fact Program-Template(name: Template, passthrough_mode: Passthrough, scaffolding_level: Scaffolding, hint_pack: String,
+                      effort_default: Effort)
+Fact For-Class(template: Template, class: Class)
+Fact For-Autonomy(template: Template, tier: Tier)   // none stated for a template: every tier
+Fact For-Context(template: Template, tier: Tier)    // none stated for a template: every tier
+Fact Leaner(a: Template, b: Template)               // where both fit, A is taken: the less hand-holding first
+
+// ===== 3. Selection ==============================================================================================
+
+Fact Fits-Template(agent: H.Party, kind: Task-Kind, template: Template)
+  Holds when Working-On(agent, kind) && Task-Class(kind, c) && Profile-Of(agent, a, x) && For-Class(template, c)
+             && Program-Template(template, m, s, p, e)
+             && (For-Autonomy(template, a) || Not(Exists t : For-Autonomy(template, t)))
+             && (For-Context(template, x) || Not(Exists t : For-Context(template, t)))
+
+// The project's own choice, stated or written with `Extend`; it stands over every pack's.
+Fact Chosen-Template(agent: H.Party, kind: Task-Kind, template: Template)
+
+Fact Selected-Program(agent: H.Party, task_kind: Task-Kind, template: Template)
+  Holds when Chosen-Template(agent, task_kind, template)
+  Holds when Fits-Template(agent, task_kind, template) && Not(Exists t : Chosen-Template(agent, task_kind, t))
+             && Not(Exists t : Fits-Template(agent, task_kind, t) && Leaner(t, template))
+
+// ===== 4. Effort =================================================================================================
+// The U-curve: too little effort and the work is careless, too much and it wanders. A template says where its
+// models do best; deep work is raised; work refuted below its model's top goes one step up for each refutation, and
+// stays up while it is mended. The project's choice stands over all of it. A session is started at the
+// highest effort its work runs at, each piece's ask brought down to what its model takes; it is read only then, so
+// work assigned later, or raised after a refutation, changes it at the session's next start.
+// A model text that already names its effort (MODEL:EFFORT, as he picks one) is a model of its own: a profile stated
+// for that text selects its program, and its effort is his, never changed here.
+// A `:` anywhere is read so: a model id with a tag (an Ollama model such as qwen2.5:14b) is never given an effort.
+// Work of a kind no program here is selected for has no planned effort: it is neither raised nor moved by its
+// refutations, and stays with its builder as std.rails alone has it. That is no trap: nothing here governs it.
+
+Fact Effort-Step(lower: Effort, higher: Effort)
++Effort-Step("low", "medium"). +Effort-Step("medium", "high"). +Effort-Step("high", "xhigh"). +Effort-Step("xhigh", "max").
+Fact Effort-Above(high: Effort, low: Effort)
+  Holds when Effort-Step(low, high)
+  Holds when Effort-Step(mid, high) && Effort-Above(mid, low)
+Fact Takes-Effort(model: String, effort: Effort)   // the project's: its harness's levels for that model
+Fact Class-Effort(class: Class, effort: Effort)
++Class-Effort("deep", "high").
+Fact Chosen-Effort(agent: H.Party, kind: Task-Kind, effort: Effort)   // the project's, as Chosen-Template
+
+Fact Planned-Effort(agent: H.Party, kind: Task-Kind, effort: Effort)
+  Holds when Chosen-Effort(agent, kind, effort)
+  Holds when Selected-Program(agent, kind, t) && Task-Class(kind, c) && Class-Effort(c, effort)
+             && Not(Exists e : Chosen-Effort(agent, kind, e))
+  Holds when Selected-Program(agent, kind, t) && Program-Template(t, m, s, p, effort) && Task-Class(kind, c)
+             && Not(Exists e : Chosen-Effort(agent, kind, e)) && Not(Exists e : Class-Effort(c, e))
+
+// Each refutation below the top records the effort the work was run at (Raised), and the next attempt runs at the
+// lowest effort its model takes above the highest recorded: one step a refutation, to the top. A model that takes
+// none at or below what is asked runs at the lowest it takes; a model that takes none is run as it is.
+Fact Raised(who: H.Party, target: R.Artifact, effort: Effort)   // refuted while run at this effort, below the top
+Fact Asked-Effort(agent: H.Party, target: R.Artifact, effort: Effort)
+  Holds when R.Assigned(agent, target) && Of-Kind(target, k) && Planned-Effort(agent, k, effort)
+             && Not(Exists e : Raised(agent, target, e))
+  Holds when Raised(agent, target, t) && Not(Exists u : Raised(agent, target, u) && Effort-Above(u, t))
+             && B.On-Model(agent, m) && Takes-Effort(m, effort) && Effort-Above(effort, t)
+             && Not(Exists l : Takes-Effort(m, l) && Effort-Above(l, t) && Effort-Above(effort, l))
+Fact Run-Effort(agent: H.Party, target: R.Artifact, effort: Effort)   // what its model takes, at or below the ask
+  Holds when Asked-Effort(agent, target, a) && B.On-Model(agent, m) && Takes-Effort(m, effort)
+             && (effort == a || Effort-Above(a, effort))
+             && Not(Exists h : Takes-Effort(m, h) && Effort-Above(h, effort) && (h == a || Effort-Above(a, h)))
+  Holds when Asked-Effort(agent, target, a) && B.On-Model(agent, m) && Takes-Effort(m, effort)
+             && Not(Exists l : Takes-Effort(m, l) && (l == a || Effort-Above(a, l)))
+             && Not(Exists l : Takes-Effort(m, l) && Effort-Above(effort, l))
+Fact Effort-For(agent: H.Party, kind: Task-Kind, effort: Effort)   // what its work of that kind asks
+  Holds when Asked-Effort(agent, t, effort) && Of-Kind(t, kind)
+
+Fact Session-Effort(agent: H.Party, effort: Effort)
+  Holds when Run-Effort(agent, t, effort) && B.On-Model(agent, m) && Not(contains(m, ":"))
+             && Not(Exists t2, e : Run-Effort(agent, t2, e) && Effort-Above(e, effort))
+
+// The model text a session is started on: MODEL:EFFORT, as the session driver takes it, or MODEL alone.
+fn session_model(agent: H.Party, model: String) -> Program<String> {
+  efforts <- return (Foreach e : e When Session-Effort(agent, e));
+  match first(efforts) {
+    | Some(e) => return "{{ model }}:{{ e }}"
+    | None    => return model
+  }
+}
+
+// Refuted at the top effort its model takes, more effort cannot help: the work is released from its holders and
+// given to a party of another family than each holder and each party it was taken from before, one that holds one
+// of the holders' roles, picked by the host as std.rails' Pick-Other picks. Refuted below the top, the effort it was
+// run at is recorded and it goes one step up (Raised). Nobody of such a family left: the work stays, and whoever
+// gave it is told once. A model that names its effort, or takes none, is at its top: its effort is never raised.
++H.Party("std.adapt").
+Fact Can-Raise(agent: H.Party, target: R.Artifact)
+  Holds when Run-Effort(agent, target, e) && B.On-Model(agent, m) && Not(contains(m, ":"))
+             && (Exists h : Takes-Effort(m, h) && Effort-Above(h, e))
+Fact At-Top(agent: H.Party, target: R.Artifact)
+  Holds when R.Assigned(agent, target) && Of-Kind(target, k) && (Exists p : Planned-Effort(agent, k, p))
+             && Not(Can-Raise(agent, target))
+Fact Taken-From(who: H.Party, target: R.Artifact)   // it held this work when it was refuted at the top
+Fact Had(who: H.Party, target: R.Artifact)
+  Holds when R.Assigned(who, target)
+  Holds when Taken-From(who, target)
+Fact Left-Unmoved(target: R.Artifact)                // its giver was told nobody of another family is left
+Act Raise(actor: H.Party, who: H.Party, target: R.Artifact, effort: Effort)
+  Conditioned by R.Reassigner(actor) && Can-Raise(who, target) && Run-Effort(who, target, effort)
+                 && (Exists c : R.Refuted(target, c))
+  Creates        Raised(who, target, effort)
+Act Take-From(actor: H.Party, who: H.Party, target: R.Artifact)
+  Conditioned by R.Reassigner(actor) && R.Assigned(who, target) && (Exists c : R.Refuted(target, c))
+  Creates        Taken-From(who, target)
+Act Leave-Unmoved(actor: H.Party, target: R.Artifact)
+  Conditioned by R.Reassigner(actor) && Not(Left-Unmoved(target))
+  Creates        Left-Unmoved(target)
+
+// Work given back ends what was raised for it, and so does work found met with nothing else of it refuted: whoever
+// is given it next, or its next refutation, starts at what is planned.
+Extend Act R.Release-Work
+  Terminates Raised(who, target, e) When Raised(who, target, e)
+Extend Act R.Verify-Condition
+  Terminates Raised(w, target, e) When Raised(w, target, e) && Not(Exists c : R.Refuted(target, c) && c != cond)
+
+// Below the top, each holder that can go up does, once for the refutation.
+on R.Refute-Condition(actor, by, target, cond, why)
+   where (Exists w : R.Assigned(w, target) && Can-Raise(w, target)) && Not(Exists w : At-Top(w, target))
+         && R.Reassigner("std.adapt") do {
+  par w in (Foreach w : w When Can-Raise(w, target)) {
+    par e in (Foreach e : e When Run-Effort(w, target, e)) up to 1 { Raise(self, w, target, e) }
+  };
+  return ()
+}
+
+// One run for one refutation, however many holders are at their top.
+on R.Refute-Condition(actor, by, target, cond, why)
+   where (Exists w : At-Top(w, target)) && R.Reassigner("std.adapt") do {
+  holders <- return (Foreach a : a When R.Assigned(a, target));
+  than    <- return (Foreach a : a When Had(a, target));
+  roles   <- return (Foreach r : r When (Exists a : R.Assigned(a, target) && C.Role(a, r))
+                                      && (Exists p : C.Role(p, r) && Not(Exists a : Had(a, target) && Not(R.Other-Family(p, a)))));
+  match first(roles) {
+    | Some(r) => {
+        to <- perform R.Pick-Other(r, than);
+        par a in holders { Take-From(self, a, target); R.Release-Work(self, a, target) };
+        R.Assign(self, to, target);
+        return ()
+      }
+    | None    => {
+        if Left-Unmoved(target) { return () } else {
+          Leave-Unmoved(self, target);
+          par g in (Foreach g : g When R.Given-By(target, g) && g != "std.adapt") {
+            perform Ctrl.Deliver(self, g, "{{ target }} was refuted at the top effort of every builder it has had, and no builder of another family is left to give it to.")
+          };
+          return ()
+        }
+      }
+  }
+}
+
+// ===== 5. Review =================================================================================================
+// A review is by another family whenever a party of one is seated: the families paired with the author's first.
+
+Fact Cross-Family-Pair(author_family: R.Family, reviewer_family: R.Family)   // the project's
+Fact Seated(family: R.Family)
+  Holds when Family-Of(p, family)
+
+Fact Reviewer-Family(agent: H.Party, family: R.Family)
+  Holds when Family-Of(agent, a) && Cross-Family-Pair(a, family) && family != a && Seated(family)
+  Holds when Family-Of(agent, a) && Seated(family) && family != a
+             && Not(Exists f : Cross-Family-Pair(a, f) && f != a && Seated(f))
+
+// ===== 6. The brief ==============================================================================================
+
+Fact Brief(pack: String, text: String)       // a pack's words to a model running its template
+Fact Tool-Hint(pack: String, text: String)   // a hinted pack's words after a call that changes a file
+Fact Every-Turn(scaffolding: Scaffolding)    // a pack's: its brief is shown at each turn, not once
+Fact Briefed(agent: H.Party, template: Template)
+
+Fact Brief-Owed(agent: H.Party, template: Template)
+  Holds when Selected-Program(agent, k, template) && Program-Template(template, m, s, p, e)
+             && (Every-Turn(s) || Not(Briefed(agent, template)))
+
+Act Take-Brief(agent: H.Party, template: Template)   // by the agent's own run, when it has been given the words
+  Conditioned by Brief-Owed(agent, template)
+  Creates        Briefed(agent, template)
+
+// What a compaction drops is shown again.
+Extend Act H.Reach
+  Terminates Briefed(agent, t) When moment == "compacting" && Briefed(agent, t)
+
+on H.Hook(agent, "turn_begins", payload)
+   where Brief-Owed(agent, t) && Program-Template(t, m, s, pack, e) && Brief(pack, text)
+         && H.Running-On(agent, h, v) && H.Lets(h, v, "turn_begins", "inject") do {
+  Take-Brief(agent, t);
+  rest <- perform H.Hook(agent, "turn_begins", payload);
+  return H.combine(H.Inject(text), rest)
+}
+
+on H.Hook(agent, "tool_called", payload)
+   where (Exists f : H.Changes(agent, f)) && Selected-Program(agent, k, t) && Program-Template(t, "hinted", s, pack, e)
+         && Tool-Hint(pack, text) && H.Running-On(agent, h, v) && H.Lets(h, v, "tool_called", "inject") do {
+  rest <- perform H.Hook(agent, "tool_called", payload);
+  return H.combine(H.Inject(text), rest)
+}

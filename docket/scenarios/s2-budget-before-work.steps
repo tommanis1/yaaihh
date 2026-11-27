@@ -1,0 +1,54 @@
+# Scenario 2: a 44-minute check against a budget of 7 minutes, written before the work.
+# The check's command and the owner's answer to the request for more are the stand-in's.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load s2-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+w1: Assign(w1, b1, engine-check) -> performed -> ended ()
+holds Required(engine-check, within_budget)
+# said beforehand, 44 minutes is refused
+b1: Spend(b1, yaaihh-engine-check, wall_ms, 2640000) -> refused policy -> raised Refused
+# it runs 44 minutes anyway: the engine charges what the command took, the ledger records it whatever the limit
+# says, the owner is asked and says no, and the run ends there
+stand-in: Command(./ops/release/train-check.sh engine) -> green; wall_ms 2640000
+stand-in: Request-Budget(yaaihh-engine-check, wall_ms, 2640000) -> Denied(no)
+b1: Run-Engine-Check(b1) -> performed -> ended std.budgets.Err(no)
+holds Total(yaaihh-engine-check, wall_ms, 2640000)
+holds Total(yaaihh-engine-check, owner_clicks, 1)
+holds Over-Budget(yaaihh-engine-check, wall_ms)
+holds Check-Regressed()
+# the claim is refuted by the ledger, through the module that reads it
+b1: Claim-Done(b1, engine-check) -> performed -> ended ()
+holds Refuted(engine-check, within_budget)
+not Claimed-Done(b1, engine-check)
+holds Owes-Valid-Result(b1, w1, engine-check, within_budget)
+violated Owes-Valid-Result(b1, w1, engine-check, within_budget)
+b1: Verify-Condition(b1, yaaihh.hygiene, engine-check, within_budget) -> refused policy -> raised Refused
+# saying it again changes nothing
+b1: Claim-Done(b1, engine-check) -> performed -> ended ()
+holds Refuted(engine-check, within_budget)
+# only the owner gives room
+b1: Raise-Limit(b1, yaaihh-engine-check, wall_ms, 3000000) -> refused policy -> raised Refused
+o1: Raise-Limit(o1, yaaihh-engine-check, wall_ms, 3000000) -> performed -> ended ()
+holds Limit(yaaihh-engine-check, wall_ms, 420000)
+holds Cap(yaaihh-engine-check, wall_ms, 3000000)
+not Over-Budget(yaaihh-engine-check, wall_ms)
+b1: Claim-Done(b1, engine-check) -> performed -> ended ()
+holds Verified(engine-check, within_budget)
+not Owes-Valid-Result(b1, w1, engine-check, within_budget)

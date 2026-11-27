@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type ints\nNew type some-strings\nNew type strings\n+ints(1)\n+ints(2)\n+ints(3)\nquery successful\nquery successful\nquery successful\n+strings(\"A\")\n+strings(\"B\")\nquery successful\nquery successful\nquery successful\n+some-strings(\"A\")\n+some-strings(\"B\")\n+some-strings(\"C\")\n+some-strings(\"D\")\n+some-strings(\"E\")\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n#20 > "
+ }
+}

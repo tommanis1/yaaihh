@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "+actor(\"John\")\nNew type do\n+do(actor(\"John\"))\nNew type just-do\n+just-do(actor(\"John\"))\nquery successful\nquery successful\n#7 > "
+ }
+}

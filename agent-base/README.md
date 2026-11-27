@@ -5,21 +5,21 @@ yaaihh's `release.sh` links the built programs (`coordd`, `coordc`, `coord-pty`)
 
 ## Commands (`bin/`)
 
-- `coord`: an agent's (and the owner's) side of coordd: `msg [--esc] NAME TEXT`, `ask`, `mail`, `ls`, `log NAME`,
+- `coord`: an agent's (and the owner's) side of coordd: `msg NAME TEXT`, `esc NAME` (stop a turn, nothing else; `esc --all`: every turn of the project at once), `hold-mail on|off` (the owner's hold on agents' mail: only his posts pass, until off), `ask`, `mail`, `ls`, `log NAME`,
   `item start ID`, `ready` (the build queue), `attach NAME` (an agent's terminal).
 - `roster`: starts agents, each on a terminal of its own held by `coord-pty`: `add NAME MODEL PROMPT [DIR]`,
   `up FILE` (one agent per line), `restart NAME` (on its own session), `resume` (the agents that were running when
   coordd last went down).
 - `host-coordd start|stop|sh NAME`: a project on this machine, its coordd as a systemd user unit.
 - `codex`, `codex-rpc`: Codex agents, driven through Codex's app server.
-- `coord-relay`: delivers box agents' mail to Claude Code sessions on the host (`ops/units/coord-relay.service`).
+- `coord-relay`: delivers box agents' mail to Claude Code sessions on the host (`ops/systemd/coord-relay.service`).
 
 ## Claude Code (`claude/`)
 
 - `hook`: each hook event (prompt, tool calls, turn end) to coordd, which tracks every agent's state from them.
 - `channel.py`: the MCP channel mail arrives through, as the agent's next turn.
 - `settings.json`: the base settings `roster` writes each agent's from (permissions, hooks, the channel).
-- `team-mail.md`: what agents are told about mail.
+- `standing.md`: what every agent with tools is told: steps, notes, posts, questions (appended by `roster`).
 
 ## The model route (`lib/route.sh`)
 
@@ -38,12 +38,12 @@ A project can run its agents in a Docker Sandbox with permission prompts off:
 - `sbx/gate-test.sh`, `smoke-test.sh`, `msg-test.sh`, `roster-msg-test.sh`, `bg-test.sh`: what a box depends on
   (agents messaging each other mid-turn, the model route, Docker inside, memory), checked in a real box.
 
-## The clerk (`nets/`, `calls/`, `policy/`)
+## Kinds, calls and policy (`kinds/`, `calls/`, `policy/`)
 
-- `nets/clerk.net`: the rules run on each owner message and turn end.
-- `calls/*.call`: the typed model calls they make.
-- `policy/*.eflint`: the decisions they take (which model, which effect), solved with clingo.
-- `nets/live`: which effects are taken for real; the rest are only logged.
+- `kinds/*.kind`: the ticket kinds and the bindings that open them on events (the owner's words and an agent's turn
+  go to `filing`; a project adds its own in `PROJECT/kinds/`).
+- `calls/*.call`: the typed steps and the clerk's model calls.
+- `policy/*.eflint`: who fills a role, who may act, which model a call runs on, solved with clingo.
 
 ## Git (`git/hooks/`)
 

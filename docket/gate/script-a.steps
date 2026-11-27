@@ -1,0 +1,57 @@
+# Script A of the two-library gate (two-library-gate.md, section 4), as the engine's gate test runs it. The forms
+# of its lines are in the head of script-b.steps.
+load library-a.docket
+# 1 to 4: an act, a condition, an actor not chosen, the closing rule
+w1: Submit(w1, c1, w2) -> performed -> ended ()
+holds Owes-Green(w1, w2, c1)
+w2: Submit(w2, c1, w1) -> refused policy -> raised Refused
+w2: Submit(w1, c2, w2) -> refused source -> raised Refused
+w1: Withdraw(w1, c1) -> refused closes -> raised Refused
+# 5: par, iterate, a driver's Effect and Event, Charge taken by a handler, a gap, a default, a root arm
+stand-in: Carry(_, c1, lint, Go) -> false; tokens 30
+stand-in: Carry(_, c1, unit, Go) -> true; tokens 40; Check-Passed(c1, unit)
+stand-in: Gap(_) -> { return true }
+stand-in: Carry(_, c1, unit, Skip(passed before)) -> true
+stand-in: Carry(_, c1, lint, Go) -> true; tokens 20; Check-Passed(c1, lint)
+w1: Build(w1, c1) -> performed -> ended Some(true)
+holds Used(c1, tokens, 90)
+holds Reported(c1)
+# 6, 7: closed by the claimant
+w1: Land(w1, c1) -> refused policy -> raised Refused
+w2: Land(w2, c1) -> performed -> ended ()
+not Owes-Green(w1, w2, c1)
+# 8: a budget that runs out; the cost is recorded though the run is dropped
+w1: Submit(w1, c3, w2) -> performed -> ended ()
+stand-in: Carry(_, c3, lint, Go) -> true; tokens 60; Check-Passed(c3, lint)
+stand-in: Carry(_, c3, unit, Go) -> true; tokens 60; Check-Passed(c3, unit)
+w1: Build(w1, c3) -> performed -> ended None
+holds Used(c3, tokens, 120)
+not Reported(c3)
+record has tokens, 60)
+# 9: a reaction read after the transition, acting as its module
+w1: Submit(w1, c4, w2) -> performed -> ended ()
+w1: Report(w1, c4) -> performed -> ended ()
+violated Owes-Green(w1, w2, c4)
+holds Flagged(c4)
+record has performed(gate.a.Flag(gate.a, c4), gate.a,
+# 10: a filling has its run's powers and no more
+w1: Submit(w1, c5, w2) -> performed -> ended ()
+stand-in: Carry(_, c5, lint, Go) -> false; tokens 30
+stand-in: Carry(_, c5, unit, Go) -> true; tokens 40; Check-Passed(c5, unit)
+stand-in: Gap(_) -> { Land(self, "c5"); return true }
+w1: Build(w1, c5) -> performed -> raised Refused
+record has refused(gate.a.Land(w1, c5)
+# 11: a filling is checked when it arrives
+w1: Submit(w1, c6, w2) -> performed -> ended ()
+stand-in: Carry(_, c6, lint, Go) -> false; tokens 30
+stand-in: Carry(_, c6, unit, Go) -> true; tokens 40; Check-Passed(c6, unit)
+stand-in: Gap(_) -> { perform Charge("tokens", 0 - 100); return true }
+w1: Build(w1, c6) -> performed -> raised Unfit
+record has a program performs no Charge: drivers state the costs (10)
+record lacks -100
+# 12: a guarded value from outside is stopped at the boundary
+w1: Submit(w1, c7, w2) -> performed -> ended ()
+stand-in: Advise(_, c7, unit) -> Stop(no)
+w1: Probe(w1, c7) -> performed -> raised Fault
+record has Lets(stand-in, 1, before_check, Stop) is not a line of the loaded text
+record lacks effect(gate.a.Carry

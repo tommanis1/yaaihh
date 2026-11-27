@@ -1,0 +1,98 @@
+module yaaihh.v1
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import yaaihh.desk as Desk
+
+// v1's record restated as the desk's own facts, once, by an importer party (the folder's README, `yaaihh.v1`).
+
+// ===== What is stated ============================================================================================
+
+Fact Source(sha: String, lines: Int)                // v1's record: the sha256 of the part imported, and its lines
+Fact Importer(by: H.Party)                          // the one party that takes the words
+Fact Kind(thread: Desk.Thread, kind: String)        // thread, item, question, head, words, note, text-change, request, brain
+Fact V1-Id(thread: Desk.Thread, id: String)         // N-12, I-7, Q-3, H-9, as he knows them
+Fact Words-Taken(thread: Desk.Thread)               // its passages' words are in this record's answer lines
+Fact Closed()                                       // the import is done, and no line of it is taken after
+
+// ===== The importer's lines ======================================================================================
+
+Event Record-Taken(sha: String, lines: Int, by: H.Party)
+  Conditioned by Not(Closed()) && Not(Exists s, l : Source(s, l))
+  Creates        Source(sha, lines), Importer(by)
+
+Event Thread-Was(thread: Desk.Thread, id: String, kind: String, by: H.Party, words: String, seconds: Int)
+  Conditioned by Not(Closed()) && Not(Exists w : Desk.Opened-By(thread, w))
+  Creates        thread, Desk.Opened-By(thread, by), Desk.Title(thread, words), Kind(thread, kind), V1-Id(thread, id)
+
+Event Retitled-Was(thread: Desk.Thread, words: String)
+  Conditioned by Not(Closed())
+  Terminates Desk.Title(thread, w) When Desk.Title(thread, w)
+  Creates    Desk.Title(thread, words)
+
+Event Under-Was(thread: Desk.Thread, parent: Desk.Thread)
+  Conditioned by Not(Closed())
+  Terminates Desk.Under(thread, p) When Desk.Under(thread, p)
+  Creates    Desk.Under(thread, parent)
+
+// A party's passage among agents; each passage below is followed by `Desk.Written` with its v1 time.
+Event Passage-Was(node: C.Node, by: H.Party, thread: Desk.Thread)
+  Conditioned by Not(Closed())
+  Creates        C.Spoken(node, by), C.Gone-Over(node), Desk.Posted(node, thread)
+
+// A party's passage said to him: in his inbox, as `C.Says-To-Owner` puts one there.
+Event Said-To-Him-Was(node: C.Node, by: H.Party, thread: Desk.Thread)
+  Conditioned by Not(Closed())
+  Creates        C.Spoken(node, by), C.Gone-Over(node), C.For-Owner-Inbox(node), Desk.Posted(node, thread)
+
+// His own post, to whoever or nobody; before it, one `His-Words-To-Were` for each party he wrote it to.
+Event His-Post-Was(node: C.Node, thread: Desk.Thread)
+  Conditioned by Not(Closed())
+  Creates        Desk.Posted(node, thread), Desk.His(node)
+
+Event His-Words-To-Were(node: C.Node, to: H.Party)
+  Conditioned by Not(Closed())
+  Creates        C.Owner-Said(node, to), C.Heard(to, node)
+
+// A passage in his inbox that v1 shows as answered, closed or opened by him.
+Event Seen-Was(node: C.Node)
+  Conditioned by Not(Closed())
+  Creates        Desk.Seen-By-Him(node)
+
+Event Ended-Was(thread: Desk.Thread, how: String, seconds: Int)
+  Conditioned by Not(Closed())
+  Creates        Desk.Ended(thread, how)
+
+// ===== Still open at the import ==================================================================================
+// Only where the package already has a meaning for an open one; a closed ticket is history, not work.
+
+// An open item with a holder: the work stays owed in v2's terms, with no condition made up for it.
+Event Work-Was(item: R.Artifact, holder: H.Party, giver: H.Party)
+  Conditioned by Not(Closed()) && holder != giver && Not(Exists h : R.Assigned(h, item))
+  Creates        item, R.Assigned(holder, item), R.Given-By(item, giver)
+
+// An open question to him, before its asking passage: the passage stays with him.
+Event Asked-Him-Was(node: C.Node)
+  Conditioned by Not(Closed())
+  Creates        C.For-Owner-Inbox(node)
+
+// ===== The words, and the end ===================================================================================
+
+// After a thread's passages: their words, one after the other, answered by the importer from v1's record.
+Act Take-Words(by: H.Party, thread: Desk.Thread)
+  Conditioned by Not(Closed()) && Importer(by) && Kind(thread, k) && Not(Words-Taken(thread))
+  Does {
+    par n in (Foreach n : n When Desk.Posted(n, thread)) up to 1 { perform C.TextOf(n) };
+    Words-Were-Taken(thread);
+    return ()
+  }
+
+// Performed by `Take-Words` after its last answer; the importer's driver file must not name it.
+Event Words-Were-Taken(thread: Desk.Thread)
+  Conditioned by Not(Closed())
+  Creates        Words-Taken(thread)
+
+Event Import-Closed()
+  Conditioned by Not(Closed()) && Not(Exists t, k : Kind(t, k) && Not(Words-Taken(t)))
+  Creates        Closed()

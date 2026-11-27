@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\n#2 > \n#2 > executed transition: \nx(int(7)) \n|\n`- x(int(6)) \n   |\n   `- x(int(5)) \n      |\n      `- x(int(4)) \n         |\n         `- x(int(3)) \n            |\n            `- x(int(2)) \n               |\n               `- x(int(1)) \n                  |\n                  `- x(int(0)) \n+int(0)\n+int(1)\n+int(2)\n+int(3)\n+int(4)\n+int(5)\n+int(6)\n+int(7)\n#3 > int(0) = True\nint(1) = True\nint(2) = True\nint(3) = True\nint(4) = True\nint(5) = True\nint(6) = True\nint(7) = True\n\n#3 > executed transition: \nx(int(3)) \n|\n`- x(int(2)) \n   |\n   `- x(int(1)) \n      |\n      `- x(int(0)) \n#4 > int(0) = True\nint(1) = True\nint(2) = True\nint(3) = True\nint(4) = True\nint(5) = True\nint(6) = True\nint(7) = True\n\n#4 > -x(int(2))\n#5 > int(0) = True\nint(1) = True\nint(2) = True\nint(3) = True\nint(4) = True\nint(5) = True\nint(6) = True\nint(7) = True\nx(int(2)) = False\n\n#5 > executed transition: \nx(int(3)) \n|\n`- x(int(2)) \n   |\n   `- x(int(1)) \n      |\n      `- x(int(0)) \n#6 > int(0) = True\nint(1) = True\nint(2) = True\nint(3) = True\nint(4) = True\nint(5) = True\nint(6) = True\nint(7) = True\nx(int(2)) = False\n\n#6 > "
+ }
+}

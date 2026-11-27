@@ -1,0 +1,15 @@
+// An item's close (tickets-patterns, kind item). It is held, never delivered: it is answered by `coord item close I WHY`,
+// by the holder or by anyone the policy's `edit` lets, when the work is done or given up.
+call close(title: Text, note: Ref?) -> Done(why: Text) | Dropped(why: Text)
+  task close
+  template
+    The item {{ title }} is to be closed: Done with what was done, or Dropped with why it was given up.
+
+// His goal's close (kind item, from his ASK; N-1511 p47, paper-research N-1446 p2255): held, never delivered. Its
+// duty check answers it (the hold's `on duties`): Done by the lines that met its duties, or Broken at the first one
+// broken. Only Dropped is its lead's, by `coord item drop I WHY`, when the goal is given up.
+call goal(title: Text, ask: Ref) -> Done(why: Text?, by: [Ref]?) | Broken(duty: Text?, line: Ref?) | Dropped(why: Text)
+  task goal
+  template
+    His goal {{ title }} ({{ ask }}) closes by its duties: Done when the policy owes none, Broken at the first one
+    broken. Drop it, with why, only when it is given up.

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": "query failed\n"
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type b\n+a(int(1),int(2))\nquery failed\n#4 > "
+ }
+}

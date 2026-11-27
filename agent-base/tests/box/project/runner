@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""box-run-test.sh's runner, as coordd runs a project's runner (project.rs to_runner), in the box as coordd's user:
+
+  runner step TICKET --to AGENT CALL ARGS-JSON   a step given: written to steps.jsonl beside this file; refused (exit 1)
+                                                 when hand_in's commits are not by repository or a commit is not in its
+                                                 repository (read with git, as the runner's user)
+  runner events                                  coordd's event source: runner_seen, then each hand_in's step_end, OnLine
+                                                 with the main repository's commit as the top
+"""
+import json, os, subprocess, sys, time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+STEPS = HERE / "steps.jsonl"
+REPOS = json.loads((HERE / "repos.json").read_text())
+
+
+def step(args):
+    ticket, to, call, body = args[0], args[2], args[3], json.loads(args[4])
+    if call == "hand_in":
+        commits = body.get("commits")
+        if not isinstance(commits, dict):
+            sys.exit(f"hand_in: commits not by repository: {commits!r}")
+        for repo, sha in commits.items():
+            r = subprocess.run(["git", "-C", REPOS[repo], "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True, text=True)
+            if r.returncode != 0:
+                sys.exit(f"hand_in: {sha} is not in {repo} ({REPOS[repo]}): {r.stderr.strip()}")
+    line = {"ticket": ticket, "to": to, "call": call, "args": body, "uid": os.getuid(),
+            "cgroup": Path("/proc/self/cgroup").read_text().strip()}
+    with STEPS.open("a") as f:
+        f.write(json.dumps(line) + "\n")
+    print(f"step {call} of {ticket} taken")
+
+
+def events():
+    print(json.dumps({"event": "runner_seen", "up": True}), flush=True)
+    seen = 0
+    while True:
+        lines = STEPS.read_text().splitlines() if STEPS.exists() else []
+        for l in lines[seen:]:
+            s = json.loads(l)
+            if s["call"] != "hand_in":
+                continue  # a step of the coord's older tickets, handed again at the start: taken, not answered
+            top = next(iter(s["args"].get("commits", {}).values()), "0" * 40)
+            print(json.dumps({"event": "step_end", "name": s["ticket"], "call": s["call"], "head": "OnLine", "top": top}), flush=True)
+        seen = len(lines)
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    {"step": lambda: step(sys.argv[2:]), "events": events}[sys.argv[1]]()

@@ -1,0 +1,17 @@
+module scenario.s4
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import yaaihh.train as Train
+
+// Scenario 4's parties and the three passages `w1` wrote: one plain, one that reads like "done", one that reads
+// like words for the owner. `w1` holds a piece of work with one condition.
++H.Party("o1").  +C.Role("o1", "owner").
++H.Party("w1").  +C.Role("w1", "front").
++H.Party("cl1"). +C.Role("cl1", "clerk").
++C.Key("k-map"). +C.Key("k-owner").
++C.Node("n1"). +C.Node("n2"). +C.Node("n3"). +C.Node("n4"). +C.Node("n5"). +C.Node("n6").
++C.Spoken("n1", "w1"). +C.Spoken("n2", "w1"). +C.Spoken("n3", "w1").
++C.Seen("w1", "k-map"). +C.Seen("w1", "k-owner").
++R.Artifact("map-work"). +Train.Piece("map-work").

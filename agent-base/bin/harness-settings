@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""harness-settings HARNESS AGENT: what the owner set for HARNESS's agent AGENT, read from up to three `harness.toml`
+files and printed as one JSON object (walk items 17 and 30: the same switches at the level of all of yaaihh, of a
+project, and of one agent, the later winning key by key):
+
+    1. the flavor's root, the folder of the `projects` folder the project's own folder is in (beside its standing.md
+       and model-guesses.toml): every agent of every project of his;
+    2. the project's own folder, beside the project file $COORD/project names;
+    3. $COORD/agents/AGENT/harness.toml: this agent alone, an explicit override.
+
+Each file has a table per harness (`claude`, `codex`, `opencode`, `agy`); only HARNESS's is read. Its keys:
+
+    safety_check = true|false   the harness's own safety check on what an agent runs, where it has one that our
+                                settings can lift (Claude Code: its check on dangerous rm commands, lifted only under
+                                bypass permissions). Unset: off for an agent in a box, on outside one.
+    tools_off = ["NAME", ...]   tools the agent is not given, as the harness names them
+    parts_off = ["TEXT", ...]   parts of the harness's own system prompt to leave out, each as its exact text (what
+                                the System prompt pane shows of a part); one no longer in the prompt removes nothing
+    packs = ["NAME", ...]       prompt packs added beyond its model's (agent-base/prompts/packs/NAME.md), by role
+
+The output also says where each key came from (`from`: KEY -> file), and `boxed`; and how HARNESS takes them, so roster
+and the wire check (tests/harness-wire) use one mapping: `flags`, its arguments; `env`, its environment; `permission`,
+opencode's rules; `not_taken`, each switch it has no way to take, in words, so a start says so and drops none in
+silence. What each harness takes was read in its own program text (Claude Code 2.1.332, Codex 0.160.0, opencode
+1.18.34) and, for Claude Code, seen on the wire. A file that does not parse is an error: nothing is printed and the
+exit is 1, so a start does not go on with a switch silently dropped.
+"""
+import json
+import os
+import re
+import sys
+import tomllib
+
+KEYS = {"safety_check": bool, "tools_off": list, "parts_off": list, "packs": list}
+
+# Codex 0.160.0's built-in tools that a setting takes out of the request, and that setting (measured on loopback by the
+# request's tools, accounts-lead N-1789): the goal tools go together, as one feature. Its others (exec_command,
+# write_stdin, request_user_input, view_image) have no such setting.
+CODEX_TOOLS = {
+    "web_search": 'web_search="disabled"',
+    "get_goal": "features.goals=false",
+    "create_goal": "features.goals=false",
+    "update_goal": "features.goals=false",
+    "multi_agent_v1": "features.multi_agent=false",
+}
+
+
+def files(agent):
+    coord = os.environ.get("COORD", "")
+    out = []
+    try:
+        project_file = open(os.path.join(coord, "project")).readline().strip()
+    except OSError:
+        project_file = ""
+    if project_file:
+        project_dir = os.path.dirname(project_file)
+        parent = os.path.dirname(os.path.realpath(project_dir))
+        if os.path.basename(parent) == "projects":
+            out.append(os.path.join(os.path.dirname(parent), "harness.toml"))
+        out.append(os.path.join(project_dir, "harness.toml"))
+    if coord and agent:
+        out.append(os.path.join(coord, "agents", agent, "harness.toml"))
+    return out
+
+
+def main(argv):
+    if len(argv) != 3:
+        sys.exit("usage: harness-settings HARNESS AGENT")
+    harness, agent = argv[1], argv[2]
+    boxed = bool(os.environ.get("ROSTER_BOX") or os.environ.get("COORD_IN_BOX"))
+    got = {"safety_check": not boxed, "tools_off": [], "parts_off": [], "packs": [], "boxed": boxed, "from": {}}
+    for path in files(agent):
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "rb") as f:
+                table = tomllib.load(f).get(harness, {})
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            print(f"harness-settings: {path}: {e}", file=sys.stderr)
+            return 1
+        for key, value in table.items():
+            want = KEYS.get(key)
+            if want is None:
+                print(f"harness-settings: {path}: [{harness}] has no key {key}; the keys are {', '.join(KEYS)}", file=sys.stderr)
+                return 1
+            if not isinstance(value, want) or (want is list and not all(isinstance(v, str) for v in value)):
+                print(f"harness-settings: {path}: [{harness}] {key} must be {'true or false' if want is bool else 'a list of texts'}", file=sys.stderr)
+                return 1
+            if key == "packs" and not all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", v) and ".." not in v for v in value):
+                print(f"harness-settings: {path}: [{harness}] packs must be plain names of files in agent-base/prompts/packs", file=sys.stderr)
+                return 1
+            got[key] = value
+            got["from"][key] = path
+    got.update(taken(harness, got))
+    print(json.dumps(got))
+    return 0
+
+
+def taken(harness, got):
+    """How HARNESS takes the switches in GOT: flags, env, permission, not_taken."""
+    flags, env, permission, not_taken = [], {}, {}, []
+    tools, parts, check = got["tools_off"], got["parts_off"], got["safety_check"]
+    # the check's default (off in a box) is no switch he set: only one he set and a harness cannot take is said
+    lift = not check and "safety_check" in got["from"]
+    if harness == "claude":
+        if tools:
+            flags += ["--disallowedTools", ",".join(tools)]  # each one out of the request's tools
+        if parts:
+            env["CLAUDE_CODE_REMOVE_PROMPT_STRINGS"] = json.dumps(parts)  # each text out of its own prompt
+        if not check:
+            # its check on dangerous rm commands lifted, under bypass permissions only
+            env["CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS"] = "1"
+    elif harness == "codex":
+        # Codex 0.160.0's switches, each measured on loopback by the request's tools (accounts-lead, N-1789): what
+        # takes the tool out. `tools.web_search=false` and `tools.view_image=false` left both in the request.
+        took = set()
+        for t in tools:
+            switch = CODEX_TOOLS.get(t)
+            if switch is None:
+                not_taken.append(f"tool {t}: Codex 0.160.0 has no switch that takes it out; it can take out {', '.join(sorted(CODEX_TOOLS))}")
+            elif switch not in took:
+                took.add(switch)
+                flags += ["-c", switch]
+                with_it = sorted(n for n, w in CODEX_TOOLS.items() if w == switch and n not in tools)
+                if with_it:
+                    not_taken.append(f"tool {t}: Codex takes it out only with {', '.join(with_it)}, which go too")
+        not_taken += [f"part {p[:40]!r}: Codex's own instructions have no parts to leave out" for p in parts]
+        if lift:
+            not_taken.append("safety_check: Codex has no check of its own that our settings lift")
+    elif harness == "opencode":
+        permission = {t: "deny" for t in tools}  # its permission rules, which replaced its `tools` switches
+        not_taken += [f"part {p[:40]!r}: opencode's own prompt has no parts to leave out" for p in parts]
+        if lift:
+            not_taken.append("safety_check: opencode has no check of its own that our settings lift")
+    else:
+        not_taken += [f"tool {t}: {harness} takes no tool switch" for t in tools]
+        not_taken += [f"part {p[:40]!r}: {harness}'s own prompt has no parts to leave out" for p in parts]
+        if lift:
+            not_taken.append(f"safety_check: {harness} has no check of its own that our settings lift")
+    return {"flags": flags, "env": env, "permission": permission, "not_taken": not_taken}
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

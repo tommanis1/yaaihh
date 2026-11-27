@@ -1,0 +1,40 @@
+// The delivery's one call (proto-mind N-1511 p17, p25; the owner, N-1104 p695: "a working agent gets one call at its
+// turn's end for everything waiting, not one per post"; p912's fork "form ealrier poitn on queit time"): next.call's
+// `next` with a third answer, Fork, and its `choose` moved here. `next` itself stays as it was for the recorded
+// programs that name it (88 lines of research's record), which a third answer would refuse ("the match does not cover
+// every ..."), and coordd answers it there with no call (delivery.rs `next_given`).
+
+/// what an agent whose turn just ended gets now, as one message, and what waits on; or to go on from a fork; or
+/// Failed, coordd's when its call failed or answered out of shape (WHY, in its journal too), never the model's: the
+/// program says what goes then (gemini-advisor N-1446 p2400; settled on N-1540; it was a made-up Give of everything)
+call fold(doing: Text, since: Text, waiting: [Waiting]) -> Give(now: [Text], rest: [Text]) | Fork(now: [Text], rest: [Text]) | Rest(why: Text) | Failed(why: Text)
+  task deliver
+
+/// what an agent whose turn just ended gets now: the call coordd runs for fold
+call choose(agent: Text, doing: Text, since: Text, waiting: Text) -> Give(now: [Text], rest: [Text]) | Fork(now: [Text], rest: [Text]) | Rest(why: Text)
+  task deliver
+  template
+    The agent is {{ agent }}, of a software team. Its turn has just ended. It was working on: {{ doing }}
+    Since that work was given to it, its session has grown by {{ since }}. These came while it worked.
+    These wait for it, oldest first, one per line: id · thread · from ("its lead" for a post from above it) · whether
+    it names the agent · the post it answers (the one it names, else of those new to its writer the latest that names
+    the agent or is its own), whose it is, and what of that post names the agent (its first line, when it is the
+    agent's own) · what it is · its first line, and in brackets its lines further down that name the agent.
+    {{ waiting }}
+    Whether a line names {{ agent }} is its "names it" column. An agent's name in a thread's label says nothing about
+    who {{ agent }} is.
+    Choose what it gets now as one message, most important first, by id: Give(now, rest). The rest wait and are
+    named at the message's foot, by id; it gets them once it has answered these. What is on the work it was on comes
+    first: a post on the thread of {{ doing }}, or one whose "the post it answers" is the agent's own there. A post
+    from the agent's lead that names it comes before other agents' posts. A question to the agent comes before news.
+    A post that answers one asking the agent to read, check or wait for what it brings, or that answers a question
+    the agent asked, is the agent's work, not news, even when it reports results: give it. For example,
+    waiting for w2,
+      N-12.p4 · #N-12 the fix · w3 · names it · N-12.p3 by lead, which names w2: "Reads: w2 reads the test commit." · post · @lead: the head is a1b2c3d4, both tests pass.
+    is what p3 asked w2 to read: Give([N-12.p4], []), never Rest("it reports test results"). "taken", "noted",
+    "read" need no turn of their own, whatever they answer: give them only with something else. At most one step
+    goes in a message: the agent's last message answers it. If these change what it worked on so much that what
+    came between in its session is noise, answer Fork(now, rest) instead of Give: it goes on as a copy of its
+    session from where its work was given, with its work's result and these. If nothing needs the agent now:
+    Rest(why), one sentence the senders read. The agent is idle: if you rest, what waits stays until something new
+    comes for it.

@@ -1,0 +1,164 @@
+// Scenario 5. tovrin. A red case is not run without orch's flip; a counterexample that is a printout of Haskell
+// values is refuted; a run more than a tenth over its bound violates `Owes-Time-Bound`.
+// The rules of tovrin.ratchet, tovrin.cex (with std.rails 1) and tovrin.budgets, by hand in the reference eFLINT
+// that eflint-rs reads. Whether a text holds a dump mark is `matches_glob`, a host function eflint-rs does not
+// have: its answer is given as a fact here (`has-dump-mark`), and runs for real in the docket-v2 script. Every
+// query must succeed.
+Fact party Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact family Identified by String
+Fact of-family Identified by party * family
+Fact other-family Identified by party * party'
+  Holds when (Exists family, family' : of-family(party, family) && of-family(party', family') && family != family')
+Fact verifier-module Identified by party
+Fact case Identified by String
+Fact suite Identified by String
+Fact run Identified by String
+Fact in-suite Identified by case * suite
+Fact red-case Identified by case
+Fact flip-requested Identified by case
+Fact blocked-suite Identified by suite
+  Holds when (Exists case : in-suite(case, suite) && red-case(case) && Not(flip-requested(case)))
+Fact suite-run Identified by suite * run
+Act flip-case
+  Actor party
+  Related to case
+  Holds when role(party, "orch") && red-case(case) && Not(flip-requested(case))
+  Creates flip-requested(case)
+Act run-proof-suite
+  Actor party
+  Related to suite, run
+  Holds when role(party, "runner") && Not(blocked-suite(suite))
+  Creates suite-run(suite, run)
+Event case-ran-red
+  Related to case
+  Creates red-case(case)
+  Terminates flip-requested(case)
+
+Fact artifact Identified by String
+Fact condition Identified by String
+Fact assigned Identified by party * artifact
+Fact given-by Identified by artifact * party
+Fact counterexample-artifact Identified by artifact
+Fact has-dump-mark Identified by artifact              // stands for matches_glob(text, "*MkForest*") and the like
+Fact required Identified by artifact * condition
+  Holds when counterexample-artifact(artifact)
+             && (condition == condition("valid_tovrin_p4_syntax") || condition == condition("no_raw_haskell_ast_dump"))
+Fact claimed-done Identified by party * artifact
+Fact verified Identified by artifact * condition
+Fact refuted Identified by artifact * condition
+Fact all-verified Identified by artifact
+  Holds when (Exists party : claimed-done(party, artifact))
+             && Not(Exists condition : required(artifact, condition) && Not(verified(artifact, condition)))
+Fact shown-violated Identified by artifact
+  Holds when counterexample-artifact(artifact) && all-verified(artifact)
+Fact may-find Identified by party * party' * artifact
+  Holds when (Exists party'' : claimed-done(party'', artifact) && Not(assigned(party', artifact))
+              && ((role(party, "owner") && party' == party)
+                  || (verifier-module(party) && role(party', "looker") && other-family(party', party''))))
+Duty owes-valid-result
+  Holder party
+  Claimant party'
+  Related to artifact, condition
+  Holds when assigned(party, artifact) && given-by(artifact, party') && required(artifact, condition) && Not(verified(artifact, condition))
+  Violated when refuted(artifact, condition)
+Act claim-done
+  Actor party
+  Related to artifact
+  Holds when assigned(party, artifact) && (Exists condition : required(artifact, condition))
+  Creates claimed-done(party, artifact)
+Act verify-condition
+  Actor party
+  Related to party', artifact, condition
+  Holds when may-find(party, party', artifact) && required(artifact, condition)
+  Creates verified(artifact, condition)
+  Terminates refuted(artifact, condition)
+Act refute-condition
+  Actor party
+  Related to party', artifact, condition
+  Holds when may-find(party, party', artifact) && required(artifact, condition)
+  Creates refuted(artifact, condition)
+  Terminates verified(artifact, condition)
+  Terminates claimed-done(party'', artifact) When claimed-done(party'', artifact)
+
+Fact figure Identified by String
+Fact amount Identified by Int
+Fact baseline Identified by case * figure * amount
+Fact measured Identified by case * figure * amount
+Fact overruled Identified by case * figure
+Fact regressed Identified by case * figure
+  Holds when (Exists amount, amount' : baseline(case, figure, amount) && measured(case, figure, amount')
+              && amount' * 10 > amount * 11) && Not(overruled(case, figure))
+Duty owes-time-bound
+  Holder party
+  Claimant party'
+  Related to case, figure
+  Holds when role(party, "runner") && role(party', "owner")
+             && (Exists amount : baseline(case, figure, amount)) && (Exists amount : measured(case, figure, amount))
+  Violated when regressed(case, figure)
+Event case-measured-green
+  Related to case, figure, amount
+  Terminates measured(case, figure, amount') When measured(case, figure, amount')
+  Terminates baseline(case, figure, amount') When baseline(case, figure, amount') && amount < amount'
+  Creates measured(case, figure, amount)
+  Creates baseline(case, figure, amount) When Not(Exists amount' : baseline(case, figure, amount') && amount' <= amount)
+Act overrule-bound
+  Actor party
+  Related to case, figure
+  Holds when role(party, "owner") || role(party, "orch")
+  Creates overruled(case, figure)
+.
++party("o1"). +party("or1"). +party("tovrin.runner"). +party("b1"). +party("tovrin.cex"). 
++role-name("owner"). +role-name("orch"). +role-name("runner"). +role-name("looker").
++role("o1", "owner"). +role("or1", "orch"). +role("tovrin.runner", "runner"). +role("tovrin.cex", "looker").
++family("anthropic"). +family("machine"). +of-family("b1", "anthropic"). +of-family("tovrin.cex", "machine").
++verifier-module("tovrin.cex").
++case("lemma-3"). +suite("proofs"). +in-suite("lemma-3", "proofs"). +run("r1"). +run("r2").
+
+// 1. The ratchet: a red case is not run by anything until orch flips it, and one flip lets one run.
+case-ran-red("lemma-3").
+?!Enabled(run-proof-suite("tovrin.runner", "proofs", "r1")).    // the runner itself is refused: nothing runs it automatically
+?!Enabled(run-proof-suite("b1", "proofs", "r1")).
+?!Enabled(flip-case("b1", "lemma-3")).                     // nobody but orch flips
+?!Enabled(flip-case("tovrin.runner", "lemma-3")).
+flip-case("or1", "lemma-3").
+run-proof-suite("tovrin.runner", "proofs", "r1").
+case-ran-red("lemma-3").
+?!Enabled(run-proof-suite("tovrin.runner", "proofs", "r2")).    // the flip was for one run
+
+// 2. A counterexample that is a printout of Haskell values.
++artifact("cex-17"). +artifact("cex-18").
++condition("valid_tovrin_p4_syntax"). +condition("no_raw_haskell_ast_dump").
++counterexample-artifact("cex-17"). +assigned("b1", "cex-17"). +given-by("cex-17", "or1").
++has-dump-mark("cex-17").                                       // its text holds `MkForest`
+claim-done("b1", "cex-17").
+refute-condition("tovrin.cex", "tovrin.cex", "cex-17", "no_raw_haskell_ast_dump").
+?Violated(owes-valid-result("b1", "or1", "cex-17", "no_raw_haskell_ast_dump")).
+?!shown-violated("cex-17").                                     // the violation it claims counts for nothing
+?!Enabled(verify-condition("b1", "tovrin.cex", "cex-17", "no_raw_haskell_ast_dump")).   // not by the builder, in the replay's name
+
+// 3. One in Tovrin's own P4 syntax, which the replay ran and saw break the property.
++counterexample-artifact("cex-18"). +assigned("b1", "cex-18"). +given-by("cex-18", "or1").
+claim-done("b1", "cex-18").
+verify-condition("tovrin.cex", "tovrin.cex", "cex-18", "no_raw_haskell_ast_dump").
+verify-condition("tovrin.cex", "tovrin.cex", "cex-18", "valid_tovrin_p4_syntax").
+?shown-violated("cex-18").
+
+// 4. The bound: more than a tenth over is a violation; within a tenth is not; a better green run tightens it.
++figure("run_ms"). +amount(900). +amount(1000). +amount(1090). +amount(1150).
+case-measured-green("lemma-3", "run_ms", 1000).
+?baseline("lemma-3", "run_ms", 1000).
+case-measured-green("lemma-3", "run_ms", 1090).
+?!regressed("lemma-3", "run_ms").                               // 9 % over: within the cap
+?!Violated(owes-time-bound("tovrin.runner", "o1", "lemma-3", "run_ms")).
+case-measured-green("lemma-3", "run_ms", 1150).
+?regressed("lemma-3", "run_ms").                                // 15 % over
+?Violated(owes-time-bound("tovrin.runner", "o1", "lemma-3", "run_ms")).
+?baseline("lemma-3", "run_ms", 1000).                           // a worse run does not move the bound
+?!Enabled(overrule-bound("b1", "lemma-3", "run_ms")).
+?!Enabled(overrule-bound("tovrin.runner", "lemma-3", "run_ms")).   // the holder cannot clear its own violation
+overrule-bound("or1", "lemma-3", "run_ms").
+?!Violated(owes-time-bound("tovrin.runner", "o1", "lemma-3", "run_ms")).
+case-measured-green("lemma-3", "run_ms", 900).
+?baseline("lemma-3", "run_ms", 900).                            // a better green run is the bound from then on

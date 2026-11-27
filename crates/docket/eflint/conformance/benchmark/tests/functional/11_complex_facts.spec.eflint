@@ -1,0 +1,10 @@
+Fact x Identified by String
+	Derived from (Foreach z: z.x)
+	Derived from (Foreach y: y.x1)
+	Derived from (Foreach y: y.x2)
+
+Fact y Identified by x1 * x2
+	Derived from (Foreach z: z.y1)
+	Derived from (Foreach z: z.y2)
+
+Fact z Identified by x * y1 * y2

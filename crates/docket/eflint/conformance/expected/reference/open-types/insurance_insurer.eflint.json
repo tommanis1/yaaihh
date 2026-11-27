@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type duty-to-reimburse\nNew type insurer\nNew type medicine\nNew type patient\nNew type pharmacy\nNew type receipt\nNew type reimburse\nNew type request-reimbursement\n+insurer(\"Self\")\n+receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\"))\n+request-reimbursement(patient(\"John\"),insurer(\"Self\"),receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\")))\nquery successful\nexecuted transition: \nrequest-reimbursement(patient(\"John\"),insurer(\"Self\"),receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\"))) (ENABLED)\n+duty-to-reimburse(insurer(\"Self\"),patient(\"John\"),receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\")))\n+reimburse(insurer(\"Self\"),patient(\"John\"),receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\")))\nquery successful\nexecuted transition: \nreimburse(insurer(\"Self\"),patient(\"John\"),receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\"))) (ENABLED)\n~reimburse(insurer(\"Self\"),patient(\"John\"),receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\")))\n-duty-to-reimburse(insurer(\"Self\"),patient(\"John\"),receipt(pharmacy(\"HollandAndBarrett\"),patient(\"John\"),medicine(\"Sleep\")))\n#7 > "
+ }
+}

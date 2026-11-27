@@ -1,0 +1,15 @@
+[package]
+name = "docket-machine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Docket's tickets and patterns: the parser, the checker and the machine. Pure: no IO, no clock, no threads."
+
+# No doc-tests (its doc blocks are text): a doc-test needs the library built a second time, without cfg(test), on
+# every test run (N-467).
+[lib]
+doctest = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

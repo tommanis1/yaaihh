@@ -1,0 +1,118 @@
+// The claim's calls (tickets-patterns syntax.tex, Kinds: claim and fix): what the triage and the repair step say.
+// What the delivery is about (ticket, kind, step, who) is in the channel tag; the line saying how to answer is made
+// from the head type (coordd/src/render.rs). The check is the runner's, a program, so its call has no prompt to speak of.
+
+// The lead's triage. `assess` replaced `triage` when it gained Decide (a head that changes takes a new name); `triage`
+// stays for the claims recorded before.
+call assess(what: Text, evidence: Text, where: Ref) -> Accept(note: Text?) | Dismiss(why: Text) | Decide(question: Text)
+  task triage
+  template
+    A defect is claimed.
+    What: {{ what }}
+    Where: {{ where }}
+    The evidence, in the claimant's words:
+    {{ evidence }}
+
+    Is this a defect to fix now? If it is, say anything the fixer should know. If it is not, say why. If it turns
+    on what the right behaviour is, which only the owner can settle, ask the owner that question instead.
+
+call triage(what: Text, evidence: Text, where: Ref) -> Accept(note: Text?) | Dismiss(why: Text)
+  task triage
+  template
+    A defect is claimed.
+    What: {{ what }}
+    Where: {{ where }}
+    The evidence, in the claimant's words:
+    {{ evidence }}
+
+    Is this a defect to fix now? If it is, say anything the fixer should know. If it is not, say why.
+
+// The fix, built on what seek.call's `seek` found (FOUND, a trailing optional: a fix recorded before `seek` gives
+// none, and its step renders as it did). An `{{ if }}` keeps its line, a match's tags take theirs: FOUND's `{{ if }}`
+// and its `{{ end }}` share their lines with the match's, so a FOUND of none leaves no line behind.
+call repair(what: Text, evidence: Text, where: Ref, note: Text?, branch: Ref?, found: Found?) -> Commit(commit: Ref) | Cannot(why: Text)
+  task repair
+  template
+    This defect was accepted for fixing, and you are to fix it:
+    What: {{ what }}
+    Where: {{ where }}
+    The evidence:
+    {{ evidence }}
+    {{ if note }}
+    The one who accepted it added:
+    {{ note }}
+    {{ end }}
+    {{ if found }}{{ match found }}
+    {{ Extends(pieces) }}
+    You found what already does part of it:
+    {{ pieces }}
+    Extend those pieces, and add no second copy of any of them beside it. Say in the commit message which piece each
+    change extends, as "extends X at file:line".
+    {{ Nothing(searched) }}
+    You found nothing that already does part of it. You searched:
+    {{ searched }}
+    {{ end }}
+    {{ end }}Fix it as its own commit, and check that the defect is gone before you answer.
+    {{ if branch }}
+    The fix is checked on branch {{ branch }}: it must be there when you answer.
+    {{ end }}
+    Answer with the commit, or say why it cannot be fixed.
+
+call check(commit: Ref, branch: Ref?) -> Green | Red(log: Text)
+  task check
+  template
+    Check {{ commit }}.
+    {{ if branch }}
+    It is to be on branch {{ branch }}.
+    {{ end }}
+
+// The two reviews of a fix (S1b), each by a short-lived agent with tools made for it (`step fresh`), shown only its
+// arguments (`blind`): the claim and the commit, by reference; it reads the commit in the repository itself. Its
+// model: any of the classes (`where model >= small`), the policy's model-for choosing among them (the system's
+// policy: the cheapest); before the model classes it was the model of whose work it is, else haiku.
+call fixes(what: Text, evidence: Text, commit: Ref, branch: Ref?) where model >= small -> Fixes | DoesNot(why: Text) | Unclear
+  blind
+  task review
+  template
+    A defect was claimed, and a commit is said to fix it.
+    What: {{ what }}
+    The evidence:
+    {{ evidence }}
+    The commit: {{ commit }}
+    {{ if branch }}
+    It is to be on branch {{ branch }}.
+    {{ end }}
+
+    Read the commit and check, by running what shows the defect, whether it fixes the defect. Answer Fixes; or
+    DoesNot, with why; or Unclear, if you cannot tell.
+
+call better(what: Text, evidence: Text, commit: Ref, branch: Ref?) where model >= small -> Best | Better(how: Text)
+  blind
+  task review
+  template
+    A defect was claimed, and a commit is said to fix it.
+    What: {{ what }}
+    The evidence:
+    {{ evidence }}
+    The commit: {{ commit }}
+    {{ if branch }}
+    It is to be on branch {{ branch }}.
+    {{ end }}
+
+    Read the commit. Is it the best fix you can see, or is there a clearly better one (smaller, at the cause rather
+    than the symptom)? Does it add a second copy of something that already exists in the repository, beside it
+    rather than extending it? Answer Best; or Better, with how (for a second copy: "extend X at file:line").
+
+// The fixer's revision after a review.
+call revise(commit: Ref, why: Text?, how: Text?) -> Commit(commit: Ref) | Cannot(why: Text)
+  task repair
+  template
+    Your commit {{ commit }} was reviewed.
+    {{ if why }}
+    It does not fix the defect: {{ why }}
+    {{ end }}
+    {{ if how }}
+    A better fix was suggested: {{ how }}
+    {{ end }}
+    Revise it as a new commit on your branch, check that the defect is gone, and answer with the new commit, or say
+    why it cannot be done.

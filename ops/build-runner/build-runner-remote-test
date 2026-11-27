@@ -1,0 +1,220 @@
+#!/bin/bash
+# build-runner-remote-test DIR: this PC's build-runner sending its jobs to the build machine's runner (paper-research
+# N-412 p1236), end to end against yaaihh-build-1, with a test home and a test unit of its own on both sides (the
+# machine's real runner is not touched). DIR must be under /home/t/agent-coord/ (the same path is made there).
+#   1. a worktree's build runs there; its binary comes back and runs here; the job's end line is in the log there;
+#      the binary came by content (N-1446 p2726, p2727): a read-only link to a blob of this PC's store, and the tree
+#      there got no target/; a second worktree of the same tree fetches nothing and holds the same file; this PC's part
+#      of the store kept under its cap: a blob nothing links, unused for an hour, goes, a linked one stays; the tree
+#      went by content (piece B): nothing at the worktree's path there, the job's tree a base of links to the store's
+#      src/, what the job wrote into it (Cargo.lock) in its own layer, gone with it; the second worktree sends nothing;
+#   2. what goes: tracked files and .cargo/config.toml; an untracked file and .git do not;
+#   3. a test job's output comes back whole, its rc too (a failing test: rc 101); where it stood is this side's file
+#      (N-1334), with the machine's name, the rc and the tests' counts; step 6's waiting job's file says `unreachable`;
+#   4. a hold from here holds the runner there, its step runs inside it;
+#   5. the caller's agent is read here (coordd's cgroup) and taken there: --train from an agent not named is refused;
+#   6. the machine not answering: the job waits and says so, nothing compiles here;
+#   7. refused before anything is sent (docket-core3 p1346): a folder outside git, /home/t, --out at the worktree's top,
+#      a --keep inside the worktree (no tree is kept there);
+#   9. the symbols kind's --keep under $COORD/lsp/ (hs-ls's server on this PC) comes back to it;
+#  10. a Windows target's check and exe build there (the mingw tools on the machine's PATH);
+#  11. a job's git has the machine's identity;
+#  12. a restart here onto files the machine does not have installs them there (a merge and its install are one step);
+#      a restart from another copy leaves this PC's service on the installed runner; a job sent to it is refused;
+#   8. the machine's runner files are installed by `machine-install`, never sent by a job: when they differ from the
+#      client's, the job is refused in words.
+# The machines line carries `twice` (paper-research p1342): each miss there is compiled twice.
+set -euo pipefail
+D=$(realpath -m "${1:?build-runner-remote-test DIR}")
+case $D in /home/t/agent-coord/*) ;; *) echo "DIR must be under /home/t/agent-coord/"; exit 2;; esac
+BR=$(dirname "$(readlink -f "$0")")/build-runner
+K=/home/t/agent-coord/build-runner
+HOST=build@192.168.1.251
+SSH=(ssh -F none -i "$K/machine-key" -o IdentitiesOnly=yes -o IdentityAgent=none -o ForwardAgent=no
+     -o UserKnownHostsFile="$K/known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes)
+fail() { echo "FAIL: $*"; exit 1; }
+ME=$(sed -n 's#.*/agents/\([^/]*\)/.*#\1#p' /proc/$$/cgroup)
+[ -n "$ME" ] || fail "this test runs in an agent's session (the caller's agent is read from coordd's cgroup)"
+rm -rf "$D"; mkdir -p "$D/home"
+"${SSH[@]}" "$HOST" "systemctl --user stop build-runner-remote-test 2>/dev/null; rm -rf $D; mkdir -p /home/t/.cargo/bin && \
+  for x in cargo rustc rustdoc; do ln -sfn /home/t/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/\$x /home/t/.cargo/bin/\$x; done"
+echo "yaaihh-build-1 $HOST twice" >"$D/home/machines"
+export BUILD_RUNNER_HOME=$D/home BUILD_RUNNER_MACHINE_DIR=$K BUILD_RUNNER_FILE=$BR BUILD_RUNNER_UNIT=build-runner-remote-test-here \
+  BUILD_RUNNER_REMOTE_HOME=$D/rhome BUILD_RUNNER_REMOTE_UNIT=build-runner-remote-test BUILD_RUNNER_REMOTE_TRAIN_AGENTS="docket-core,$ME" \
+  BUILD_RUNNER_REMOTE_LIB=$D/lib BUILD_RUNNER_INSTALLED_FILE=$BR  # the test's copy stands as the installed runner
+trap 'systemctl --user stop build-runner-remote-test-here 2>/dev/null || true; "${SSH[@]}" "$HOST" "systemctl --user stop build-runner-remote-test; systemctl --user disable -q build-runner-remote-test-boot.service; rm -f .config/systemd/user/build-runner-remote-test-boot.service; systemctl --user daemon-reload" 2>/dev/null || true' EXIT
+w=$D/a
+mkdir -p "$w/app/src" "$w/app/.cargo"
+printf '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\n[profile.quick]\ninherits = "dev"\n' >"$w/app/Cargo.toml"
+printf 'fn main() { println!("from-a {}", env!("FROM_CONFIG")); }\n#[cfg(test)]\nmod t { #[test] fn ok() {} #[test] fn bad() { assert!(std::env::var("WANT_BAD").is_err()); } }\n' >"$w/app/src/main.rs"
+git -C "$w" init -q && git -C "$w" add -A && git -C "$w" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm a
+printf '[env]\nFROM_CONFIG = "config-came"\n' >"$w/app/.cargo/config.toml"   # untracked, sent by name
+echo "not for the machine" >"$w/app/secret.txt"                             # untracked, never sent
+
+echo "== 0. the runner's files installed there; its runner starts at the machine's boot (paper-research p1721)"
+python3 -I "$BR" machine-install 2>&1 | tail -2
+"${SSH[@]}" "$HOST" "systemctl --user is-enabled build-runner-remote-test-boot.service && systemctl --user stop build-runner-remote-test && \
+  systemctl --user start build-runner-remote-test-boot.service && systemctl --user is-active build-runner-remote-test" \
+  || fail "the boot unit did not start the runner"
+echo "the boot unit is enabled; started as at boot, it brought the runner up"
+echo "== 1. a build there, its binary back here; each miss compiled twice"
+(cd "$w/app" && python3 -I "$BR" cargo --folder engine build -q >"$D/r1" 2>&1) || { cat "$D/r1"; fail "the build"; }
+grep -a "on yaaihh-build-1: sent in" "$D/r1" || fail "no line of the machine"
+got=$("$w/app/target/debug/app") ; [ "$got" = "from-a config-came" ] || fail "the binary back printed: $got"
+echo "the binary came back and runs here: $got"
+"${SSH[@]}" "$HOST" "grep -a ' end rc ' $D/rhome/build-runner.log | tail -1" | sed "s#$D/##g" | tee "$D/l1"
+grep -q "end rc 0 .*each miss compiled twice" "$D/l1" || fail "not compiled twice"
+bin=$w/app/target/debug/app
+blob=$(find "$D/home/store/blobs" -samefile "$bin" | head -1)
+[ -n "$blob" ] && [ ! -w "$bin" ] || { ls -li "$bin"; fail "the binary is not a read-only link to a blob of this PC's store"; }
+grep -ao "([0-9]* files: 1 fetched, [0-9]* MB; linked from this PC's store)" "$D/r1" || { cat "$D/r1"; fail "no by-content line"; }
+"${SSH[@]}" "$HOST" "test ! -e $w" || fail "something is at the worktree's path there"
+echo "the binary is a link to ${blob#$D/}, mode $(stat -c %a "$bin"); nothing at the worktree's path there"
+n=$(git -C "$w" ls-files | wc -l); n=$((n + 1))  # and app/.cargo/config.toml by name
+grep -ao "sent in [0-9]* s ($n of $n files, [0-9.]* MB; the rest its store held)" "$D/r1" || { cat "$D/r1"; fail "not $n of $n files sent"; }
+"${SSH[@]}" "$HOST" "cd $D/rhome && ls -d bases/*/ | wc -l | grep -qx 1 && b=\$(ls -d bases/*/) && \
+  test \$(stat -c %h \$b/app/Cargo.toml) -ge 2 && test \$b/app/Cargo.toml -ef store/src/\$(sha256sum <\$b/app/Cargo.toml | cut -c1-2)/\$(sha256sum <\$b/app/Cargo.toml | cut -c1-64) && \
+  test ! -e \$b/app/Cargo.lock && test -z \"\$(ls -A places | grep layer)\" && echo \"there: one base, \$b; app/Cargo.toml a link to its content in src/ (\$(stat -c %h \$b/app/Cargo.toml) links); the job's Cargo.lock not in it; no layer left\"" \
+  | sed "s#$D/##g" | grep . || fail "the tree there is not one base of links to src/, or the job's write went into it, or its layer stayed"
+w4=$D/a4; git clone -q "$w" "$w4"; mkdir -p "$w4/app/.cargo"; cp "$w/app/.cargo/config.toml" "$w4/app/.cargo/"
+(cd "$w4/app" && python3 -I "$BR" cargo --folder engine build -q >"$D/r1b" 2>&1) || { cat "$D/r1b"; fail "the second worktree's build"; }
+grep -aq "files: 0 fetched" "$D/r1b" && [ "$w4/app/target/debug/app" -ef "$bin" ] || { cat "$D/r1b"; fail "the second worktree fetched again or holds another file"; }
+grep -ao "sent in [0-9]* s (0 of $n files, 0.0 MB; the rest its store held)" "$D/r1b" || { cat "$D/r1b"; fail "the second worktree sent files again"; }
+"${SSH[@]}" "$HOST" "test ! -e $w4 && ls -d $D/rhome/bases/*/ | wc -l | grep -qx 1" || fail "the second worktree has a path or a base of its own there"
+echo "a second worktree of the same tree: $(grep -ao '([0-9]* files: 0 fetched[^)]*)' "$D/r1b"), the same file ($(stat -c %h "$bin") links)"
+old=$D/home/store/blobs/ff/$(printf 'f%.0s' $(seq 64)); kept=$D/home/store/blobs/fe/$(printf 'e%.0s' $(seq 64))
+mkdir -p "${old%/*}" "${kept%/*}"; echo old >"$old"; echo kept >"$kept"; ln "$kept" "$D/kept-link"
+touch -d '2 hours ago' "$old" "$kept"
+(cd "$w/app" && BUILD_RUNNER_BACK_CAP_GB=0 python3 -I "$BR" cargo --folder engine build -q >"$D/r1c" 2>&1) || { cat "$D/r1c"; fail "the build at cap 0"; }
+[ ! -e "$old" ] || fail "at cap 0 a blob nothing links, unused for two hours, stayed"
+[ -e "$kept" ] && [ -e "$blob" ] || fail "at cap 0 a blob something links went"
+echo "at cap 0 here: the unlinked blob unused for two hours went; the linked ones stayed"
+! systemctl --user is-active -q build-runner-remote-test-here || fail "a runner started on this PC"
+
+echo "== 2. what went"
+"${SSH[@]}" "$HOST" "cd $D/rhome/bases/*/ && test -f app/Cargo.toml && test -f app/.cargo/config.toml && test ! -e app/secret.txt && test ! -e .git" \
+  || fail "the tree there is not what was sent"
+echo "there, in its base: the tracked files and .cargo/config.toml; no secret.txt, no .git"
+
+echo "== 3. a test job's output and rc come back"
+rc=0; (cd "$w/app" && WANT_BAD=1 python3 -I "$BR" cargo --folder engine --env WANT_BAD test -q --profile quick -p app -- ok bad >"$D/r3" 2>&1) || rc=$?
+grep -a "test result: FAILED. 1 passed; 1 failed" "$D/r3" || { cat "$D/r3"; fail "no test result line"; }
+[ $rc = 101 ] || fail "rc $rc, not cargo's 101"
+echo "rc $rc"
+# where the job stood is this side's file (N-1334): the machine's name, the job's rc and its tests' counts; no step
+# line and no bar of cargo's is in the output that came back
+! grep -aq "build-runner-step\|Building \[" "$D/r3" || { cat "$D/r3"; fail "a step line or cargo's bar is in the output"; }
+python3 -I - "$D/home/jobs" "$ME" <<'EOF' || fail "the job's file"
+import json, pathlib, sys
+d = json.loads(max(pathlib.Path(sys.argv[1]).glob("*.json"), key=lambda p: p.stat().st_mtime).read_text())
+want = {"agent": sys.argv[2], "machine": "yaaihh-build-1", "verb": "test", "packages": ["app"], "step": "ended", "rc": 101, "passed": 1, "failed": 1}
+got = {k: d.get(k) for k in want}
+assert got == want and "args" not in d, d
+print("file:", got)
+EOF
+
+echo "== 4. a hold from here holds the runner there; its step runs inside"
+(cd "$w/app" && python3 -I "$BR" hold -- sh -c "python3 -I $BR cargo --folder engine build -q" >"$D/r4" 2>&1) || { cat "$D/r4"; fail "the hold"; }
+grep -a "is held for" "$D/r4" | head -1
+"${SSH[@]}" "$HOST" "grep -a 'hold end in' $D/rhome/build-runner.log | tail -1" | sed "s#$D/##g" | grep . || fail "no hold there"
+
+echo "== 5. the caller's agent goes along: --train from one not named is refused there"
+"${SSH[@]}" "$HOST" "systemctl --user stop build-runner-remote-test"   # the next request starts it again with its settings
+rc=0; (cd "$w/app" && BUILD_RUNNER_REMOTE_TRAIN_AGENTS=docket-core python3 -I "$BR" cargo --train --folder engine build -q >"$D/r5" 2>&1) || rc=$?
+grep -a "refused: --train is a train's: only docket-core sends one (you are $ME)" "$D/r5" || { cat "$D/r5"; fail "not refused as $ME"; }
+
+echo "== 6. the machine not answering: the job waits and says so; nothing compiles here"
+echo "yaaihh-build-1 build@192.0.2.1" >"$D/home/machines"   # TEST-NET: never answers
+(cd "$w/app" && timeout 40 python3 -I "$BR" cargo --folder engine build -q >"$D/r6" 2>&1) || true
+grep -a "does not answer; the job waits for it (nothing compiles on this PC in its place)" "$D/r6" || { cat "$D/r6"; fail "no words"; }
+! systemctl --user is-active -q build-runner-remote-test-here || fail "a runner started on this PC"
+grep -l '"step": "unreachable"' "$D/home/jobs/"*.json >/dev/null || fail "the waiting job's file does not say the machine is unreachable"
+echo "== 7. refused before anything is sent: outside git, /home/t, --out at the top"
+printf '#!/bin/sh\necho "$@" >>%s/ssh.log\nexit 255\n' "$D" >"$D/ssh-stand-in"; chmod +x "$D/ssh-stand-in"
+mkdir -p "$D/nogit" "$D/g"; : >"$D/ssh.log"; git -C "$D/g" init -q
+git -C "$D/g" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q --allow-empty -m g
+for c in "$D/nogit|cargo --folder engine build -q|in no git worktree" "/home/t|cargo --folder engine build -q|in no git worktree" \
+         "$w/app|cargo --folder engine --out .. build -q|not its top" \
+         "$w/app|cargo --folder symbols --keep $COORD/lsp check -q|not its top" \
+         "$w/app|cargo --folder symbols --keep kept check -q|a folder inside the worktree: on the build machine" \
+         "$D/g|cargo --folder engine build -q|holds or is inside the build machine's own folder $D/g/rh"; do
+  IFS='|' read -r at cmd want <<<"$c"
+  rc=0; (cd "$at" && BUILD_RUNNER_REMOTE_HOME=$D/g/rh BUILD_RUNNER_SSH=$D/ssh-stand-in python3 -I "$BR" $cmd >"$D/r7" 2>&1) || rc=$?
+  [ $rc != 0 ] && grep -q "refused: .*$want" "$D/r7" || { cat "$D/r7"; fail "$at: $cmd not refused"; }
+  echo "${at#$D/}: $(grep -o "refused: .*" "$D/r7" | sed "s#$D/##g" | cut -c1-120)"
+done
+[ ! -s "$D/ssh.log" ] || { cat "$D/ssh.log"; fail "something was sent"; }
+echo "nothing went to the machine"
+echo "== 8. the machine's runner files differ from this client's: refused; machine-install puts them back"
+echo "yaaihh-build-1 $HOST twice" >"$D/home/machines"
+"${SSH[@]}" "$HOST" "echo '# changed there' >>$D/lib/build-store-rustc"
+rc=0; (cd "$w/app" && python3 -I "$BR" cargo --folder engine build -q >"$D/r8" 2>&1) || rc=$?
+[ $rc != 0 ] && grep -q "refused: the build machine's runner files .* are not this runner's" "$D/r8" || { cat "$D/r8"; fail "not refused"; }
+grep -o "refused: .*" "$D/r8" | sed "s#$D/##g" | cut -c1-200
+grep -q "machine-install" "$D/r8" && fail "the refusal names the command"
+mkdir -p "$D/copy"; cp "$BR" "$(dirname "$BR")/build-store-rustc" "$D/copy/"
+rc=0; python3 -I "$D/copy/build-runner" machine-install >"$D/r8c" 2>&1 || rc=$?
+[ $rc != 0 ] && grep -q "refused: machine-install runs only from the installed runner" "$D/r8c" || { cat "$D/r8c"; fail "a copy installed"; }
+echo "from a copy: $(grep -o "refused: .*" "$D/r8c" | sed "s#$D/##g" | cut -c1-110)"
+python3 -I "$BR" machine-install 2>&1 | tail -1
+(cd "$w/app" && python3 -I "$BR" cargo --folder engine build -q >"$D/r8" 2>&1) || { cat "$D/r8"; fail "the build after machine-install"; }
+echo "after machine-install the job ran"
+echo "== 9. the symbols kind for hs-ls: --keep under this PC's \$COORD/lsp/ is made there and comes back here"
+[ -n "${COORD:-}" ] || fail "no COORD"
+k=$COORD/lsp/a2h-remote-test; rm -rf "$k"
+(cd "$w/app" && python3 -I "$BR" cargo --folder symbols --keep "$k" check -q --message-format=json >"$D/r9" 2>&1) || { cat "$D/r9"; fail "the symbols job with nothing to keep"; }
+echo "nothing to keep (no build script, no proc-macro): the job ran, rc 0"
+printf 'fn main() { let o = std::env::var("OUT_DIR").unwrap(); std::fs::write(format!("{o}/g.rs"), "").unwrap(); }\n' >"$w/app/build.rs"
+git -C "$w" add -A app/build.rs && git -C "$w" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm build.rs
+(cd "$w/app" && python3 -I "$BR" cargo --folder symbols --keep "$k" check -q --message-format=json >"$D/r9" 2>&1) || { cat "$D/r9"; fail "the symbols job"; }
+[ -n "$(find "$k" -name g.rs 2>/dev/null)" ] || { cat "$D/r9"; fail "the build script's OUT_DIR did not come back into $k"; }
+echo "came back into \$COORD/lsp/a2h-remote-test: $(cd "$k" && find . -type f | head -3 | tr '\n' ' ')"
+rm -rf "$k"; "${SSH[@]}" "$HOST" "rm -rf $k"
+echo "== 10. a Windows target: rustc and the linker find the mingw tools by name on the machine's PATH (build 24's exe)"
+w2=$D/win; mkdir -p "$w2/src"
+printf '[package]\nname = "winapp"\nversion = "0.1.0"\nedition = "2021"\n' >"$w2/Cargo.toml"
+printf '#[link(name = "kernel32", kind = "raw-dylib")]\nextern "system" { fn GetTickCount() -> u32; }\nfn main() { println!("{}", unsafe { GetTickCount() } > 0); }\n' >"$w2/src/main.rs"
+mkdir -p "$w2/.cargo"; printf '[target.x86_64-pc-windows-gnu]\nlinker = "x86_64-w64-mingw32-gcc-posix"\n' >"$w2/.cargo/config.toml"  # by name, as the trains name it
+git -C "$w2" init -q && git -C "$w2" add -A && git -C "$w2" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm w
+(cd "$w2" && python3 -I "$BR" cargo --folder window check -q --target x86_64-pc-windows-gnu >"$D/r10" 2>&1) || { cat "$D/r10"; fail "the Windows check"; }
+echo "check --target x86_64-pc-windows-gnu: rc 0"
+(cd "$w2" && python3 -I "$BR" cargo --folder window build -q --target x86_64-pc-windows-gnu >"$D/r10" 2>&1) || { cat "$D/r10"; fail "the Windows build (dlltool and the linker by name)"; }
+exe=$w2/target/x86_64-pc-windows-gnu/debug/winapp.exe
+[ "$(head -c2 "$exe" 2>/dev/null)" = MZ ] || { cat "$D/r10"; fail "no Windows exe came back"; }
+echo "the exe came back: $(stat -c %s "$exe") bytes, starts MZ"
+echo "== 11. a job's git has the machine's identity (coordd's notes tests commit; docket-core6 N-412 p1681)"
+w3=$D/gid; mkdir -p "$w3/src"
+printf '[package]\nname = "gid"\nversion = "0.1.0"\nedition = "2021"\n[profile.quick]\ninherits = "dev"\n' >"$w3/Cargo.toml"
+printf '#[cfg(test)]\nmod t { #[test] fn ident() { let o = std::process::Command::new("git").args(["var", "GIT_COMMITTER_IDENT"]).output().unwrap(); let s = String::from_utf8_lossy(&o.stdout); println!("ident: {s}"); assert!(s.contains("build@yaaihh-build-1.invalid"), "{s}"); } }\n' >"$w3/src/lib.rs"
+git -C "$w3" init -q && git -C "$w3" add -A && git -C "$w3" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm g
+(cd "$w3" && python3 -I "$BR" cargo --folder engine test --profile quick -p gid -- ident --nocapture >"$D/r11" 2>&1) || { cat "$D/r11"; fail "no git identity in the job"; }
+grep -a "test result: ok. 1 passed" "$D/r11" >/dev/null || { cat "$D/r11"; fail "the identity test did not run"; }
+echo "git var GIT_COMMITTER_IDENT there: $(grep -ao 'ident: [^>]*>' "$D/r11" | head -1)"
+echo "== 12. a restart here: onto changed files it installs them there; from another copy the service stays the installed"
+echo "   runner; a job sent to this PC's service is refused (paper-research N-412 p1973, docket-core3 p1996)"
+"${SSH[@]}" "$HOST" "echo '# changed there' >>$D/lib/build-store-rustc"
+python3 -I "$BR" restart >"$D/r12" 2>&1 || { cat "$D/r12"; fail "the restart"; }
+grep -q "runner files are not this one's: installing them there" "$D/r12" || { cat "$D/r12"; fail "the restart did not install"; }
+grep "installing\|runner files are this one's; its restart" "$D/r12" | sed "s#$D/##g" | cut -c1-140
+(cd "$w/app" && python3 -I "$BR" cargo --folder engine build -q >"$D/r12b" 2>&1) || { cat "$D/r12b"; fail "the job after the restart"; }
+python3 -I "$BR" restart >"$D/r12c" 2>&1 || { cat "$D/r12c"; fail "the second restart"; }
+grep -q "runner files are this one's already" "$D/r12c" && ! grep -q "installing" "$D/r12c" || { cat "$D/r12c"; fail "the files the same: installed again"; }
+rc=0; python3 -I "$D/copy/build-runner" restart >"$D/r12d" 2>&1 || rc=$?
+grep -qF "the service restarts onto $BR, the installed runner, not $D/copy/build-runner" "$D/r12d" && [ $rc != 0 ] \
+  && grep -q "is not the installed runner" "$D/r12d" || { cat "$D/r12d"; fail "a copy's restart"; }
+pid=$(systemctl --user show -p MainPID --value build-runner-remote-test-here)
+tr '\0' ' ' </proc/"$pid"/cmdline | grep -qF " $BR serve" || fail "after a copy's restart the service is not the installed runner"
+python3 -I - "$D/home/sock" "$w/app" <<'PY' || fail "a raw job to this PC's service"
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); f = s.makefile("rwb", buffering=0)
+f.write(json.dumps({"cwd": sys.argv[2], "args": ["nope"], "env": {"": []}}).encode() + b"\n")  # past the refusal: no such verb
+out = f.read().decode()
+end = json.loads(out.rstrip().splitlines()[-1])  # the refusal's end says its words too (p1502, head 2)
+assert "refused: this PC compiles nothing" in out and end.get("exit") == 3 and end.get("refused", "").startswith("this PC compiles nothing"), out
+print("a raw job to this PC's service:", out.splitlines()[0][:96])
+PY
+systemctl --user stop build-runner-remote-test-here
+echo "the job ran after it; a second restart, the files the same, installed nothing; a copy's restart kept the installed runner"
+"${SSH[@]}" "$HOST" "for x in $w $w4 $w2 $w3; do test ! -e \$x || exit 1; done" || fail "a worktree's path is there after the jobs"
+echo "after every job: nothing at any of the four worktrees' paths there"
+echo "PASS"

@@ -1,0 +1,75 @@
+// The text-change kind's steps (kinds/text-change.kind, N-865). coordd answers check_text, load_text and still_text
+// itself, as the worker `coord`; read_text goes to whoever fills the role `text-reader` (by default the project's lead,
+// policy/text-reader.eflint; others by the project's policy), the look's to the lead, and look_at to the agent that
+// made the change.
+
+// A file of the project's text as it is to be: PATH from the project's folder (`kinds/a.kind`, `calls/a.call`,
+// `policy/a.eflint`, `renderings/a.tmpl`, `project.toml`, `standing.md`) or as the host has it, in the project's folder
+// or its library; TEXT the whole of it, none to remove it. standing.md, the text every agent of the project starts
+// with, is among the renderings, the project's prompt texts.
+type TextFile {
+  path: Text
+  text: Text?
+}
+
+// The change applied to a copy of the project's text and read there as a reload reads it: refused with why and the
+// places (file:line) when a file is not the project's text, a kind or call does not read, or an open ticket stands
+// on what it changes; else the files (with BACK, the files as they were before that commit), who opened the change
+// (BY: an agent's name, or `owner`, as the record has it), what each file touches, and READ, what the load holds them
+// to: what they were when this check read them. Beside the folders' lists, what the check reads in the text: SHADOWS,
+// the project's kinds named like one of agent-base's; BINDINGS, the bindings added, changed or gone (`on EVENT open`,
+// `every`); HANDLERS, the kinds whose handlers of the owner's events (`when owner_...`) change. A change to the
+// flavour's look alone is checked as the look and answered Look.
+call check_text(files: [TextFile], back: Ref?) -> Checks(files: [TextFile], by: Text, kinds: [Text], calls: [Text], renderings: [Text], views: [Text], policy: [Text], library: [Text], shadows: [Text], bindings: [Text], handlers: [Text], read: Text) | Look(files: [TextFile], by: Text, read: Text) | Refused(why: Text, at: [Text])
+  task check_text
+
+// The checked files written, committed in the project's text repository and loaded, in one step: refused, with
+// nothing written and no commit made, when a file is not what the check read or the load no longer passes.
+call load_text(files: [TextFile], read: Text, why: Text) -> Live(commit: Ref) | Refused(why: Text, at: [Text])
+  task load_text
+
+// After the load, the picture the agent that made the change looks at (consult-lead, N-412 p1203): coordd starts a
+// stand-in window, the window's own build (`window-stand-in` beside coordd), connected to this coordd as a watch as his
+// window is, and it draws the page the change touches from what came on that link; for the look, once the look's
+// event came on it. coordd chooses where the picture is written (the coord's `stills` folder, by ticket and step),
+// never the request. STILL: its path, BY the agent that made the change, PAGE the page drawn. OWN: the owner made it,
+// and his window draws it. UNSEEN: no window drew it, and why.
+call still_text(files: [TextFile], commit: Ref) -> Still(path: Text, by: Agent, page: Text) | Own | Unseen(why: Text)
+  task still_text
+
+// The look at that picture by the agent that made the change: LooksRight, or Wrong with what is wrong, which takes
+// the change back.
+call look_at(why: Text, still: Text, page: Text) -> LooksRight | Wrong(what: Text)
+  task look_at
+  template
+    Your change to this project's text is live: {{ why }}
+
+    A window that took it as his window does drew {{ page }}: {{ still }}
+
+    Open the picture and look at it as he would. Answer LooksRight when it shows what you meant, or Wrong with what is wrong: Wrong takes your change back, its files as they were before it.
+
+// A change to the project's text, read before it goes live where the project's policy asks for it (`text-read`). BY
+// made it; NAMES, what it touches as text-read's lists name them. Who reads it is whoever `fills` the step's role, and
+// `fills` is given them: BY as `call.by`, each of NAMES as among(N, I) (paper-research N-1446 p2894).
+call read_text(why: Text, by: Text, names: [Text], files: [TextFile]) -> Go | No(why: Text)
+  task read_text
+  template
+    A change by {{ by }} to this project's own text asks for your read before it goes live: {{ why }}
+
+    The files as they would be:
+    {{ for f in files }}
+
+    {{ f.path }}{{ if f.text }}:
+
+    {{ f.text }}{{ end }}
+    {{ end }}
+
+    A file with no text is removed. Answer Go to make it live, or No with why to leave everything as it is.
+
+// Whether a change to the project's text goes live at once (Go), is read first by the project's lead (Read),
+// or is refused (No, why the rule's text). The policy sees who opened it (`call.by`) and each list's count
+// (`call.X-count`), not its names.
+decision text-read(by: Text, kinds: [Text], calls: [Text], renderings: [Text], views: [Text], policy: [Text], library: [Text], shadows: [Text], bindings: [Text], handlers: [Text]) -> Go | Read | No(why: Text)
+
+// The same for a change to the flavour's look, the system's alone (policy/look.eflint).
+decision look-read(by: Text) -> Go | Read | No(why: Text)

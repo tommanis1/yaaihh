@@ -1,0 +1,139 @@
+// replaces: teams.eflint slow.eflint
+//
+// The yaaihh library, written in eFLINT whole (paper-research N-568 part 4; consult-lead's one-interpreter.md §3, §6):
+// model tiers and classes, the team's acts, the lead, roles and slow mode as facts and acts of the language, with
+// their effects. In part 3's eFLINT text (`interp::load`) it takes the place of the dialect's teams.eflint and
+// slow.eflint, the files its first line names, the system's or a project's of the same name. norms.rs and the
+// decisions keep reading those two files, so while `norms` is `both` each act here is compared with the dialect's in
+// coordd's own situations, one journal line per difference; with `norms = eflint` this file answers them.
+//
+// What it reads of the dialect's prelude, which stays their one home until clingo is out of decisions (E4): `agent`,
+// `role`, `model`, `family`, `runs`, `parent`, `granted`, `used`, `member`, by the field names part 3 writes them with
+// (`runs.agent1`, `runs.model2`). Those are the facts coordd states today (core.rs `norm_facts`), so the acts keep
+// today's names and fields and coordd's callers do not change.
+//
+// It is checked against eflint-rs by coordd's tests library_text.rs (it loads in part 3's text; its tiers, classes and
+// superseded models are teams.eflint's; each act is enabled exactly where norms.rs enables the dialect's, in four
+// team situations; its effects are those written here) and interp.rs's agent_bases_acts_answer_in_eflint_rs_as_in_norms_rs.
+//
+// Not done in this text yet (§6, §8 part 4), for E4 when coordd stops stating them: `granted`, `used`, `member`,
+// `parent` and `role` as the library's facts with the effects of `approve-team`, `add-agent` and a role set (they stay
+// coordd's, stated afresh for each question, so an effect on them here would be answered and then gone); `part`,
+// `part-place`, `effort-for` (the dialect's still); `superseded` and `class` read by `pick-model-for`.
+//
+// Two words mean two things here (consult-2, N-568 p57): "lead" is who holds the role "lead", and also an asker's
+// parent, who grants its team; "member" is the role of an agent given none, and also an agent added under a grant. A
+// team has no name of its own yet.
+//
+// A number or a name is reached through the fact that holds it (`tier.int2`): eFLINT's quantifiers range over a
+// type's instances, so `Exists int : ...` finds none (docket-core8, N-568 part 1). A `!` over a derived fact goes
+// under `Conditioned by`, never `Holds when` (docket-core5, N-568 p41).
+
+// ---- The lead, and roles
+
+// The lead: who holds the role "lead". A project names more leads with its own clause, for example
+//   Extend Fact lead
+//     Derived from lead(agent) When role(agent, "orchestrator")
+Fact lead Identified by agent
+  Derived from lead(agent) When role(agent, "lead").
+
+// The owner: the one with role "owner". coordd does not state him among the agents today (core.rs `norm_facts`), so
+// the acts that are his alone are enabled for nobody and he acts unbound (his act goes through and is reported).
+// Stating him as an actor, so his menu shows what is his, waits on his reading of "permission" (N-568 p61).
+
+// Setting an agent's role (`coord role`) comes with E4, when `role` is the library's fact: until then a role set here
+// would be answered and then gone, and its name is of no type the library states (consult-2, N-568 p57).
+
+// ---- Models: tiers, classes
+
+// The order of models: one number each, within and across families (the owner on N-188, N-199, N-201, N-265).
+Fact tier Identified by model1 * int2.
++tier(model("claude-haiku-5-5"), 1).
++tier(model("claude-sonnet-5-5"), 2).
++tier(model("claude-sonnet-5"), 2).
++tier(model("claude-opus-5-5"), 3).
++tier(model("claude-opus-5"), 3).
++tier(model("claude-fable-5-1"), 4).
++tier(model("claude-fable-5-2"), 4).
++tier(model("gpt-6-luna"), 1).
++tier(model("gpt-6-sol"), 2).
++tier(model("gpt-6-astra"), 3).
++tier(model("gpt-6.1-terra"), 1).
++tier(model("gpt-6.1-sol"), 2).
++tier(model("gpt-6.2-sol"), 2).
+
+// The models a newer one of the same family and number stands in for (teams.eflint's `replaced`; "replaced" is the
+// owner's word for a memory, memory.eflint's `replaced-by`): a pick of a model leaves them out (`pick-model-for`).
+Fact superseded Identified by model.
++superseded(model("claude-sonnet-5")).
++superseded(model("claude-opus-5")).
++superseded(model("claude-fable-5-1")).
++superseded(model("gpt-6-sol")).
++superseded(model("gpt-6.1-sol")).
+
+// The classes: a name for a number of the order above, as a call's `where`, `coord new --model` and `coord fork
+// --model` name them. A project names its own the same way.
+Fact class Identified by string1 * int2.
++class("small", 1).
++class("medium", 2).
++class("large", 3).
+
+// Claude Code's Agent tool (the PreToolUse hook): within the agent's family and a lower tier; another family is a
+// team's job. A call naming no model runs the agent's own model, so it is refused here. Each is a condition of its
+// own, so a refused model is greyed with the one that failed (the family, or the tier).
+Act start-subagent
+  Actor agent
+  Related to model
+  Holds when (Exists runs : runs && runs.agent1 == agent)
+  Conditioned by (Exists runs, family1, family2 : runs && runs.agent1 == agent && family1 && family1.model1 == model && family2 && family2.model1 == runs.model2 && family1.string2 == family2.string2)
+  Conditioned by (Exists runs, tier1, tier2 : runs && runs.agent1 == agent && tier1 && tier1.model1 == model && tier2 && tier2.model1 == runs.model2 && tier1.int2 < tier2.int2).
+
+// ---- The team
+
+// `coord team ask`: any agent but a team member (depth: owner, orch, its agents, an agent's team). An act with no
+// `Holds when` holds for nobody, hence `True` (consult-2, N-568 p57).
+Act ask-team
+  Actor agent
+  Holds when True
+  Conditioned by !member(agent).
+
+// `coord team grant NAME N`: the asker's lead (its parent) grants its team; the owner, unbound, always may. coordd
+// records the grant and counts its agents (`granted`, `used`) until the built-ins are read from here (E4).
+Act approve-team
+  Actor agent1
+  Recipient agent2
+  Holds when parent(agent2, agent1).
+
+// An agent registering a new agent (roster add, roster fork): the lead staffs; others within their grant.
+Act add-agent
+  Actor agent
+  Holds when lead(agent)
+  Holds when (Exists granted, used : granted && used && granted.agent1 == agent && used.agent1 == agent && used.int2 < granted.int2).
+
+// ---- Slow mode (N-412 ask 5; the owner, N-287.p44: "for now just me mark stuff slow, i will start with per project")
+
+// The scopes slow mode is set over so far: "project", every ticket, those opened later too. (`slow-scope`, because
+// "scope" is the rank of system, project and agent, §3.)
+Fact slow-scope Identified by String.
++slow-scope("project").
+
+// SLOWED(S): slow mode is set over S: every moment of a ticket S covers is halted for the owner's approval (each step
+// given, answer taken, post delivered, ticket opened, policy answer used and notice given). The record keeps what is
+// set (its `slowed` lines); until part 5 reads this fact, the machine's `halt` is its reading of those lines. A
+// ticket's own switch (`coord slow T on|off`) stays the machine's until part 5 too.
+Fact slowed Identified by slow-scope.
+
+// Setting it and lifting it (`coord slow project on|off`): the owner's, as today. A project lets a lead with
+//   Extend Act set-slow
+//     Holds when lead(agent)
+Act set-slow
+  Actor agent
+  Related to slow-scope
+  Holds when role(agent, "owner")
+  Creates slowed(slow-scope).
+
+Act lift-slow
+  Actor agent
+  Related to slow-scope
+  Holds when role(agent, "owner")
+  Terminates slowed(slow-scope).

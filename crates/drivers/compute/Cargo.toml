@@ -1,0 +1,10 @@
+[package]
+name = "docket-driver-compute"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Docket v2's Command and Measure effects run as compute jobs, their answers given later"
+
+[dependencies]
+compute = { path = "../../compute" }
+docket-v2 = { path = "../../docket/v2" }

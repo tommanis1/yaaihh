@@ -1,0 +1,9 @@
+// The decision kind's one step, for the owner.
+call decide(question: Text, context: Text?) -> Yes(note: Text?) | No(why: Text)
+  task decide
+  template
+    {{ question }}
+    {{ if context }}
+
+    {{ context }}
+    {{ end }}

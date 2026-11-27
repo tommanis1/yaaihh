@@ -4,3 +4,6 @@ releases/
 /flavor/
 # the account proxy (tommanis1/yaaihh-proxy, private): its own repo, checked out here
 /proxy/
+# a developer's own overrides (a local rune checkout)
+.cargo/config.toml
+/target

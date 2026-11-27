@@ -1,0 +1,29 @@
+// The fix of an accepted claim: repaired by whoever fills the role, then reviewed by two short-lived agents at once,
+// revised up to three rounds.
+/// the fix of an accepted claim: repaired, reviewed by two agents at once, revised up to three rounds
+kind fix
+  form what: Text, evidence: Text, where: Ref, note: Text?, branch: Ref?
+  result Ref
+  raises NoFix, NeedsDecision, Exhausted, Stalled
+  pattern
+    r <- step role fixer repair(what, evidence, where, note, branch);
+    match r {
+      Cannot(why) => raise NoFix(why)
+      Commit(first) =>
+        iterate c = first up to 3 {
+          (ok, alt) <- par(step fresh fixes(what, evidence, c, branch), step fresh better(what, evidence, c, branch));
+          match (ok, alt) {
+            (Unclear, _) => raise NeedsDecision(c)
+            (Fixes, Best) => return Done(c)
+            (DoesNot(why), Best) =>
+              n <- step role fixer revise(c, why, none);
+              match n { Commit(next) => return Again(next, 1), Cannot(w) => raise NoFix(w) }
+            (Fixes, Better(how)) =>
+              n <- step role fixer revise(c, none, how);
+              match n { Commit(next) => return Again(next, 1), Cannot(w) => raise NoFix(w) }
+            (DoesNot(why), Better(how)) =>
+              n <- step role fixer revise(c, why, how);
+              match n { Commit(next) => return Again(next, 2), Cannot(w) => raise NoFix(w) }
+          }
+        }
+    }

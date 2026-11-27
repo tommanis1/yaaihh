@@ -1,0 +1,13 @@
+// A team request's one step (kind request): the asker's lead, or the owner, grants it a number of agents or refuses.
+call approve(who: Agent, why: Text, n: Int?) -> Granted(n: Int) | Refused(why: Text)
+  task approve
+  template
+    {{ who }} asks to form a team:
+
+    {{ why }}
+    {{ if n }}
+
+    It asks for {{ n }} agent(s).
+    {{ end }}
+
+    Answer Granted with the number of agents its team may have, or Refused with why.

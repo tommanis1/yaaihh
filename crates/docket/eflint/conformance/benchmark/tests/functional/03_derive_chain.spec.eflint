@@ -1,0 +1,4 @@
+Fact x Identified by String
+	Derived from x("hi")
+Fact y Identified by String
+	Derived from (Foreach x: y(x))

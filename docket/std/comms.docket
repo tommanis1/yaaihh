@@ -1,0 +1,239 @@
+module std.comms
+
+import std.hooks as H
+
+// Two-sided non-rewriting communication:
+// - Exact system state (facts, handles, marks) stays strictly separate from free-form model prose.
+// - Original characters are NEVER rewritten or deleted (subsequence invariant).
+// - Only THREE explicit acts exist for agents: Claim-Done (std.rails), Spend (std.budgets), Says-To-Owner (here).
+//
+//   1  state            parties, keys, passages, marks
+//   2  annotation       after a turn, one call says what each passage means; it points, it never rewrites
+//   3  two channels     agent to owner, agent to agent: one passage is on one of them, never both
+//   4  push and pull    at a turn's start the least that is new; the rest by a tool that only reads
+//   5  only prose       a passage that reads like a claim, a spend or a word to him counts for nothing, and its
+//                       writer is told
+
+// ===== 1. State ==================================================================================================
+
+Fact Key      Identified by String   // universal content-addressed handle
+Fact Node     Identified by String   // passage span in a turn
+Fact Relation Identified by String
+
+Fact Seen(who: H.Party, key: Key)
+Fact Spoken(node: Node, who: H.Party)
+Fact Gone-Over(node: Node)
+Fact Marked(node: Node, rel: Relation, target: Key, judge: H.Party)
+Fact Role(who: H.Party, role: String)
+Fact Key-Of(who: H.Party, key: Key)    // a party's own key: a passage marked "for" that key is for that party
+
+// Who acts is `H.Party`, declared once in std.hooks.
+type MarkProposal { node: Node, rel: Relation, target: Key }
+type Passage      = Said(node: Node, text: String)   // a passage as the clerk is given it: its node and its words
+
+// A model step. A model answers in text: `step` fills the call's template, asks the model, and has the text read
+// into the call's type. Only `Model` reaches a model, so a handler that keeps or reuses answers takes `Model`.
+Effect Call-Text<T>(call: Call<T>)              -> String   // the driver's: the template with its holes filled
+Effect Model(who: H.Party, prompt: String)      -> String   // the driver's: one request to WHO's model
+Effect Read-As<T>(call: Call<T>, text: String)  -> T        // the driver's: the text read as the call's type, or `Fault`
+fn step<T>(who: H.Party, call: Call<T>) -> Program<T> {
+  prompt <- perform Call-Text(call);
+  text   <- perform Model(who, prompt);
+  perform Read-As(call, text)
+}
+Effect Pick(role: String)                 -> H.Party   // the driver's: a party of that role that has a session
+Effect TextOf(id: String)                 -> String
+
+// No text names an agent. A role is a name in a condition; which party holds it is stated when the party is
+// seated. The first owner is seated by the installation's driver (where he sits); everybody else by him.
+Event Owner-Seated(who: H.Party)
+  Creates who, Role(who, "owner")
+Act Seat(owner: H.Party, who: H.Party, role: String)
+  Conditioned by Role(owner, "owner")
+  Creates        who, Role(who, role)
+Act Unseat(owner: H.Party, who: H.Party, role: String)
+  Conditioned by Role(owner, "owner") && who != owner
+  Terminates     Role(who, role)
+
+// The drivers' lines this file stands on: a passage of a turn, a thing written out to a party, his own words.
+// Each is an Event, so only a driver or a reaction performs it (spec 8.2); no program can say what a party wrote.
+Event Spoke(who: H.Party, node: Node)
+  Creates Spoken(node, who)
+Event Shown(who: H.Party, key: Key)
+  Creates Seen(who, key)
+
+// ===== 2. Annotation =============================================================================================
+
+Call Annotate-Turn(passages: List<Passage>, seen_keys: List<String>, relations: List<String>) -> List<MarkProposal>
+  Template """
+  An agent wrote these passages in its turn: {{ passages }}
+  Things it has seen, holds, or made (with keys): {{ seen_keys }}
+  Valid relations: {{ relations }}
+  Return ONLY marks you are sure of (node, rel, target). Change NO words and write NO prose.
+  """
+
+// Who performs a mark. The clerk is a model answering one call; it performs nothing. The annotation is a reaction,
+// and a reaction runs as its module (spec 8.8), so the actor of both acts is this module, and the judge is the
+// party whose answer the mark is.
+// Edge: a clerk marking its own words, an unknown relation, or a passage already gone over. The judge is never the
+// speaker, the relation is one of the project's, and a passage is judged once.
+// A clerk's marks are recorded by a module that asked it, never by the clerk or the speaker.
+Fact Annotator(by: H.Party)
++H.Party("std.comms").
+Act Mark-Passage(by: H.Party, judge: H.Party, node: Node, rel: Relation, target: Key)
+  Conditioned by Annotator(by) && Role(judge, "clerk") && Spoken(node, speaker) && Seen(speaker, target)
+                 && judge != speaker && Relation(rel) && Not(Gone-Over(node))
+  Creates        Marked(node, rel, target, judge)
+
+Act Finish-Review(by: H.Party, judge: H.Party, node: Node)
+  Conditioned by Annotator(by) && Role(judge, "clerk") && Spoken(node, speaker) && judge != speaker
+  Creates        Gone-Over(node)
+
+// The clerk's reading of a turn, which asks a model, is in std.rails: a text that loads this file alone asks no
+// model and needs no clerk.
+
+// A mark is a judgement with its judge. Its speaker, or the owner, takes it away.
+Act Take-Back-Mark(who: H.Party, node: Node, rel: Relation, target: Key)
+  Conditioned by (Spoken(node, who) || Role(who, "owner")) && Marked(node, rel, target, j)
+  Terminates     Marked(node, rel, target, j) When Marked(node, rel, target, j)
+
++Relation("means"). +Relation("answers"). +Relation("for").
++Relation("promises"). +Relation("lays down").
+
+// ===== 3. Two channels ===========================================================================================
+// a2o: what the owner writes to one party, and what a party says to him by `Says-To-Owner`.
+// a2a: everything parties write for each other; a passage is for a party when the clerk marked it "for" that
+// party's key.
+// A passage is in his inbox only by `Says-To-Owner`, and is then never also in a party's pull: `Leak` never holds.
+
+Fact For-Owner-Inbox(node: Node)     // strict a2o surface
+Fact For-Agent-Pull(node: Node, to: H.Party) // strict a2a pull surface (never leaks into owner inbox)
+  Holds when Marked(node, "for", k, j) && Key-Of(to, k) && Not(For-Owner-Inbox(node))
+
+Fact May-Speak(who: H.Party)           // the project's: whose words may go to him
+Fact Leak(node: Node)
+  Holds when For-Owner-Inbox(node) && (Exists k, j, to : Marked(node, "for", k, j) && Key-Of(to, k) && For-Agent-Pull(node, to))
+
+// Explicit Act #3: speaking to the owner is NEVER inferred from prose alone
+Act Says-To-Owner(who: H.Party, node: Node)
+  Conditioned by Spoken(node, who) && May-Speak(who) && Not(Exists k, j : Marked(node, "for", k, j))
+  Creates        For-Owner-Inbox(node)
+
+// His words. They reach the party he wrote them to, and no other. Passed on by a party they are that party's
+// words on a2a: `Relays` marks them, and std.rails judges a rule passed on this way where it was written.
+Fact Owner-Said(node: Node, to: H.Party)
+Fact Relays(node: Node, his: Node)   // NODE, by a party, repeats his words HIS
+Event Owner-Says(node: Node, to: H.Party)                     // his window's line
+  Creates Owner-Said(node, to)
+
+// ===== 4. Push and pull ==========================================================================================
+// Push: when a turn begins the party is given what he wrote to it since its last turn, whole, and one line saying
+// how much else waits. Nothing else is pushed.
+// Pull: the party's own tool. It reads. The only acts it performs are the reader's own notes of what it has now
+// been shown (`Take-In`, `Hear`), so it claims nothing, spends nothing and says nothing to anyone.
+
+Fact Heard(who: H.Party, node: Node)
+Fact Unheard(who: H.Party, node: Node)
+  Holds when Owner-Said(node, who) && Not(Heard(who, node))
+Fact Taken-In(who: H.Party, node: Node)
+Fact Waiting(node: Node, who: H.Party)
+  Holds when For-Agent-Pull(node, who) && Not(Taken-In(who, node))
+
+Act Hear(who: H.Party, node: Node)                    // by the party itself: these words of his have been given to me
+  Conditioned by Owner-Said(node, who)
+  Creates        Heard(who, node)
+Act Take-In(who: H.Party, node: Node)                 // by the party itself: this passage for me has been shown to me
+  Conditioned by For-Agent-Pull(node, who)
+  Creates        Taken-In(who, node)
+
+fn news_for(agent: H.Party) -> Program<String> {
+  his   <- return (Foreach n : n When Unheard(agent, n));
+  texts <- par n in his { perform TextOf(n) };
+  more  <- return Count(Foreach n : n When Waiting(n, agent));
+  par n in his { Hear(agent, n) };
+  return "{{ texts }}\nAlso waiting for you: {{ more }} from agents. Look when you want them."
+}
+
+// Edge: a harness that cannot add words at a turn's start. Where it lets a Modify, the prompt is given back with
+// the words after it. Where it lets neither, no arm takes the moment and nothing is marked as heard: the words stay
+// unheard and `pull("his")` gives them, so nothing he wrote is lost by a harness's limits. Each arm names the power
+// it uses in its `where`, which is what lets the same text load for every harness (spec 12).
+on H.Hook(agent, "turn_begins", payload)
+   where (Exists n : Unheard(agent, n)) && H.Running-On(agent, h, v) && H.Lets(h, v, "turn_begins", "inject") do {
+  news <- do news_for(agent);
+  rest <- perform H.Hook(agent, "turn_begins", payload);
+  return H.combine(H.Inject(news), rest)
+}
+on H.Hook(agent, "turn_begins", payload)
+   where (Exists n : Unheard(agent, n)) && H.Running-On(agent, h, v) && H.Lets(h, v, "turn_begins", "modify")
+         && Not(H.Lets(h, v, "turn_begins", "inject")) do {
+  news <- do news_for(agent);
+  rest <- perform H.Hook(agent, "turn_begins", payload);
+  return H.combine(H.Modify("{{ payload }}\n{{ news }}"), rest)
+}
+
+// A query is a text:
+//   "waiting"     what parties marked as for me and I have not been shown
+//   "his"         everything he wrote to me, again
+//   "how-read"    how my own passages were marked
+//   any other     the key of a thing: the passages about it that are mine or for me
+// It changes nothing but what it will show next time: `Take-In` and `Hear` are acts of the reader about the
+// reader. It claims nothing, spends nothing and says nothing to anyone.
+fn pull(who: H.Party, query: String) -> Program<String> {
+  match query {
+    | "waiting" => {
+        new   <- return (Foreach n : n When Waiting(n, who));
+        texts <- par n in new { perform TextOf(n) };
+        par n in new { Take-In(who, n) };
+        return "{{ texts }}"
+      }
+    | "his" => {
+        his   <- return (Foreach n : n When Owner-Said(n, who));
+        texts <- par n in his { perform TextOf(n) };
+        par n in (Foreach n : n When Unheard(who, n)) { Hear(who, n) };
+        return "{{ texts }}"
+      }
+    | "how-read" => {
+        return "{{ Foreach n, r, k : (n, r, k) When Spoken(n, who) && (Exists j : Marked(n, r, k, j)) }}"
+      }
+    | _ => {
+        about <- return (Foreach n : n When (Exists r, j : Marked(n, r, Key(query), j))
+                                            && (Spoken(n, who) || For-Agent-Pull(n, who)));
+        texts <- par n in about { perform TextOf(n) };
+        return "{{ texts }}"
+      }
+  }
+}
+
+// A run starts only by an Act (spec 8.8), so the tool a harness offers is this act. It creates and ends nothing
+// itself; what it gives back is what the party reads.
+Act Pull(who: H.Party, query: String)
+  Returns        String
+  Conditioned by Holds(who)
+  Does {
+    do pull(who, query)
+  }
+
+// ===== 5. Only prose =============================================================================================
+// Edge: "done", "I spent", "tell him" written in a turn. The clerk marks such a passage; the mark performs
+// nothing, because each of the three acts is `Conditioned by` its own doer. The writer is told once, at its next
+// turn's start, which passages counted for nothing and which act to use.
+
++Relation("reads as done"). +Relation("reads as spending"). +Relation("reads as for him").
+Fact Only-Prose(node: Node, who: H.Party)
+  Holds when Spoken(node, who) && (Marked(node, "reads as done", k, j) || Marked(node, "reads as spending", k, j)
+                                   || Marked(node, "reads as for him", k, j))
+Fact Told-Prose(node: Node)
+Act Note-Told(who: H.Party, node: Node)               // by the writer's own run, when it has been told
+  Conditioned by Only-Prose(node, who)
+  Creates        Told-Prose(node)
+
+on H.Hook(agent, "turn_begins", payload)
+   where (Exists n : Only-Prose(n, agent) && Not(Told-Prose(n)))
+         && H.Running-On(agent, h, v) && H.Lets(h, v, "turn_begins", "inject") do {
+  these <- return (Foreach n : n When Only-Prose(n, agent) && Not(Told-Prose(n)));
+  texts <- par n in these { perform TextOf(n) };
+  par n in these { Note-Told(agent, n) };
+  rest  <- perform H.Hook(agent, "turn_begins", payload);
+  return H.combine(H.Inject("You wrote this as if it were done, spent, or said to him. It was none of these:\n{{ texts }}\nTo claim a thing done, use Claim-Done. To spend, use Spend. To say something to him, use Says-To-Owner."), rest)
+}

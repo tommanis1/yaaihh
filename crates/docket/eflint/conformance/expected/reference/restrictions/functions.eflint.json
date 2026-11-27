@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type codomain\nNew type domain\nNew type f\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n+f(domain(\"A\"),codomain(1))\n+f(domain(\"B\"),codomain(2))\n+f(domain(\"C\"),codomain(3))\n+f(domain(\"D\"),codomain(4))\n+f(domain(\"E\"),codomain(5))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n-f(domain(\"C\"),codomain(3))\n+f(domain(\"C\"),codomain(1))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n-f(domain(\"B\"),codomain(2))\n+f(domain(\"B\"),codomain(1))\n-f(domain(\"D\"),codomain(4))\n+f(domain(\"D\"),codomain(1))\n-f(domain(\"E\"),codomain(5))\n+f(domain(\"E\"),codomain(1))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n#31 > "
+ }
+}

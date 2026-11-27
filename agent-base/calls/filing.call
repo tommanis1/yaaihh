@@ -1,0 +1,34 @@
+// The clerk's split of what the owner typed (plan/edge.md S3, paper-research m709-m711). A filing's step `file` is
+// owed by clerk, which coordd answers itself: it runs `place` below once, statelessly, finds each passage in the
+// owner's text (a passage that is not the owner's words as typed is refused) and answers `file` (file.call) with
+// their spans, or Unplaced with what could not be placed. The owner's text is never copied: a piece is a span of it.
+// OPEN is coordd's: each open ticket, one a line, with its kind, title, and the step it owes the owner if it does.
+
+type Passage {
+  ticket: Ticket
+  passage: Text
+  answer: Text?
+}
+
+call place(text: Text, open: Text) -> Placed(pieces: [Passage], rest: Text?)
+  task clerk
+  template
+    You are the clerk of a software team. The owner typed the message below. Each part of it is meant for one of the
+    open tickets listed after it. Split the message into passages, each a stretch of the owner's words copied exactly
+    as typed (same spelling, case, punctuation; never rephrase, fix or shorten them), and say which ticket each is for.
+
+    A passage that answers a step the ticket owes the owner gets that step's result as its answer, but only when the
+    words leave exactly one of the results listed for it (for "Yes | No", "go ahead" is Yes, "not now" is No); when
+    they could mean more than one, or none, give no answer, and the passage is a post on the ticket.
+
+    Keep the passages in the order the owner wrote them, and leave no word out: a joining word between two passages
+    ("and", "also", "then") belongs to the passage it starts. Anything that belongs to no open ticket goes in rest,
+    copied exactly; leave rest empty when all of it is placed.
+
+    The message:
+    <<<
+    {{ text }}
+    >>>
+
+    The open tickets:
+    {{ open }}

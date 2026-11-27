@@ -1,0 +1,17 @@
+// The flavour's look (its `look.toml`: the look of the window's own controls, one for the whole window; N-866): whether
+// a change to it (kinds/text-change.kind) goes live at once. The system's alone: a text-change refuses a change to the
+// look while a project's policy names this decision (coordd change.rs), so no project rules on it. The `//` line above
+// each rule is the why its decision gives.
+
+Fact look-read-option Identified by String
++look-read-option("Go").
++look-read-option("Read").
++look-read-option("No").
+
+Decision look-read
+  Options look-read-option
+
+// An agent or the owner may change the window's look: live once it checks; the window says who changed it, and the
+// way back.
+Only for look-read:
+  option == "Go"

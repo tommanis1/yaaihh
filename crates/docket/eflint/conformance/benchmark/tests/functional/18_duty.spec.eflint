@@ -1,0 +1,3 @@
+Duty duty Holder int Claimant string
+	Violated when bad(duty(int,string))
+Fact bad Identified by duty

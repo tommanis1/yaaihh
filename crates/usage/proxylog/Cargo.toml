@@ -1,0 +1,11 @@
+[package]
+name = "proxylog"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The raw pane's source: the model proxy's request log of a session as lines, bodies only (coordd's RawPage and the window's reading on Linux)"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono = "0.4"

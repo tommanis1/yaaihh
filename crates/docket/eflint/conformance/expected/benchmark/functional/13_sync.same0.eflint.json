@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type go\n#2 > \n#2 > executed transition: \ngo(string(\"x\")) (DISABLED)\nviolations:\n  disabled action: go(string(\"x\"))\n#3 > \n#3 > executed transition: \ngo(string(\"y\")) (DISABLED)\n|\n`- go(string(\"x\")) (DISABLED)\nviolations:\n  disabled action: go(string(\"y\"))\n#4 > \n#4 > executed transition: \ngo(string(\"z\")) (DISABLED)\n|\n`- go(string(\"x\")) (DISABLED)\nviolations:\n  disabled action: go(string(\"z\"))\n#5 > \n#5 > "
+ }
+}

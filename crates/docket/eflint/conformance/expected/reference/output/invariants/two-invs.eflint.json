@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "violations:\n  violated invariant!: one\nNew type one\nNew invariant one\nviolations:\n  violated invariant!: one\n  violated invariant!: two\nNew type two\nNew invariant two\n#3 > "
+ }
+}

@@ -1,0 +1,10 @@
+module scenario.s2
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+
+// Scenario 2's parties: `w1` gives the engine check to `b1`. The check's budget of 420 000 ms is the project's.
++H.Party("o1"). +C.Role("o1", "owner").
++H.Party("w1").
++H.Party("b1"). +R.Of-Family("b1", "anthropic").

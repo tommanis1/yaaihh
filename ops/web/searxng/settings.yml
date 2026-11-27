@@ -1,0 +1,11 @@
+# SearXNG for yaaihh-web: JSON answers on loopback, no limiter (one user), the secret from SEARXNG_SECRET.
+use_default_settings: true
+general:
+  instance_name: yaaihh-web
+search:
+  safe_search: 0
+  formats: [html, json]
+server:
+  limiter: false
+  image_proxy: false
+  public_instance: false

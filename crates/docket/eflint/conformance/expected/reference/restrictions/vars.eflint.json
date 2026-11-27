@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\nquery successful\n+x(5)\nquery successful\n-x(5)\n+x(10)\nquery successful\nquery successful\n-x(10)\n+x(11)\nquery successful\n-x(11)\n+x(1)\nquery successful\nquery successful\nquery successful\n#14 > "
+ }
+}

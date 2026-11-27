@@ -1,0 +1,142 @@
+// The message runtime (0.2, runtime-design.md; the owner, 20 Nov: "call a decision llm dont hardcode the rules"):
+// what reaches an agent, when, and batched how. coordd raises the delivery events from what it knows of the agent;
+// each runs in the agent's delivery ticket, one at a time, in the order they came, and what waits is read when the
+// run begins (docket-machine delivery.rs). The acts: `deliver a ITEMS listing REST` hands ITEMS to a as one message,
+// REST named at its foot; `keep ITEMS WHY` holds them waiting, WHY shown under each sender's message; `report ITEMS
+// WHY` says they cannot be delivered now. Nothing here posts, drops or replaces anything.
+//
+// - arrived: a post came for a working agent. A post it had, taken back, goes in at once, so it does not act on it
+//   (0.2 B8); a step its own act asked for goes in, as the act's answer (`coord item start`'s seek comes
+//   before the work: paper-research N-1396.p79, consult-3 p189), answered there with `coord answer`, while the turn's
+//   last message still answers what the turn began with; a turn that ends without answering it has it again at
+//   `free`, alone (consult-3 p280); its brain's line (a program's `post … informing`, brain.kind) never arrives: it
+//   waits for the turn's end, where `free` gives it whole (fresh-lead-3 N-1540 p5, p18; on the text before 76 it went
+//   into the turn that holds the owner's posts, as `arrived`); a post policy only informs it of waits, on a thread
+//   under that one too (an agent's post on its own sub-thread: proto-reader N-1446 p112). Any other post
+//   that goes to it now (its `push`: it asks the agent to act, I-1480 rule 1) waits for the turn's end, a lead's that
+//   names it too, and the owner's (the owner, N-1104 p716: "only the turn end"; paper-research N-1481 p15; his yes,
+//   N-1104 p923, to proto-mind's N-1511 p28, ends N-342's "answer me first" of 16 Nov, which put his in at the next
+//   step); what is pulled (rule 2) waits for its next turn's start, where it comes by its first line.
+// - free: the agent is idle and something waits. The owner's posts, and his take-backs, go at once, alone, the rest
+//   named at the foot: his come first and need no call. After them a step its own act asked for, the same way (its
+//   turn ended before the step came, or the turn it was put into ended without answering it, and it still comes
+//   before more work, alone, so a turn of its own answers it). What is pulled goes with either by first lines, as
+//   its digest, as with any message: a post before his on his thread that only informs the agent is not brought
+//   whole with his (gemini-advisor N-1446 p2365, 1: fresh-lead-3 was handed 23 such posts, 17.8 KB, with his 93-byte
+//   p982; paper-research p2367, 2). While he is writing to the agent in his chat, everything
+//   waits for what he sends (N-101 p1099), his own posts too, so what he sends in a row goes as one (gemini-advisor
+//   N-1511 p32 point 1). His window says him writing only while his box is drawn, holds words and has the keyboard, so
+//   a draft he leaves behind ends it, and the wait (paper-research N-1446 p2111, p2189; yaaihh lib.rs
+//   `writing_changed`). Otherwise what
+//   goes to it now goes as one message (I-1480, the owner N-1104 p707: "push pull is the right idea"), what is pulled
+//   with it by first lines, as its digest (a line a thread at its foot, rest.tmpl: "New on the threads and items you
+//   are on, your own first, the newest first in each"); with nothing that goes now it rests, and what is pulled waits
+//   for that message. When it came while the agent was idle (`free`'s `worked` false), no call decides it (the
+//   owner, N-1104 p695: "an idle agent with mail gets it without a call"). When it came while the agent worked, one
+//   call, fold.call's `fold`, decides all of it at the turn's end (p695: "a working agent gets one call at its turn's
+//   end for everything waiting, not one per post"; p912, proto-mind N-1511 p28, his yes p923): of what goes now, what
+//   is its work and goes first, most important first, and what waits on, named at the foot; or Rest(why). Its Fork
+//   goes on from where its work was given (`free`'s `place`) with the act `fork`: coordd restarts the agent on a copy
+//   of its session cut there and hands the message to it (part 4, docket-core N-1446 p2096); where it cannot
+//   (`free`'s `forkable` false: not Claude Code yet, the place not in the session it runs), it is delivered as Give
+//   (gemini-advisor N-1446 p2400, A4); what changes after `free` (its session restarted) coordd still delivers as
+//   Give, and its log says so. A failed call
+//   answers Failed (why in coordd's journal), and what goes now goes, with no call (clerk.rs `fold_fell`; a ticket
+//   opened on a text whose fold has no Failed is given everything as before). Its brain's lines (`free`'s `told`: a
+//   program's `post … informing`, brain.kind's Attend) go whole with every message: after his posts, after what goes
+//   with no call or when the call failed, first before what fold gives; an idle agent is given them at once, alone
+//   when nothing else goes; `fold` never orders them, and they go beside a Rest (fresh-lead-3 N-1540 p18: the line
+//   steers the next turn, and named at the foot by its first line it would drop HIS, his own earlier words; the
+//   text as gemini-advisor's p23 has it). A ticket opened on the text before,
+//   with `next` (next.call), runs it until its agent's next run opens one on this. A post that reaches it only as
+//   one on its thread (`member`) never arrives: it waits in the pull and goes as its thread's digest line.
+// - stopped: a post for an agent that cannot take it: reported, never a post (6 Nov: "report it, like agent is not
+//   running atm, instead of going to the ether").
+// - the owner's hold (line 327, his Hold in the window, `coord hold-mail on`): what it keeps, every agent's post and
+//   every step, notice or words given, but none of his posts (whenever written) and none of his take-backs, is kept
+//   with the hold's words, "the owner holds agents' mail since HH:MM UTC" (paper-research N-1396 p180, p235). The
+//   events give it apart (`hold`, and `free`'s `held`), never among what waits, so `free` never gives it. His
+//   Release lets it go: what it kept is decided again, as if it had just come.
+// - the copy (fresh-lead-3 N-1104 p1154, p1159; his yes p1160; paper-research N-1446 p3020, 1): a post of his that
+//   comes while the agent's turn runs, written to this agent alone (it names it and no other: N-1794, never a copy of
+//   every busy agent a post reaches, N-1104 p1206), where the policy says a copy answers it (`copy_answers`: the act
+//   `copy-answers`, which a project's policy declares with its line; agent-base declares none, so no copy elsewhere),
+//   goes to the agent's copy at once: the copy it has in this turn, else a new one, `fork e.agent at e.began`, cut
+//   where the turn began (its `turn_began` line; where it cannot be cut, `forkable` false, the post waits as before).
+//   His post still waits for the agent. At the turn's end, while the copy still answers (`answering`), everything
+//   waits for it; then the agent is given his posts and the copy's answers whole (`copied`: they name him, so as
+//   posts on his thread they would come by first lines only), and the copy is stopped. A copy left with nothing of
+//   his waiting is stopped at the next `free`.
+/// one agent's delivery: what reaches it, when, batched how
+kind delivery
+  form agent: Agent
+  pattern
+    ...
+  when arrived(e) do
+    match e.hold {
+      none =>
+        match e.item {
+          i where i.what == "taken_back" => deliver e.agent [i]
+          i where i.what == "step" and i.raised and i.from == e.agent => deliver e.agent [i]
+          i where i.owner and e.copy_answers =>
+            match e.copy {
+              none where e.forkable =>
+                c <- fork e.agent at e.began;
+                deliver c [i];
+                keep [i] "its copy answers it now; it comes when its turn ends"
+              none => keep [i] "comes when its turn ends"
+              c =>
+                deliver c [i];
+                keep [i] "its copy answers it now; it comes when its turn ends"
+            }
+          i where i.push => keep [i] "comes when its turn ends"
+          i => keep [i] "comes with its next turn, by its first line"
+        }
+      why => keep [e.item] why
+    }
+  when free(e) do
+    _ <- match e.hold {
+      none => return ()
+      why => keep e.held why
+    };
+    _ <- match e.copy {
+      none => return ()
+      c where e.owner == [] and e.answering == false => stop c
+      _ => return ()
+    };
+    match e.owner {
+      [] where e.waiting == [] => return ()
+      w where e.writing => keep e.waiting "the owner is writing to it"
+      w where e.answering => keep e.waiting "its copy is still answering the owner"
+      [] =>
+        match e.raised {
+          [] =>
+            match e.push {
+              [] where e.told == [] => return ()
+              [] => deliver e.agent e.told digest e.pull
+              now where e.worked == false => deliver e.agent now ++ e.told digest e.pull
+              now =>
+                n <- step watcher fold(e.doing, e.since, now);
+                match n {
+                  Give(go, rest) => deliver e.agent e.told.id ++ go listing rest digest e.pull
+                  Fork(go, rest) where e.forkable => fork e.agent at e.place with e.told.id ++ go listing rest digest e.pull
+                  Fork(go, rest) => deliver e.agent e.told.id ++ go listing rest digest e.pull
+                  Rest(why) where e.told == [] => keep now why
+                  Rest(why) =>
+                    keep now why;
+                    deliver e.agent e.told digest e.pull
+                  Failed(_) => deliver e.agent now ++ e.told digest e.pull
+                }
+            }
+          own => deliver e.agent own ++ e.told listing e.waiting digest e.pull
+        }
+      his =>
+        match e.copy {
+          none => deliver e.agent his ++ e.told listing e.waiting digest e.pull
+          c =>
+            deliver e.agent his ++ e.copied ++ e.told listing e.waiting digest e.pull;
+            stop c
+        }
+    }
+  when stopped(e) do
+    report [e.item] e.why

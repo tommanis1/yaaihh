@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type countx\nNew type sumx\nNew type x\n+countx(0)\n+sumx(0)\n#2 > countx(0) = True\nsumx(0) = True\n\n#2 > ~countx(0)\n~sumx(0)\n+countx(1)\n+sumx(1)\n+x(1)\n#3 > countx(1) = True\nsumx(1) = True\nx(1) = True\n\n#3 > ~countx(1)\n~sumx(1)\n+countx(2)\n+x(3)\n+sumx(4)\n#4 > x(1) = True\ncountx(2) = True\nx(3) = True\nsumx(4) = True\n\n#4 > ~countx(2)\n+x(0)\n+countx(3)\n#5 > x(0) = True\nx(1) = True\ncountx(3) = True\nx(3) = True\nsumx(4) = True\n\n#5 > ~countx(3)\n~x(3)\n~sumx(4)\n+sumx(1)\n+countx(2)\n#6 > x(0) = True\nsumx(1) = True\nx(1) = True\ncountx(2) = True\n\n#6 > "
+ }
+}

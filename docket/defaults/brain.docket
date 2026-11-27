@@ -1,0 +1,296 @@
+module yaaihh.brain
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.control as Ctrl
+import yaaihh.train as Train
+import yaaihh.hygiene as Hygiene
+
+// The yaaihh brain. What it is for: nothing he asked for gets lost, and the mess a team of agents makes is taken
+// down faster than it grows.
+//
+//   1  how each agent runs    which handlers are around its session; an unshackled agent has none
+//   2  the ledger             everything owed to him: from his words, and from what agents promised
+//   3  the taming loop        the worst mess first, one step at a time, for as long as there is one
+//   4  before a compaction    what an agent must not forget is written down first, and given back after
+//   5  checkpoints            a point an agent's work can be taken up from again
+
+// ===== 1. How each agent runs ====================================================================================
+// Opt-In Unshackled Profile: an agent the owner unshackles runs with the safety check off and NO extra brain
+// shackles. It is a profile he gives an agent by an act; no agent has it by this text.
+Fact Unshackled(agent: H.Party)
+Act Unshackle(owner: H.Party, agent: H.Party)
+  Conditioned by C.Role(owner, "owner") && Holds(agent)
+  Creates        Unshackled(agent), H.Safety-Check-Override(agent, false)
+Act Shackle(owner: H.Party, agent: H.Party)
+  Conditioned by C.Role(owner, "owner")
+  Terminates     Unshackled(agent)
+  Obfuscates     H.Safety-Check-Override(agent, false)   // what `Unshackle` stored goes; a rule that gives it keeps its say
+
+Fact Pace(seconds: Int)                             // his to set: how far apart a burning agent's calls are
++Pace(20).
+Fact Wants-Fork(agent: H.Party)                     // his switch for one agent: a copy answers him while it is in a turn
+// What "busy" is, in this project: in a turn, and he asked for copies for that agent. With no switch set, no agent
+// is ever busy, and no copy is ever made.
+Extend Fact Ctrl.Busy
+  Holds when H.In-Turn(who) && Wants-Fork(who)
+
+// Who is railed: every agent of the project that is not unshackled.
+Extend Fact R.Railed
+  Holds when H.Running-On(who, h, v) && Not(Unshackled(who))
++H.Party("yaaihh.brain"). +R.Verifier-Module("yaaihh.brain").
+
+// Edge: one composition does not fit every harness. The guards deny a tool call; the pace and the commit guard
+// also make the harness wait at one, and Codex's bridge states no wait. So the composition branches on what the
+// harness lets, with `Lets` named in each test as the spec's check wants it (12), and says in each branch what the
+// agent then runs without.
+fn run(agent: H.Party) -> Program<Unit> {
+  if Unshackled(agent) {
+    do H.serve(agent)                                  // nothing of ours on it
+  } else { if Exists h, v, s : H.Running-On(agent, h, v) && H.Lets(h, v, "tool_called", "deny")
+                               && H.Comes-To(agent, "tool_called") && H.Waits(h, v, "tool_called", s) {
+    par seconds in (Foreach s : s When Pace(s)) {
+      do R.with_rails(agent,
+        Hygiene.with_clean_engine(agent,
+          Train.with_shared_cache(agent,
+            Train.with_flavor_freeze(agent,
+              B.with_commit_limit(agent,
+                with_consolidation(agent,
+                  Ctrl.with_pace(agent, seconds,
+                    Ctrl.with_fork_on_busy(agent, H.serve(agent)))))))))
+    };
+    return ()
+  } else { if Exists h, v : H.Running-On(agent, h, v) && H.Lets(h, v, "tool_called", "deny")
+                            && H.Comes-To(agent, "tool_called") {
+    // it can deny and states no wait: no pace and no commit guard; the file guards hold
+    do R.with_rails(agent,
+      Hygiene.with_clean_engine(agent,
+        Train.with_shared_cache(agent,
+          Train.with_flavor_freeze(agent,
+            with_consolidation(agent,
+              Ctrl.with_fork_on_busy(agent, H.serve(agent)))))))
+  } else {
+    // it cannot deny a tool call: it is not run at all unless he says `Unshackled` for it
+    perform Fault("This agent's harness, as its session was started, cannot refuse a tool call, so the project's guards cannot hold for it. It runs only if the owner says Unshackled for it.")
+  } } }
+}
+
+// ===== 2. The ledger =============================================================================================
+// A commitment is a thing owed to him by one party. It comes from his words (the front reads them and assigns
+// somebody) or from a party's own promise (the clerk marked a passage as promising). Each is a std.rails artifact
+// with its conditions, so its state is the contract's: open, claimed, verified, violated. Done is none of these:
+// done is his word.
+
+Fact Commitment(target: R.Artifact)
+Fact Asked-In(target: R.Artifact, his: C.Node)      // his words it comes from
+Fact Promised-In(target: R.Artifact, node: C.Node)  // or the passage where the party promised it
+Fact Due-By(target: R.Artifact, time: C.Key)        // a time, where one was named
+Fact Past(time: C.Key)                              // the clock driver's line
+Fact Done(target: R.Artifact)                       // he said so
+Fact Released(target: R.Artifact)                   // he let it go: neither met nor broken
+Event Time-Passed(time: C.Key)
+  Creates Past(time)
+
+// By the front, from his words. The condition is his words themselves, not a summary of them: whatever is later
+// verified is verified against what he wrote.
+Act Commit(front: H.Party, who: H.Party, target: R.Artifact, his: C.Node)
+  Conditioned by C.Role(front, "front") && C.Owner-Said(his, to) && front != who
+  Creates        Commitment(target), Asked-In(target, his), R.Assigned(who, target), R.Given-By(target, front)
+               , R.Required(target, "meets_his_words")
++R.Condition("meets_his_words").
+
+// Edge: a promise in prose. "By 18:00" written in a turn is a thing owed, and the party did not perform an act to
+// make it so. The clerk's mark makes the commitment, named by the promise's own words; the party that promised is
+// its holder, and it is owed to the owner. What it promised is required as "kept_as_promised", so it can be
+// refuted like any claim.
+on C.Mark-Passage(_, _, node, "promises", key) where C.Spoken(node, who) do {
+  words <- perform C.TextOf(node);
+  Promised(who, node, R.Artifact(words), key)
+}
+Event Promised(who: H.Party, node: C.Node, target: R.Artifact, key: C.Key)
+  Creates Commitment(target), Promised-In(target, node), R.Assigned(who, target), R.Required(target, "kept_as_promised")
+        , R.Given-By(target, o) When C.Role(o, "owner")
+        , Due-By(target, key) When Is-Time(key)
+Fact Is-Time(key: C.Key)                            // a driver says which keys name a time
++R.Condition("kept_as_promised").
+
+Fact Live(target: R.Artifact)
+  Holds when Commitment(target) && Not(Done(target)) && Not(Released(target))
+Duty Owes-Commitment(holder: H.Party, claimant: H.Party, target: R.Artifact)
+  Holds when    Live(target) && R.Assigned(holder, target) && C.Role(claimant, "owner")
+  Violated when (Exists t : Due-By(target, t) && Past(t)) || (Exists c : R.Refuted(target, c))
+
+// The only way a commitment is done. Edge: done without a look. He may say done whatever the lookers found: it is
+// his word. But what the window shows beside the button is the contract's state, so he says it knowingly.
+Act Say-Done(owner: H.Party, target: R.Artifact)
+  Conditioned by C.Role(owner, "owner") && Live(target)
+  Creates        Done(target)
+Act Release(owner: H.Party, target: R.Artifact)
+  Conditioned by C.Role(owner, "owner") && Live(target)
+  Creates        Released(target)
+
+// ===== 3. The taming loop ========================================================================================
+// A mess is a fact worked out from the state: nobody reports one and nobody can hide one. Once a minute everything
+// that is a mess and was not tended lately gets the one step that lessens it, the most pressing kind first. The
+// loop is the clock: it goes round for as long as there is a mess, and does nothing when there is none. It has no
+// count; what bounds it is the cost of its calls, charged to its bucket like any others, and over that it waits on
+// him.
+
+Fact Trouble Identified by String
++Trouble("unheld").     // a live commitment whose party is gone
++Trouble("late").       // a live commitment past the time it named
++Trouble("unlooked").   // a claim nobody else has looked at
+
+Fact Mess-Work(trouble: Trouble, target: R.Artifact)
+  Holds when trouble == "unheld"   && Live(target) && R.Assigned(w, target) && Not(Holds(w))
+  Holds when trouble == "late"     && Live(target) && Due-By(target, t) && Past(t)
+  Holds when trouble == "unlooked" && R.Awaiting(target, c)
+Fact Mess-Rule(node: C.Node, who: H.Party)          // a made-up rule its writer has not taken back
+  Holds when R.Made-Up(node, who) && Not(R.Taken-Back(node))
+Fact Mess-Tree(bucket: B.Bucket)                    // a bucket of files over its limit
+  Holds when B.Over-Budget(bucket, "repo_mb")
+  Holds when B.Over-Budget(bucket, "md_files")
+  Holds when B.Over-Budget(bucket, "slop_lines")
+Fact Mess-Harness(agent: H.Party)                   // a harness running a version its bridge has not read
+  Holds when H.Unread-Version(agent)
+
+Fact Entropy(amount: Int)                           // how much mess there is: his window draws this over time
+  Holds when amount == Count(Foreach t, a : a When Mess-Work(t, a)) + Count(Foreach n, w : n When Mess-Rule(n, w))
+                       + Count(Foreach b : b When Mess-Tree(b)) + Count(Foreach h : h When Mess-Harness(h))
+
+Fact Again-After(minutes: Int)                      // before the same mess is tended again: his to set
++Again-After(30).
+Fact Tended-Work(target: R.Artifact, minute: Int)
+Fact Tended-Rule(node: C.Node, minute: Int)
+Fact Tended-Tree(bucket: B.Bucket, minute: Int)
+Fact Tended-Harness(agent: H.Party, minute: Int)
+Fact Lately(minute: Int)                            // a minute within the wait before now
+  Holds when B.Now(now) && Again-After(wait) && Tended-At(minute) && minute > now - wait
+Fact Tended-At(minute: Int)
+  Holds when Tended-Work(t, minute) || Tended-Rule(n, minute) || Tended-Tree(b, minute) || Tended-Harness(a, minute)
+Event Tend-Work(target: R.Artifact, minute: Int)       Creates Tended-Work(target, minute)
+Event Tend-Rule(node: C.Node, minute: Int)             Creates Tended-Rule(node, minute)
+Event Tend-Tree(bucket: B.Bucket, minute: Int)         Creates Tended-Tree(bucket, minute)
+Event Tend-Harness(agent: H.Party, minute: Int)        Creates Tended-Harness(agent, minute)
+
++B.Bucket("yaaihh-brain").
+// Run from the reaction below, so as this module. It sends words, and it has a claim looked at again; every other
+// step that lessens a mess is some other party's act, which is as the closing rule wants it.
+fn tame(minute: Int) -> Program<Unit> {
+  par m in (Foreach t, a : Mess-Work(t, a) When Mess-Work(t, a) && Not(Exists at : Tended-Work(a, at) && Lately(at))) {
+    Tend-Work(m.target, minute);
+    match m.trouble {
+      | "unheld" => {
+          holder <- perform C.Pick("holder");
+          perform Ctrl.Deliver(self, holder, "Nobody holds this, and it is owed to him: {{ m.target }}. Take it, or say who should.");
+          return ()
+        }
+      | "late" => {
+          par w in (Foreach w : w When R.Assigned(w, m.target)) {
+            perform Ctrl.Deliver(self, w, "This was promised for a time that has passed: {{ m.target }}. Do it now, or tell him the new time and why, in one line.")
+          };
+          return ()
+        }
+      | "unlooked" => do R.look(m.target)               // the look that did not happen, or did not finish, is made again
+    }
+  };
+  par m in (Foreach n, w : Mess-Rule(n, w) When Mess-Rule(n, w) && Not(Exists at : Tended-Rule(n, at) && Lately(at))) {
+    Tend-Rule(m.node, minute);
+    perform Ctrl.Deliver(self, m.who, "A rule you made up still stands. Take it back where you wrote it and wherever you acted on it, then say so (Take-Back-Rule); or ask him in one line.")
+  };
+  par b in (Foreach b : b When Mess-Tree(b) && Not(Exists at : Tended-Tree(b, at) && Lately(at))) {
+    Tend-Tree(b, minute);
+    keeper <- perform C.Pick("keeper");
+    perform Ctrl.Deliver(self, keeper, "This tree is over its limit: {{ b }}. Say what can go; delete nothing of his.")
+  };
+  par a in (Foreach a : a When Mess-Harness(a) && Not(Exists at : Tended-Harness(a, at) && Lately(at))) {
+    Tend-Harness(a, minute);
+    keeper <- perform C.Pick("keeper");
+    perform Ctrl.Deliver(self, keeper, "{{ a }} runs a harness version its bridge was not read for. Read the bridge's facts from that version's own text; until then nothing is let for it.")
+  };
+  return ()
+}
+
+on B.Tick(minute) where (Exists t, a : Mess-Work(t, a)) || (Exists n, w : Mess-Rule(n, w))
+                        || (Exists b : Mess-Tree(b)) || (Exists a : Mess-Harness(a)) do {
+  do B.with_budget("yaaihh-brain", tame(minute))
+}
+
+// ===== 4. Before a compaction ====================================================================================
+// A compaction sums an agent's context up, and what it owes is the first thing a summary loses. So before one, what
+// the ledger holds for the agent is written down as a checkpoint.
+// Edge: a harness that will not let the compaction be changed (Claude Code, as read). The checkpoint is then owed
+// to the agent and given at its next `turn_begins`; and where the harness cannot inject there either, it stays
+// owed and shows as owed. It is never dropped.
+
+Fact Restate-Owed(agent: H.Party, held: String)
+Act Owe-Restating(agent: H.Party, held: String)     // by the agent's own run, before its compaction
+  Creates        Restate-Owed(agent, held)
+Act Take-Restated(agent: H.Party, held: String)     // by the agent's own run, when it has been given back
+  Conditioned by Restate-Owed(agent, held)
+  Terminates     Restate-Owed(agent, held)
+
+fn with_consolidation<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, "compacting", payload), k
+        where who == agent && H.Running-On(agent, h, v) && H.Lets(h, v, "compacting", "modify") => {
+        kept <- do checkpoint(agent, "compaction");
+        rest <- perform H.Hook(who, "compacting", payload);
+        resume k(H.combine(H.Modify("{{ payload }}\nKeep this in the summary, word for word:\n{{ kept }}"), rest))
+      }
+    | H.Hook(who, "compacting", payload), k where who == agent => {
+        kept <- do checkpoint(agent, "compaction");
+        Owe-Restating(agent, kept);
+        rest <- perform H.Hook(who, "compacting", payload);
+        resume k(rest)
+      }
+  }
+}
+on H.Hook(agent, "turn_begins", payload)
+   where (Exists c : Restate-Owed(agent, c)) && H.Running-On(agent, h, v) && H.Lets(h, v, "turn_begins", "inject") do {
+  owed <- return (Foreach c : c When Restate-Owed(agent, c));
+  par c in owed { Take-Restated(agent, c) };
+  rest <- perform H.Hook(agent, "turn_begins", payload);
+  return H.combine(H.Inject("Your context was summed up. This is what you held before it:\n{{ owed }}"), rest)
+}
+
+// ===== 5. Checkpoints ============================================================================================
+// A checkpoint is a line of the record: an agent, the commit its files were at, and what the ledger held for it.
+// One is made before a compaction and at every claim. The record is never rewound: going back to a checkpoint is
+// a copy of the agent, started from that point beside the original.
+
+Fact Checkpoint(agent: H.Party, head: String, why: String, held: String)
+Act Record-Checkpoint(actor: H.Party, agent: H.Party, head: String, why: String, held: String)
+  Conditioned by Holds(agent)
+  Creates        Checkpoint(agent, head, why, held)
+
+fn checkpoint(agent: H.Party, why: String) -> Program<String> {
+  head  <- perform Ctrl.Git-Head();
+  owed  <- return (Foreach t : t When Live(t) && R.Assigned(agent, t));
+  open  <- return (Foreach t, c : t When R.Assigned(agent, t) && R.Awaiting(t, c));
+  heard <- return (Foreach n : n When C.Heard(agent, n));
+  his   <- par n in heard { perform C.TextOf(n) };
+  held  <- return "Files at {{ head }} ({{ why }}).\nOwed to him: {{ owed }}\nClaimed, and not yet looked at: {{ open }}\nWhat he wrote to you: {{ his }}";
+  Record-Checkpoint(self, agent, head, why, held);
+  return held
+}
+
+on R.Claim-Done(who, _) where R.Railed(who) do {
+  do checkpoint(who, "claim")
+}
+
+// By him: a copy of the agent, taken up from the checkpoint. Edge: the files have moved on since. The copy is told
+// the commit the checkpoint was made at and does not get it checked out under the original; a worktree at that
+// commit is the copy's first step, in its own folder.
+Act Go-Back(owner: H.Party, agent: H.Party, head: String)
+  Conditioned by C.Role(owner, "owner") && Checkpoint(agent, head, why, held)
+  Does {
+    par kept in (Foreach w, h : h When Checkpoint(agent, head, w, h)) {
+      copy <- perform Ctrl.Spin-Off(agent);
+      perform Ctrl.Deliver(owner, copy, "You are a copy, taken up from an earlier point. The files were at {{ head }}: make a worktree there and work in it. What you held then:\n{{ kept }}")
+    };
+    return ()
+  }

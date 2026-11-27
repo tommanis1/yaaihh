@@ -1,0 +1,100 @@
+// A change to the project's own text, live and committed together, or nothing changed (paper-research N-865). An
+// agent, or the owner from his window, opens one with the files it wants changed: the project's kinds, calls, policy,
+// renderings, the views of its project.toml and its standing text (standing.md). coordd answers `check_text` and
+// `load_text` itself, as the worker `coord` (coordd's change.rs): the check applies the change to a copy of the
+// project's text and reads it as a reload would, the load writes it, commits it in the project's text repository and
+// loads it, all or none.
+//
+// Who may open one is the project's `Act open`; whether it is read first is the project's decision `text-read`
+// (agent-base policy/text-change.eflint, which a project's file of that name replaces), and by whom its `fills` of the
+// role `text-reader`, given who made it and the names it touches (paper-research N-1446 p2894; the lead holds the role
+// by text-reader.eflint, and a project's policy may give it to others), never the engine's; a change to the
+// flavour's look (its `look.toml`, the window's own controls) is the system's decision `look-read`
+// (policy/look.eflint), read by the lead, which no project's policy may rule on. A change read first with nobody to
+// read it is refused, never the owner's step. The way back is a change with BACK, a commit a change made: its files as
+// they were before it.
+//
+// After the load, an agent's change has one more step, for the agent that made it (consult-lead, N-412 p1203; the
+// owner's N-1104 p81, "agent changes can go live they then look at a real ss to see if it works like a human would"):
+// `still_text`, which coordd answers with a picture of the page the change touches drawn by a stand-in window that
+// took the change the way his window takes it, and `look_at`, the agent's look at that picture. Wrong takes the change
+// back by its own commit, its files as they were before it, byte for byte; the way back is loaded as it is, with no
+// decision or read, since it puts back what was live before.
+/// a change to the project's own text: checked, read where its policy asks, committed and loaded together, and looked at
+/// by the agent that made it in a picture of a window drawing it
+kind text-change
+  form files: [TextFile], back: Ref?, why: Text
+  result
+    Live(commit: Ref, still: Text?)              /// live, and committed as COMMIT in the project's text repository; STILL the picture the agent that made it found right (none: the owner's own change, which his window draws)
+    | Unseen(commit: Ref, why: Text)             /// live and committed as COMMIT, and no window drew it for the agent to look at: why
+    | Back(what: Text, still: Text, commit: Ref) /// the agent that made it found the picture STILL wrong (WHAT): taken back as COMMIT, its files as they were before it
+    | Stuck(what: Text, still: Text, why: Text)  /// the agent found the picture STILL wrong (WHAT), and the way back was refused (WHY): the change stays live
+    | Refused(why: Text, at: [Text])             /// nothing changed and nothing committed: why, and the places (file:line) it names
+  pattern
+    try {
+      c <- step coord check_text(files, back);
+      (changed, read) <- match c {
+        Refused(w, at) => raise Stop({why = w, at = at})
+        Look(f, by, r) =>
+          d <- decide look-read(by);
+          match d {
+            No(w) => raise Stop({why = w, at = []})
+            Go => return (f, r)
+            Read =>
+              v <- try { step role lead read_text(why, by, [], f) } handle {
+                NoWorker(w) => return No("This change is read first by the project's lead, and no lead is running now (the registry says who is): nothing changed. Open it again when one runs.")
+              };
+              match v {
+                No(w) => raise Stop({why = w, at = []})
+                Go => return (f, r)
+              }
+          }
+        Checks(f, by, kinds, calls, renderings, views, policy, library, shadows, bindings, handlers, r) =>
+          d <- decide text-read(by, kinds, calls, renderings, views, policy, library, shadows, bindings, handlers);
+          match d {
+            No(w) => raise Stop({why = w, at = []})
+            Go => return (f, r)
+            Read =>
+              v <- try { step role text-reader read_text(why, by, kinds ++ calls ++ renderings ++ views ++ policy ++ library, f) } handle {
+                NoWorker(w) => return No("This change is read first, and nobody who may read it is running now (the project's policy says who: the role `text-reader`, by default its lead): nothing changed. Open it again when one runs.")
+              };
+              match v {
+                No(w) => raise Stop({why = w, at = []})
+                Go => return (f, r)
+              }
+          }
+      };
+      l <- step coord load_text(changed, read, why);
+      commit <- match l {
+        Refused(w, at) => raise Stop({why = w, at = at})
+        Live(c) => return c
+      };
+      s <- step coord still_text(changed, commit);
+      match s {
+        Own => return Live(commit, none)
+        Unseen(w) => return Unseen(commit, w)
+        Still(path, by, page) =>
+          a <- step by look_at(why, path, page);
+          match a {
+            LooksRight => return Live(commit, path)
+            Wrong(what) =>
+              try {
+                b <- step coord check_text([], commit);
+                (bf, br) <- match b {
+                  Refused(w, at) => raise Stop({why = w, at = at})
+                  Look(f, by2, r) => return (f, r)
+                  Checks(f, by2, k, cl, re, vi, po, li, sh, bi, ha, r) => return (f, r)
+                };
+                bl <- step coord load_text(bf, br, what);
+                match bl {
+                  Live(c) => return Back(what, path, c)
+                  Refused(w, at) => raise Stop({why = w, at = at})
+                }
+              } handle {
+                Stop(e) => return Stuck(what, path, e.why)
+              }
+          }
+      }
+    } handle {
+      Stop(e) => return Refused(e.why, e.at)
+    }

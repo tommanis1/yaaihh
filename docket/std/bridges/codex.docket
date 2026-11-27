@@ -1,0 +1,136 @@
+module std.bridges.codex
+
+import std.hooks as H
+import std.delivery as D
+import std.rails as R
+
+// Codex, as read. Pinned to Codex 0.160.0, whose hooks' answer schemas these facts were read from.
+//   tool_called: its schema has a changed input, but whether 0.160.0 applies it was not shown, so modify is not let.
+//   tool_result: it replaces the result of an MCP tool only, so modify is not let.
+//   permission_asked: a hook answers allow or deny; a changed input makes it fail closed.
+
+// Its hooks by their own names, as its hooks file registers them. `failed` is no hook of Codex's: its app-server
+// tells only a connection that a turn failed, and codex-rpc, which follows that connection, relays it by this name.
++H.Native-Hook("codex", "UserPromptSubmit", "turn_begins").
++H.Native-Hook("codex", "PreToolUse", "tool_called").
++H.Native-Hook("codex", "PostToolUse", "tool_result").
++H.Native-Hook("codex", "PermissionRequest", "permission_asked").
++H.Native-Hook("codex", "Stop", "turn_end").
++H.Native-Hook("codex", "PreCompact", "compacting").
++H.Native-Hook("codex", "failed", "overloaded").
+
++H.Reaches("codex", "0.160.0", "turn_begins").      +H.Reaches("codex", "0.160.0", "tool_called").
++H.Reaches("codex", "0.160.0", "tool_result").      +H.Reaches("codex", "0.160.0", "permission_asked").
++H.Reaches("codex", "0.160.0", "turn_end").         +H.Reaches("codex", "0.160.0", "compacting").
++H.Reaches("codex", "0.160.0", "overloaded").
+
++H.Lets("codex", "0.160.0", "turn_begins", "deny").       +H.Lets("codex", "0.160.0", "turn_begins", "inject").
++H.Lets("codex", "0.160.0", "tool_called", "deny").       +H.Lets("codex", "0.160.0", "tool_called", "inject").
++H.Lets("codex", "0.160.0", "tool_result", "inject").
++H.Lets("codex", "0.160.0", "permission_asked", "answer").
++H.Lets("codex", "0.160.0", "turn_end", "keep_going").
+
+// How long it waits for a hook's answer was not read from its text. So no Suspend is let and no Waits is stated:
+// a handler that must make Codex wait is refused until this bridge's test has measured it.
+//
+// Not stated, because the text read does not confirm it:
+//   overloaded, suspend              the moment is reached; no answer was read
+
+// ===== Delivery: turns ===========================================================================================
+// What std.delivery holds for an agent reaches a Codex session as turns, each started with one packet, never one
+// turn for each word. A packet is in the three parts of a turn's work: CONTEXT (what to put first, the items),
+// WRITE (the messages to act on), RECONCILE (how the turn's work is handed in).
+//   idle               whatever waits starts one turn, as one packet
+//   in a turn          words wait; an interrupting one is steered into the running turn
+//   the turn's end     what the turn was handed is read, and everything that came during it starts one turn more
+//   a failed turn      what it was handed waits again, for the next packet
+//   its own question   from `permission_asked` until the call goes on (`tool_result`) or the turn ends, Codex
+//                      stands at its approval question, answered by the hook arms and nobody else: nothing is
+//                      steered into it, so no word can read as the answer, and no turn is started
+// Only an agent the project delivers to by "codex" (D.Agent) is given turns.
+Effect Codex-Start-Turn(agent: H.Party, packet: String) -> Unit   // the turns driver's: one prompt, which begins one turn
+Effect Codex-Steer(agent: H.Party, msg: String) -> Unit           // the turns driver's: typed into the running turn
+
++H.Party("std.bridges.codex"). +D.Carrier("std.bridges.codex").
+
+Fact Asking(agent: H.Party)                       // at its own approval question
+Event Approval-Asked(agent: H.Party)
+  Creates    Asking(agent)
+Event Approval-Settled(agent: H.Party)
+  Terminates Asking(agent) When Asking(agent)
+
+fn packet(w: D.Waiting) -> Program<String> {
+  ds <- do D.joined(w.directives, "; ");
+  is <- do D.joined(w.items, ", ");
+  ls <- do D.joined(w.lines, "\n");
+  lead <- if w.top != "" { return "First: {{ w.top }}\n" } else { return "" };
+  dirs <- if ds != "" { return "Directives: {{ ds }}\n" } else { return "" };
+  items <- if is != "" { return "Assigned: {{ is }}\n" } else { return "" };
+  write <- if ls != "" { return ls } else { return "(no messages)" };
+  return "CONTEXT\n{{ lead }}{{ dirs }}{{ items }}WRITE\n{{ write }}\nRECONCILE\nHand the work in when it is done: coord report-work SUMMARY [--refs REFS] [--item ITEM]"
+}
+
+fn start(agent: H.Party) -> Program<Unit> {
+  w <- do D.waiting(agent);
+  text <- do packet(w);
+  perform Codex-Start-Turn(agent, text);
+  do D.hand(agent, w);
+  D.Wake(self, agent)
+}
+
+// AGENT's interrupting words not yet handed, steered in as one; none, nothing. Its own unread first, so the join
+// binds each message by its id and never walks every message posted (consult-lead-c N-1978 p8).
+fn steer_held(agent: H.Party) -> Program<Unit> {
+  held <- return (Foreach m, f, t : (m, f, t) When D.Unread(agent, m, "Interrupt") && D.Message(m, f, t) && Not(D.In-Flight(agent, m)));
+  if held != [] {
+    ls <- par x in held { match x { | (m, f, t) => return "[{{ m }} from {{ f }}] {{ t }}" } };
+    words <- do D.joined(ls, "\n");
+    perform Codex-Steer(agent, "[coord delivery, interrupting] {{ words }}");
+    ms <- par x in held { match x { | (m, f, t) => return m } };
+    par m in ms { D.Hand(self, agent, m) };
+    return ()
+  } else {
+    return ()
+  }
+}
+
+on D.Post(by, to, msg, text, u) where D.Agent(to, "codex", r) && D.Idle(to) && Not(Asking(to)) do {
+  do start(to)
+}
+// only into a running session's turn: one not running is given what waits when it starts (below)
+on D.Post(by, to, msg, text, "Interrupt") where D.Agent(to, "codex", r) && H.Running-On(to, "codex", v) && Not(D.Idle(to)) && Not(Asking(to)) do {
+  perform Codex-Steer(to, "[coord delivery, interrupting] [{{ msg }} from {{ by }}] {{ text }}");
+  D.Hand(self, to, msg)
+}
+on D.Direct(by, agent, text, p) where D.Agent(agent, "codex", r) && D.Idle(agent) && Not(Asking(agent)) do {
+  do start(agent)
+}
+on R.Assign(giver, agent, item) where D.Agent(agent, "codex", r) && D.Idle(agent) && Not(Asking(agent)) do {
+  do start(agent)
+}
+on H.Reach(agent, "permission_asked") where D.Agent(agent, "codex", r) && Not(Asking(agent)) do {
+  Approval-Asked(agent)
+}
+// past its question, the interrupting words held back at it are steered in, as one (N-1978 p5, point 3)
+on H.Reach(agent, "tool_result") where D.Agent(agent, "codex", r) && Asking(agent) do {
+  Approval-Settled(agent);
+  do steer_held(agent)
+}
+// a session started (again): what a session before it was handed and never read is handed back, and what waits
+// starts one turn (N-1978 p5, point 2)
+on H.Session-Started(agent, "codex", v) where D.Agent(agent, "codex", r) do {
+  if Holds(Asking(agent)) { Approval-Settled(agent) };
+  if Holds(D.Woken(agent)) || (Exists m : D.In-Flight(agent, m)) { D.Unwake(self, agent) };
+  if Exists x : D.Needs-Agent(agent, x) { do start(agent) }
+}
+on H.Reach(agent, "turn_end") where D.Agent(agent, "codex", r)
+   && (Asking(agent) || D.Woken(agent) || (Exists m : D.In-Flight(agent, m)) || (Exists x : D.Needs-Agent(agent, x))) do {
+  if Holds(Asking(agent)) { Approval-Settled(agent) };
+  D.Settle(self, agent);
+  if Exists x : D.Needs-Agent(agent, x) { do start(agent) }
+}
+on H.Reach(agent, "overloaded") where D.Agent(agent, "codex", r)
+   && (Asking(agent) || D.Woken(agent) || (Exists m : D.In-Flight(agent, m))) do {
+  if Holds(Asking(agent)) { Approval-Settled(agent) };
+  if Holds(D.Woken(agent)) || (Exists m : D.In-Flight(agent, m)) { D.Unwake(self, agent) }
+}

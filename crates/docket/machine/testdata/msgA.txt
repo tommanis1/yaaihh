@@ -1,0 +1,15 @@
+Happy to help. Here's a starting design for a small browser game you could build in one `index.html` with plain JS and canvas, no build step:
+
+**Working title: "Drift"**
+- **Core loop:** You steer a small glowing orb with the mouse or arrow keys. Sparks drift in from the edges. Collect the light sparks to grow. Touching a dark spark makes you shrink. The bigger you are, the slower you move.
+- **Goal:** Survive and get as large as you can. Your score is your peak size plus the time you survived.
+- **Difficulty:** Sparks spawn faster over time, and more of them are dark.
+- **Juice:** A soft trail behind the orb, a pulse when you collect a spark, a screen shake when you get hit, and the best score saved in localStorage.
+- **Scope:** About 200–300 lines. That's one canvas, a `requestAnimationFrame` loop, circle collision checks, and a start/game-over screen.
+
+**Choices for you:**
+1. Does this kind of idea suit you, or did you have a genre in mind (puzzle, platformer, word game, clicker)?
+2. Should it be desktop-only, or work on mobile with touch too?
+3. Should it live in this repo, which is currently the calc demo, or a new one?
+
+Once you answer, I'll write it up as a ticket and someone can build it.

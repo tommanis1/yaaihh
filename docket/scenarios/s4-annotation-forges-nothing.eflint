@@ -1,0 +1,90 @@
+// Scenario 4. An agent writes free prose. The free-model clerk's marks point at its passages and change none of
+// them; and nothing the clerk marks can stand in for the three acts: a passage that reads like "done" or like words
+// for the owner claims nothing and reaches nobody.
+// The rules of std.comms 2, 3, 5 and std.rails 1, by hand in the reference eFLINT that eflint-rs reads. The check
+// that an answer names only passages it was given, in order (`is_subsequence`), is a host function and is in the
+// docket-v2 script. Every query must succeed.
+Fact party Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact key Identified by String
+Fact node Identified by String
+Fact words Identified by String
+Fact relation Identified by String
+Fact artifact Identified by String
+Fact condition Identified by String
+Fact seen Identified by party * key
+Fact spoken Identified by node * party
+Fact worded Identified by node * words                 // a passage's own characters, as the driver wrote them
+Fact gone-over Identified by node
+Fact marked Identified by node * relation * key * party
+Fact may-speak Identified by party
+Fact for-owner-inbox Identified by node
+Fact assigned Identified by party * artifact
+Fact required Identified by artifact * condition
+Fact claimed-done Identified by party * artifact
+Fact only-prose Identified by node * party
+  Holds when spoken(node, party) && (Exists key, party' : marked(node, "reads as done", key, party')
+                                                           || marked(node, "reads as for him", key, party'))
+Act mark-passage
+  Actor party
+  Related to party', node, relation, key
+  Holds when party == party("std.comms") && role(party', "clerk") && Not(gone-over(node))
+             && (Exists party'' : spoken(node, party'') && seen(party'', key) && party'' != party')
+  Creates marked(node, relation, key, party')
+Act finish-review
+  Actor party
+  Related to party', node
+  Holds when party == party("std.comms") && role(party', "clerk") && (Exists party'' : spoken(node, party'') && party'' != party')
+  Creates gone-over(node)
+Act says-to-owner
+  Actor party
+  Related to node
+  Holds when spoken(node, party) && may-speak(party) && Not(Exists key, party' : marked(node, "for", key, party'))
+  Creates for-owner-inbox(node)
+Act claim-done
+  Actor party
+  Related to artifact
+  Holds when assigned(party, artifact) && (Exists condition : required(artifact, condition))
+  Creates claimed-done(party, artifact)
+.
++party("w1"). +party("cl1"). +party("std.comms").
++role-name("clerk"). +role("cl1", "clerk"). +may-speak("w1").
++key("k-map"). +key("k-owner"). +seen("w1", "k-map"). +seen("w1", "k-owner").
++relation("means"). +relation("reads as done"). +relation("reads as for him"). +relation("for").
++artifact("map-work"). +condition("tests"). +assigned("w1", "map-work"). +required("map-work", "tests").
++node("n1"). +node("n2"). +node("n3").
++words("I looked at the map code."). +words("The map work is done now."). +words("Tell him it ships tonight.").
++spoken("n1", "w1"). +worded("n1", "I looked at the map code.").
++spoken("n2", "w1"). +worded("n2", "The map work is done now.").
++spoken("n3", "w1"). +worded("n3", "Tell him it ships tonight.").
+
+// 1. The clerk's marks.
+mark-passage("std.comms", "cl1", "n1", "means", "k-map").
+mark-passage("std.comms", "cl1", "n2", "reads as done", "k-map").
+mark-passage("std.comms", "cl1", "n3", "reads as for him", "k-owner").
+finish-review("std.comms", "cl1", "n1").
+finish-review("std.comms", "cl1", "n2").
+finish-review("std.comms", "cl1", "n3").
+
+// 2. Every character is as it was: the marks sit beside the passages.
+?worded("n1", "I looked at the map code.").
+?worded("n2", "The map work is done now.").
+?worded("n3", "Tell him it ships tonight.").
+?spoken("n1", "w1"). ?spoken("n2", "w1"). ?spoken("n3", "w1").
+?!Enabled(mark-passage("std.comms", "cl1", "n1", "means", "k-owner")).   // judged once: gone over
+
+// 3. "Done" in prose claims nothing.
+?only-prose("n2", "w1").
+?!claimed-done("w1", "map-work").
+?!Enabled(claim-done("cl1", "map-work")).                // not the clerk
+?!Enabled(claim-done("std.comms", "map-work")).                 // not the module that records its marks
+?Enabled(claim-done("w1", "map-work")).                      // only the one who holds the work, by its own act
+
+// 4. "Tell him" in prose reaches nobody.
+?only-prose("n3", "w1").
+?!for-owner-inbox("n3").
+?!Enabled(says-to-owner("cl1", "n3")).
+?!Enabled(says-to-owner("std.comms", "n3")).
+says-to-owner("w1", "n3").                                   // the writer's own act
+?for-owner-inbox("n3").

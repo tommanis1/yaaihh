@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# The status-line command of an agent-base Claude Code agent (settings.json "statusLine"). Claude Code runs it after
+# each assistant message with the session's state as JSON on stdin; for a Pro, Max or Ultra login that holds
+# rate_limits.five_hour and .seven_day (used_percentage, resets_at), the account's two windows as the API last gave
+# them. That is how coordd learns an account's windows without a call of its own (ask 12, N-412): the input goes to
+# coordd as the event "statusline" (accounts/limits.rs reads it), and the line printed is the two windows in per cent,
+# "5h 24% · 7d 41%", or nothing when there are none.
+#
+# It never blocks or fails the session: coordc is started on its own, its output dropped, and not waited for (with
+# coordd down it does nothing); a missing python3 or an odd input prints nothing; the script always exits 0.
+set -u
+input=$(cat)
+coordc=${AGENT_BASE:-}/bin/coordc
+if [ -n "${AGENT_BASE:-}" ] && [ -x "$coordc" ]; then
+  if command -v setsid >/dev/null 2>&1; then
+    setsid -f "$coordc" hook statusline <<<"$input" >/dev/null 2>&1
+  else
+    ("$coordc" hook statusline <<<"$input" >/dev/null 2>&1 &)
+  fi
+fi
+python3 -I -c '
+import json, sys
+try:
+    limits = json.loads(sys.argv[1]).get("rate_limits") or {}
+    shown = [name + " " + str(round(w["used_percentage"])) + "%" for name, key in (("5h", "five_hour"), ("7d", "seven_day"))
+             if isinstance(w := limits.get(key), dict) and isinstance(w.get("used_percentage"), (int, float))]
+    if shown:
+        print(" · ".join(shown))
+except Exception:
+    pass' "$input" 2>/dev/null
+exit 0

@@ -1,0 +1,631 @@
+#!/usr/bin/python3 -I
+"""build-store-rustc: the build runner's store for Rust (N-412 p925, p927, p933), as RUSTC_WRAPPER.
+
+Every job runs in an empty build place, with its worktree and its place each mounted at one fixed path (the runner's
+namespace), so a compile is the same compile on every branch and in every place. Each rustc call comes here:
+  - its key is what rustc reads: rustc's version, its arguments, cargo's environment for it, the content of each
+    --extern crate, of each native library it links (-l as the -L search resolves it, and every file of each
+    `-L native=` folder) and of the linker, and its root source file. One entry holds variants: each has the content of
+    every source the compile read and the hash of each env! value it read (both from its dep-info);
+  - a variant whose sources and values are as they are now is a hit: its outputs are linked into the place from the
+    store (read-only, each checked against its hash: a mismatch is a miss and a log line) and rustc's messages are
+    replayed; otherwise rustc runs, its messages go to cargo as they come, and on success its outputs are put in.
+A build script compiled here is put in place behind a stand-in, so its run is an entry too (build-store-rustc
+script): keyed by the script's binary, the environment cargo gives it and what its last run said it reads
+(rerun-if-changed, rerun-if-env-changed; the whole package when it said nothing); a hit writes the stored OUT_DIR back
+and prints the stored lines.
+
+BUILD_STORE: the store's folder. BUILD_STORE_RUN: a file each compile appends hit, miss or pass to. BUILD_STORE_BY:
+who puts an entry (worktree, branch, commit, train or builder), kept in each variant.
+"""
+import fcntl, hashlib, json, os, re, shlex, shutil, stat, subprocess, sys, time
+from pathlib import Path
+
+STORE = Path(os.environ.get("BUILD_STORE") or "/nonexistent")
+RUN = os.environ.get("BUILD_STORE_RUN")
+try:  # who put an entry: the job's caller, worktree, branch, commit and whether it was a train's (p928 point 5)
+    BY = json.loads(os.environ.get("BUILD_STORE_BY", ""))
+except ValueError:
+    BY = os.environ.get("BUILD_STORE_BY", "")
+# two compiles of each miss, stored only when both give the same bytes: the build machine's setting while its memory is
+# not cleared (paper-research N-412 p1342: an entry made from a flipped bit would be served to every later job)
+TWICE = os.environ.get("BUILD_STORE_TWICE") == "1"
+CARGO_HOME = os.environ.get("CARGO_HOME") or os.path.expanduser("~/.cargo")
+NOISE = ("CARGO_MAKEFLAGS", "NUM_JOBS", "MAKEFLAGS", "MFLAGS", "JOBSERVER", "INVOCATION_ID", "JOURNAL_STREAM",
+         "SYSTEMD_EXEC_PID", "MANAGERPID", "NOTIFY_SOCKET", "LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES")
+
+
+def note(what):
+    if RUN:
+        try:
+            with open(RUN, "a") as f:
+                f.write(what + "\n")
+        except OSError:
+            pass
+
+
+def hit_of(v):
+    """A hit, noted with whose entry it was: hit:t a train's, hit:b a builder's (paper-research N-412 p933: a train's
+    ready post says how many of its hits came from builders' entries)."""
+    by = v.get("by")
+    return "hit:t" if isinstance(by, dict) and by.get("train") else "hit:b"
+
+
+def log(msg):
+    try:
+        with open(STORE / "store.log", "a") as f:
+            f.write(f"{time.strftime('%F %T')} {msg}\n")
+    except OSError:
+        pass
+
+
+def sha_bytes(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def stamp_of(st):
+    return f"{st.st_size} {st.st_mtime_ns} {st.st_ino} {st.st_dev}"
+
+
+def hash_cache(p):
+    return STORE / "hashes" / hashlib.sha1(os.path.abspath(p).encode()).hexdigest()
+
+
+def remember(p, h):
+    try:
+        ck = hash_cache(p)
+        ck.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ck.with_name(f".{ck.name}.{os.getpid()}")
+        tmp.write_text(f"{stamp_of(os.stat(p))} {h}")
+        os.replace(tmp, ck)
+    except OSError:
+        pass
+
+
+def sha_fresh(p):
+    """P's content hash read now, never from the cache (the two compiles' comparison)."""
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for blk in iter(lambda: f.read(1 << 20), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def sha_file(p):
+    """P's content hash, cached by path, size, time and inode (an rlib is read by every compile that depends on it)."""
+    st = os.stat(p)
+    try:
+        a, b = hash_cache(p).read_text().rsplit(" ", 1)
+        if a == stamp_of(st):
+            return b
+    except (OSError, ValueError):
+        pass
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for blk in iter(lambda: f.read(1 << 20), b""):
+            h.update(blk)
+    d = h.hexdigest()
+    remember(p, d)
+    return d
+
+
+def sha_tree(d):
+    """A folder's files, by path and content (a `-L native=` folder, a rerun-if-changed folder)."""
+    parts = []
+    for r, ds, fs in os.walk(d):
+        ds.sort()
+        for n in sorted(fs):
+            q = os.path.join(r, n)
+            if os.path.isfile(q):
+                parts.append(f"{os.path.relpath(q, d)} {sha_file(q)}")
+    return sha_bytes("\n".join(parts).encode())
+
+
+def blob(h, ex):
+    return STORE / "blobs" / h[:2] / (h + (".x" if ex else ""))
+
+
+def entry(kind, key):
+    return STORE / "entries" / kind / key[:2] / f"{key}.json"
+
+
+def write_blob(h, ex, src=None, data=None):
+    b = blob(h, ex)
+    if b.exists():
+        return b
+    b.parent.mkdir(parents=True, exist_ok=True)
+    tmp = b.with_name(f".{b.name}.{os.getpid()}")
+    if data is not None:
+        tmp.write_bytes(data)
+    else:
+        shutil.copyfile(src, tmp)
+    os.chmod(tmp, 0o555 if ex else 0o444)
+    os.replace(tmp, b)
+    return b
+
+
+def place_blob(h, ex, dst):
+    """The blob linked in at DST (beside and renamed in), checked against its hash first. False when it differs: the
+    blob is moved out of the store and the caller compiles instead."""
+    b = blob(h, ex)
+    try:
+        with open(b, "rb") as f:
+            hh = hashlib.sha256()
+            for blk in iter(lambda: f.read(1 << 20), b""):
+                hh.update(blk)
+        st = os.stat(b)
+    except OSError:
+        log(f"blob {b.name} named by an entry is not in the store: compiled instead")
+        return False
+    if hh.hexdigest() != h or st.st_mode & 0o222:
+        log(f"blob {b.name} differs from its hash or is writable: taken out, compiled instead")
+        try:
+            os.replace(b, b.with_name(f".bad-{b.name}-{os.getpid()}"))
+        except OSError:
+            pass
+        return False
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.store-{os.getpid()}")
+    try:
+        os.link(b, tmp)
+    except OSError:
+        shutil.copy2(b, tmp)
+    os.replace(tmp, dst)
+    remember(dst, h)
+    return True
+
+
+def read_variants(kind, key):
+    try:
+        return json.loads(entry(kind, key).read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def add_variant(kind, key, v, same):
+    e = entry(kind, key)
+    e.parent.mkdir(parents=True, exist_ok=True)
+    with open(e.with_name(e.name + ".lock"), "a") as el:  # the store's lock is held shared by the caller (held)
+        fcntl.flock(el, fcntl.LOCK_EX)
+        cur = [x for x in read_variants(kind, key) if not same(x)][-7:] + [v]
+        tmp = e.with_name(f".{e.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(cur))
+        os.replace(tmp, e)
+
+
+def opt(args, name):
+    for i, a in enumerate(args):
+        if a == name and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def all_opts(args, name):
+    """Every value of a short option given as `-L x`, `-Lx` or `-L=x`."""
+    out = []
+    for i, a in enumerate(args):
+        if a == name and i + 1 < len(args):
+            out.append(args[i + 1])
+        elif a.startswith(name) and len(a) > len(name) and not a.startswith(name + "-"):
+            out.append(a[len(name):].lstrip("="))
+    return out
+
+
+def codegen(args, name):
+    for i, a in enumerate(args):
+        if a == "-C" and i + 1 < len(args) and args[i + 1].startswith(name + "="):
+            return args[i + 1].split("=", 1)[1]
+        if a.startswith("-C" + name + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def cached_text(tag, cmd):
+    """The output of CMD (a tool's version), kept in the store by the tool's file."""
+    exe = shutil.which(cmd[0]) or cmd[0]
+    try:
+        st = os.stat(exe)
+    except OSError:
+        return f"{cmd[0]}: missing"
+    proxy = os.path.basename(os.path.realpath(exe)).startswith("rustup")
+    if proxy and not os.environ.get("RUSTUP_TOOLCHAIN"):  # rustup's proxy, toolchain chosen by the folder: asked each time
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.stdout + r.stderr
+    # under rustup's proxy the toolchain is RUSTUP_TOOLCHAIN's (cargo's proxy sets it), not the proxy file's
+    ck = STORE / "tools" / sha_bytes(f"{tag} {exe} {stamp_of(st)} {cmd} {os.environ.get('RUSTUP_TOOLCHAIN') if proxy else ''}".encode())
+    try:
+        return ck.read_text()
+    except OSError:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        ck.parent.mkdir(parents=True, exist_ok=True)
+        ck.write_text(out)
+        return out
+
+
+def env_hash(v):
+    return None if v is None else sha_bytes(v.encode())
+
+
+def dep_info(path):
+    inputs, envs = [], {}
+    for line in Path(path).read_text().splitlines():
+        if line.startswith("# env-dep:"):
+            body = line[len("# env-dep:"):]
+            k, eq, v = body.partition("=")
+            envs[k] = v if eq else None
+        elif line and not line.startswith("#") and ": " in line:
+            for x in re.split(r"(?<!\\) ", line.split(": ", 1)[1].strip()):
+                if x:
+                    inputs.append(x.replace("\\ ", " "))
+    return inputs, envs
+
+
+def passthrough(cmd):
+    note("pass")
+    os.execvp(cmd[0], cmd)
+
+
+# ---------------------------------------------------------------- a compile
+
+def compile_(cmd):
+    rustc, args = cmd[0], cmd[1:]
+    name, outdir = opt(args, "--crate-name"), opt(args, "--out-dir")
+    emit = opt(args, "--emit") or ""
+    srcs = [a for a in args if a.endswith(".rs") and not a.startswith("-")]
+    if (not STORE.is_dir() or not name or not outdir or "-" in args or any(a.startswith("--print") for a in args)
+            or ("link" not in emit and "metadata" not in emit) or len(srcs) != 1 or codegen(args, "incremental")):
+        if os.environ.get("BUILD_STORE_DEBUG"):
+            log(f"pass {name} {emit} srcs={srcs} dash={chr(45) in args} inc={codegen(args, chr(105)+"ncremental")} args={args}")
+        passthrough(cmd)
+    stem = name + (codegen(args, "extra-filename") or "")
+    parts = [cached_text("rustc", [rustc, "-vV"]), json.dumps(args)]
+    env = {k: v for k, v in os.environ.items() if k.startswith("CARGO") and k not in NOISE}
+    parts.append(json.dumps(sorted(env.items())))
+    for e in all_opts(args, "--extern"):
+        nm, _, p = e.partition("=")
+        if p:
+            parts.append(f"extern {nm} {sha_file(p)}")
+    native = [d.split("=", 1)[-1] for d in all_opts(args, "-L") if not d.startswith("dependency=")]
+    for d in native:
+        if os.path.isdir(d):
+            parts.append(f"native {d} {sha_tree(d)}")
+    for l in all_opts(args, "-l"):
+        lname = l.split("=", 1)[-1].split(":", 1)[0]
+        hit = None
+        for d in native + ["/usr/lib/x86_64-linux-gnu", "/usr/lib", "/lib/x86_64-linux-gnu"]:
+            for cand in (f"lib{lname}.a", f"lib{lname}.so", f"{lname}.lib", f"lib{lname}.dll.a"):
+                q = os.path.join(d, cand)
+                if os.path.isfile(q):
+                    hit = q
+                    break
+            if hit:
+                break
+        parts.append(f"lib {lname} {hit} {sha_file(hit) if hit else '-'}")
+    links = "link" in emit and any(t in args for t in ("bin", "--test", "proc-macro", "dylib", "cdylib")) or \
+        any(a.startswith("--crate-type=") and a.split("=", 1)[1] in ("bin", "proc-macro", "dylib", "cdylib") for a in args)
+    if links:
+        linker = codegen(args, "linker") or "cc"
+        # its resolved file and that file's hash too: a wrapper script's --version stays when the script changes
+        # (docket-core3 N-412 p1231)
+        lpath = shutil.which(linker)
+        lreal = os.path.realpath(lpath) if lpath else None
+        parts.append(f"linker {lreal or linker} {sha_file(lreal) if lreal else '-'} "
+                     + cached_text("linker", [linker, "--version"]))
+    parts.append(f"root {sha_file(srcs[0])}")
+    key = sha_bytes("\n".join(parts).encode())
+    is_script = name.startswith("build_script_")
+
+    def try_hit():
+        for v in read_variants("rustc", key):
+            if not all(env_hash(os.environ.get(k)) == h for k, h in v["env"].items()):
+                continue
+            try:
+                if not all(sha_file(p) == h for p, h in v["inputs"].items()):
+                    continue
+            except OSError:
+                continue
+            if restore(v, outdir, is_script):
+                try:
+                    os.utime(entry("rustc", key))
+                except OSError:
+                    pass
+                note(hit_of(v))
+                sys.exit(0)
+
+    try_hit()
+    # one compile of a key at a time across jobs (docket-core8 N-412 p1003: two jobs missing the same entries both
+    # compiled them, 571 times): the second waits for the first's put and looks again
+    building = None
+    try:
+        lp = entry("rustc", key).with_name(f"{key}.building")
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        building = open(lp, "a")
+        fcntl.flock(building, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fcntl.flock(building, fcntl.LOCK_EX)  # another job compiles it now
+        try_hit()
+    except OSError:
+        pass
+
+    t0 = time.time()
+    p = subprocess.Popen(cmd, stderr=subprocess.PIPE, close_fds=False)  # cargo's jobserver fds go on to rustc
+    lines = []
+    for line in p.stderr:
+        sys.stderr.buffer.write(line)
+        sys.stderr.buffer.flush()
+        lines.append(line.decode(errors="replace"))
+    rc = p.wait()
+    note(f"miss:{stem}")
+    if rc == 0 and TWICE:
+        first = {n: sha_fresh(q) for n, q in outputs(stem, outdir, t0).items()}
+        t1 = time.time()
+        rc2 = subprocess.run(cmd, stderr=subprocess.DEVNULL, close_fds=False).returncode
+        second = {n: sha_fresh(q) for n, q in outputs(stem, outdir, t1).items()} if rc2 == 0 else {}
+        if rc2 != 0 or first != second:
+            what = sorted(n for n in set(first) | set(second) if first.get(n) != second.get(n)) if rc2 == 0 else \
+                [f"the second ended rc {rc2}"]
+            note(f"differ:{stem}")
+            log(f"two compiles differ ({stem}): {', '.join(what)}: not stored")
+            sys.stderr.write(f"build-store: two compiles of {stem} gave different results ({', '.join(what)}): not "
+                             "stored, and the job fails (the build machine's memory is not cleared: paper-research "
+                             "N-412 p1342). The same crate failing this way twice in a row points to the crate (an "
+                             "output that is not deterministic), not the memory: say so to whoever gave you the task\n")
+            sys.stderr.flush()
+            sys.exit(1)
+    if rc == 0:
+        try:
+            put(key, stem, outdir, lines, t0, is_script)
+        except OSError as e:
+            log(f"not stored ({stem}): {e}")
+        if is_script:
+            stand_in(outdir, stem)
+    sys.exit(rc)
+
+
+def outputs(stem, outdir, t0):
+    out = {}
+    for x in os.listdir(outdir):
+        ok = lambda base: base == stem or base.startswith(stem + ".")
+        if (ok(x) or (x.startswith("lib") and ok(x[3:]))) and not x.endswith(".real"):  # libc's .d is libc-H.d
+            q = Path(outdir) / x
+            if q.is_file() and q.stat().st_mtime >= t0 - 1:
+                out[x] = q
+    return out
+
+
+class held:
+    """The store's lock held shared from a put's first blob to its entry: the gc, which takes it exclusive, never
+    sweeps a blob written for an entry not yet in."""
+    def __enter__(self):
+        self.f = open(STORE / ".lock", "a")
+        fcntl.flock(self.f, fcntl.LOCK_SH)
+
+    def __exit__(self, *a):
+        self.f.close()
+
+
+def put(key, stem, outdir, lines, t0, is_script):
+    with held():
+        put_(key, stem, outdir, lines, t0, is_script)
+
+
+def put_(key, stem, outdir, lines, t0, is_script):
+    outs = outputs(stem, outdir, t0)
+    d = next((q for n, q in outs.items() if n.endswith(".d")), None)
+    if d is None:
+        return
+    srcs, envs = dep_info(d)
+    inputs = {}
+    for s in dict.fromkeys(srcs):
+        if os.path.isfile(s):
+            inputs[os.path.abspath(s)] = sha_file(s)
+    files = {}
+    for n, q in outs.items():
+        ex = bool(q.stat().st_mode & 0o111)
+        h = sha_file(q)
+        write_blob(h, ex, src=q)
+        files[n] = [h, ex]
+    v = {"inputs": inputs, "env": {k: env_hash(x) for k, x in envs.items()}, "out": files, "stderr": lines,
+         "by": BY, "at": int(time.time())}
+    add_variant("rustc", key, v, lambda x: x["inputs"] == v["inputs"] and x["env"] == v["env"])
+
+
+def restore(v, outdir, is_script):
+    stem, placed = None, []
+    for n, (h, ex) in v["out"].items():
+        if not place_blob(h, ex, Path(outdir) / n):
+            # the outputs placed before it are taken back: they are the store's read-only links, and rustc writing
+            # its .d over one is refused (seen on the build VM, whose order of outputs put the .d first)
+            for q in placed:
+                try:
+                    os.unlink(q)
+                except OSError:
+                    pass
+            return False
+        placed.append(Path(outdir) / n)
+        if is_script and ex and not n.endswith(".d"):
+            stem = n
+    if stem:
+        stand_in(outdir, stem)
+    for l in v["stderr"]:
+        sys.stderr.write(l)
+    sys.stderr.flush()
+    return True
+
+
+def stand_in(outdir, stem):
+    """The build script's binary moved to .real, and in its place a stand-in that runs it through the store."""
+    real = Path(outdir) / stem
+    if not real.is_file() or real.with_name(real.name + ".real").exists():
+        return
+    os.replace(real, real.with_name(real.name + ".real"))
+    real.write_text(f"#!/bin/sh\nBUILD_STORE_SELF=\"$0\" exec {sys.executable} -I {os.path.abspath(__file__)} script "
+                    f"{real.name}.real \"$@\"\n")
+    os.chmod(real, 0o755)
+
+
+# ---------------------------------------------------------------- a build script's run
+
+SCRIPT_ENV = re.compile(r"(CARGO|RUSTC|RUSTDOC|DEP_|CC|CXX|AR|RANLIB|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|PKG_CONFIG|CMAKE|"
+                        r"TARGET_|HOST_|CROSS_)|(OUT_DIR|TARGET|HOST|OPT_LEVEL|DEBUG|PROFILE|SDKROOT|"
+                        r"MACOSX_DEPLOYMENT_TARGET)$")
+
+
+def script_tools():
+    """The versions of what a build script may run (docket-core3 N-412 p935 point 2): cmake, the C and C++ compilers
+    (CC, CXX and their per-target forms, else cc and c++; mingw's for a windows-gnu target), each by `--version`,
+    kept by the tool's file (a changed compiler is asked again). The variables themselves are in the key already."""
+    tools = {"cmake", os.environ.get("CC") or "cc", os.environ.get("CXX") or "c++"}
+    tools |= {v for k, v in os.environ.items() if re.fullmatch(r"(CC|CXX|HOST_CC|HOST_CXX|TARGET_CC|TARGET_CXX)_.+", k)}
+    if "windows-gnu" in os.environ.get("TARGET", ""):
+        tools |= {"x86_64-w64-mingw32-gcc", "x86_64-w64-mingw32-g++"}
+    out = []
+    for t in sorted(tools):
+        try:
+            cmd = shlex.split(t)
+        except ValueError:
+            cmd = [t]
+        if cmd:
+            out.append(f"{t}: {cached_text('tool', cmd + ['--version'])}")
+    return "\n".join(out)
+
+
+def safe_rel(rel):
+    """A stored OUT_DIR file's path: relative, inside the folder (docket-core3 p935 point 3)."""
+    parts = Path(rel).parts
+    return bool(parts) and not os.path.isabs(rel) and ".." not in parts and "" not in parts
+
+
+def run_script(real, args):
+    out_dir = os.environ.get("OUT_DIR")
+    if not STORE.is_dir() or not out_dir:
+        note("pass")
+        os.execv(str(real), [str(real)] + args)
+    # the variables cargo sets for a build script, and the C toolchain's (docket-core3 p935 point 2); not the rest of
+    # the job's environment (a REPLAY_* value for the test binaries is no input of a script; docket-core N-412 p978).
+    # Those the script names with rerun-if-env-changed are checked by value in its variants, as cargo reruns it.
+    env = {k: v for k, v in os.environ.items() if k not in NOISE and SCRIPT_ENV.match(k)}
+    key = sha_bytes("\n".join([sha_file(real), json.dumps(sorted(env.items())), os.getcwd(), json.dumps(args),
+                                script_tools()]).encode())
+    if os.environ.get("BUILD_STORE_DEBUG"):
+        log("script env " + json.dumps(sorted(env.items())))
+    for v in read_variants("script", key):
+        if not all(env_hash(os.environ.get(k)) == h for k, h in v["env"].items()):
+            continue
+        try:
+            if not all((sha_tree(p) if os.path.isdir(p) else sha_file(p)) == h for p, h in v["inputs"].items()):
+                continue
+        except OSError:
+            continue
+        bad = [r for r in v["out"] if not safe_rel(r)] + list(v.get("links") or [])
+        if bad:
+            log(f"script entry {key[:16]} holds a link or a path outside OUT_DIR ({bad[:3]}): run instead")
+            continue
+        ok = True
+        shutil.rmtree(out_dir, ignore_errors=True)
+        os.makedirs(out_dir, exist_ok=True)
+        for rel, (h, ex) in v["out"].items():
+            if not place_blob(h, ex, Path(out_dir) / rel):
+                ok = False
+                break
+        if ok:
+            sys.stdout.write(v["stdout"])
+            sys.stdout.flush()
+            sys.stderr.write(v["stderr"])
+            note(hit_of(v))
+            sys.exit(0)
+        shutil.rmtree(out_dir, ignore_errors=True)
+        os.makedirs(out_dir, exist_ok=True)
+    p = subprocess.run([str(real)] + args, capture_output=True, close_fds=False)
+    same = True
+    if p.returncode == 0 and TWICE:
+        # run again in an emptied OUT_DIR; stored only when both runs say and write the same. A script may stamp a time
+        # (cmake), so a difference here is not taken as the memory's: the job goes on with the second run, unstored
+        first = (p.stdout, sorted(outdir_files(out_dir)))
+        shutil.rmtree(out_dir, ignore_errors=True)
+        os.makedirs(out_dir, exist_ok=True)
+        p = subprocess.run([str(real)] + args, capture_output=True, close_fds=False)
+        same = p.returncode == 0 and first == (p.stdout, sorted(outdir_files(out_dir)))
+        if not same:
+            log(f"two runs of the build script of {os.environ.get('CARGO_PKG_NAME', '?')} differ: not stored")
+    sys.stdout.buffer.write(p.stdout)
+    sys.stderr.buffer.write(p.stderr)
+    sys.stdout.flush()
+    note(f"miss:run:{os.environ.get('CARGO_PKG_NAME', '?')}")
+    if p.returncode == 0 and same:
+        try:
+            put_script(key, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace"), out_dir)
+        except OSError as e:
+            log(f"build script run not stored ({real}): {e}")
+    sys.exit(p.returncode)
+
+
+def outdir_files(out_dir):
+    """(relative path, sha256 or 'link' or 'dir') of everything in OUT_DIR."""
+    for r, ds, fs in os.walk(out_dir):
+        for n in ds + fs:
+            q = Path(r) / n
+            yield (str(q.relative_to(out_dir)), "link" if q.is_symlink() else "dir" if q.is_dir() else sha_fresh(q))
+
+
+def put_script(key, stdout, stderr, out_dir):
+    with held():
+        put_script_(key, stdout, stderr, out_dir)
+
+
+def put_script_(key, stdout, stderr, out_dir):
+    reads, envs, said = [], {}, False
+    for line in stdout.splitlines():
+        m = re.match(r"cargo::?rerun-if-changed=(.*)", line)
+        if m:
+            said = True
+            reads.append(m.group(1))
+        m = re.match(r"cargo::?rerun-if-env-changed=(.*)", line)
+        if m:
+            said = True
+            envs[m.group(1)] = env_hash(os.environ.get(m.group(1)))
+    if not said:
+        reads = [os.environ.get("CARGO_MANIFEST_DIR", os.getcwd())]  # cargo's own rule: any file of the package
+    inputs = {}
+    for r in reads:
+        p = os.path.join(os.getcwd(), r)
+        if os.path.isdir(p):
+            inputs[p] = sha_tree(p)
+        elif os.path.isfile(p):
+            inputs[p] = sha_file(p)
+    files = {}
+    for r, ds, fs in os.walk(out_dir):
+        for n in fs + ds:
+            q = Path(r) / n
+            if q.is_symlink():  # a restored OUT_DIR holds no links (p935 point 3): this run is not stored
+                log(f"build script run not stored ({os.environ.get('CARGO_PKG_NAME', '?')}): {q} is a link")
+                return
+        for n in fs:
+            q = Path(r) / n
+            if not q.is_file():
+                continue
+            ex = bool(q.stat().st_mode & 0o111)
+            h = sha_file(q)
+            write_blob(h, ex, src=q)
+            files[str(q.relative_to(out_dir))] = [h, ex]
+    v = {"inputs": inputs, "env": envs, "out": files, "stdout": stdout, "stderr": stderr, "by": BY,
+         "at": int(time.time())}
+    add_variant("script", key, v, lambda x: x["inputs"] == v["inputs"] and x["env"] == v["env"])
+
+
+def main():
+    if sys.argv[1:2] == ["script"]:
+        real_name, rest = sys.argv[2], sys.argv[3:]
+        # run by the stand-in (a /bin/sh script whose $0 is cargo's build-script-build link): the real binary is in
+        # the folder of the link cargo ran, which /bin/sh passes on as BUILD_STORE_SELF
+        here = Path(os.environ.get("BUILD_STORE_SELF") or ".").parent
+        run_script(here / real_name, rest)
+    compile_(sys.argv[1:])
+
+
+if __name__ == "__main__":
+    main()

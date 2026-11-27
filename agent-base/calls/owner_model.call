@@ -1,0 +1,56 @@
+// The owner model's calls (owner_model.kind; the brain's part 1, paper-research N-1446 p1108). Its steps, owed by the
+// watcher, coordd answers itself as it answers the brain's (brain.rs): one stateless call each, with the model the
+// policy names for its task, `owner_whole` or `owner_delta` (decisions.eflint: Codex, medium or above, the cheapest; no
+// fallback names these tasks, so they never go to a Claude model), on his posts as the record holds them. The question
+// is N-1445 p29's, word for word (paper-research-brain's run of 21 Nov, fundamentals/brain-run-21nov/A-prompt.txt);
+// what it answers is the model's reading of him, and every part that reads it is told so.
+
+/// the lead's: the owner model stops, why said; answered with `coord answer`, or the ticket cancelled
+call stop() -> Stopped(why: Text)
+  task stop
+  template
+    The project's owner model is to stop: Stopped with why.
+
+/// the owner model built whole: on POSTS, the ids of his posts no model has read, it reads all his posts from WITHIN
+/// seconds before the newest of them
+call whole(posts: [Text], within: Int) -> Model(text: Text) | Failed(why: Text)
+  task owner_whole
+
+/// the owner model brought up to date: the last model and his posts since it, POSTS
+call delta(posts: [Text]) -> Model(text: Text) | Failed(why: Text)
+  task owner_delta
+
+/// the call coordd runs for whole (brain.rs `owner_model_env`): his posts, oldest first, each under its day, time, id
+/// and thread
+call owner_whole(from: Text, to: Text, posts: Text) -> Model(text: Text)
+  task owner_whole
+  template
+    Here is everything the owner of this project wrote from {{ from }} to {{ to }} (UTC), in his own words, with post
+    ids. Lines starting with > are his agents' words that he was answering.
+
+    {{ posts }}
+
+    Reading all of it: what do you think the owner wants? In general, not task by task: what he is after and why, and
+    how he wants it done. Give the posts each part rests on, and mark where you go beyond his words.
+
+    Answer Model(text): TEXT, your answer, whole.
+
+/// the call coordd runs for delta: the last model, as a model wrote it, and his posts since it
+call owner_delta(upto: Text, model: Text, from: Text, to: Text, posts: Text) -> Model(text: Text)
+  task owner_delta
+  template
+    Here is what a model read of the owner of this project from his posts up to {{ upto }}. It is the model's reading,
+    not his words:
+
+    {{ model }}
+
+    Here is everything he wrote since, from {{ from }} to {{ to }} (UTC), in his own words, with post ids. Lines
+    starting with > are his agents' words that he was answering.
+
+    {{ posts }}
+
+    Reading all of it: what do you think the owner wants? In general, not task by task: what he is after and why, and
+    how he wants it done. Give the posts each part rests on, and mark where you go beyond his words.
+
+    Answer Model(text): TEXT, your answer, whole: what still stands of the reading above as it stands, and what his
+    posts since change, changed.

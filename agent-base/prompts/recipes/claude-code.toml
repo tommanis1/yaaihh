@@ -1,0 +1,35 @@
+# Claude Code's system prompt for a team agent: its own text (a base in ../base, read on the wire for its version),
+# less the cuts below, plus the packs of the agent's model (../packs/packs.toml); bin/prompt-recipe composes it and says each part.
+# A cut is the paragraph (text between blank lines) that `opens` with its words and `holds` its other words, with
+# `section` the paragraphs after it up to the next heading too, and with `when` only so; one that
+# matches nothing is reported as missing, never dropped silently. Parts as in docs/archive/design/lean-system-prompt.md.
+harness = "claude-code"
+
+[[cut]]
+label = "#4 Pronouns"
+opens = "When you use a pronoun"
+
+[[cut]]
+label = "#7 Session-specific guidance"
+opens = "# Session-specific guidance"
+section = true
+
+[[cut]]
+label = "#9 Product facts"
+opens = "# Environment"
+section = true
+holds = "The most recent Claude models"
+
+[[cut]]
+label = "#11 Games"
+opens = "Do build original games"
+
+[[cut]]
+label = "#12 EndConversation"
+opens = "EndConversation (deferred tool)"
+
+[[cut]]
+label = "#8 Memory"
+opens = "# Memory"
+section = true
+when = "memory off"

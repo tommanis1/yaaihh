@@ -1,0 +1,6 @@
+// The runner's hand-in, as far as agent-base's `note` kind needs it (plan/tovrin-program/runner-contract.md). A project's
+// own `hand_in` replaces it, as long as it takes the same commit and its answers start with these (Tovrin's adds
+// `not_built` to OnLine).
+call hand_in(commit: Ref) -> OnLine(top: Ref) | Red(errors: Text)
+  template
+    Check {{ commit }} on top of the line and of the hand-ins before it, and put it on the line if it is green.

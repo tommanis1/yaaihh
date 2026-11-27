@@ -1,0 +1,155 @@
+module yaaihh.hygiene
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+
+// Slop, MB & Commit-Line Hygiene.
+// Enforces v0.4 budgets directly as Docket rules instead of prose guidelines.
+//
+//   1  the limits       megabytes of each v0.4 tree, notes, commit lines, disk
+//   2  how each is measured, and when
+//   3  a ratchet        a tree that has no number yet can only shrink
+//   4  slop             comment lines that name a ticket, a post, an agent or him
+//   5  the guard        no word of the library's world goes into the engine's code
+
+// ===== 1. The limits =============================================================================================
+
++B.Bucket("yaaihh-v04-lang").    +B.Limit("yaaihh-v04-lang", "repo_mb", 1).
++B.Bucket("yaaihh-v04-engine").  +B.Limit("yaaihh-v04-engine", "repo_mb", 1).
++B.Bucket("yaaihh-v04-window").  +B.Limit("yaaihh-v04-window", "repo_mb", 1).
++B.Bucket("yaaihh-docs").        +B.Limit("yaaihh-docs", "md_files", 8).
++B.Bucket("yaaihh-commit").      +B.Limit("yaaihh-commit", "commit_lines", 400).
++B.Bucket("yaaihh-disk").        +B.Limit("yaaihh-disk", "storage_gb", 20).
+
+// Reject engine-check regressions (e.g., 44-minute replay vs 7-minute budget)
++B.Bucket("yaaihh-engine-check"). +B.Limit("yaaihh-engine-check", "wall_ms", 420000).
+
+// ===== 2. How each is measured ===================================================================================
+// Each bucket is given the tree it is about and the command that measures it; the commands print one number.
+// Edge: megabytes are whole numbers, so a limit of 1 on a tree of 1.4 MB reads as "1 > 1 is false" when the gauge
+// rounds down. The gauges round up.
+
++B.Gauge("repo_mb",    "du -sm --apparent-size").                       // megabytes, rounded up
++B.Gauge("md_files",   "sh -c 'find \"$0\" -name \"*.md\" | wc -l'").
++B.Gauge("storage_gb", "sh -c 'du -s --block-size=1G \"$0\" | cut -f1'").
++B.Measures("yaaihh-v04-lang",   "crates/docket/eflint").
++B.Measures("yaaihh-v04-engine", "crates/coordd").
++B.Measures("yaaihh-v04-window", "crates/yaaihh").
++B.Measures("yaaihh-docs",       "docs/archive").
++B.Commit-Bucket("yaaihh-commit").
+// The three trees are the v0.4 crates as they are named on the branch `v04` today; they are his to rename.
+// `yaaihh-disk` is measured by the storage driver over the agents' folders (std.budgets 5), not by a gauge here.
+
+// Measured after every commit an agent makes, so a tree over its limit is known before the next commit is tried
+// and std.budgets' commit guard can deny that one.
++H.Party("yaaihh.hygiene").
+Event Committed(agent: H.Party, commit: C.Key)      // a driver's line: the harness saw a commit
+on Committed(_, _) do {
+  par b in (Foreach b, w : b When B.Measures(b, w)) {
+    par d in (Foreach d, m : d When B.Cap(b, d, m) && (d == "repo_mb" || d == "md_files")) { do B.measure(b, d) }
+  };
+  do B.measure("yaaihh-slop", "slop_lines")
+}
+
+// A budget written before the work. A piece of work can be given a bucket; then "within_budget" is one of its
+// conditions, and it is found by the ledger and by nobody's word: when the work is claimed, the condition is
+// verified if no dimension of its bucket is over, and refuted if one is. So a 44-minute engine check against a
+// budget of 420 000 ms is a refuted claim (`R.Owes-Valid-Result` violated) and an over-budget bucket that waits on
+// him, whatever anybody says about why it took that long.
+Fact Budget-Of(target: R.Artifact, bucket: B.Bucket)
++R.Condition("within_budget"). +R.Checked-Elsewhere("within_budget").
+Extend Fact R.Required
+  Holds when Budget-Of(target, b) && R.Condition(cond) && cond == "within_budget"
+
+// No model looks: this module reads the ledger and finds in its own name, as a party of a family of its own.
++C.Role("yaaihh.hygiene", "looker").
++R.Family("machine"). +R.Of-Family("yaaihh.hygiene", "machine").
++R.Verifier-Module("yaaihh.hygiene").
+on R.Claim-Done(who, target) where Budget-Of(target, b) do {
+  if Exists d : B.Over-Budget(b, d) {
+    R.Refute-Condition(self, self, target, "within_budget", "Over its budget: the bucket {{ b }} is past its limit.")
+  } else {
+    R.Verify-Condition(self, self, target, "within_budget")
+  }
+}
+
+// The engine check is such a piece of work, with 7 minutes.
++R.Artifact("engine-check"). +Budget-Of("engine-check", "yaaihh-engine-check").
+Fact Check-Regressed()
+  Holds when B.Over-Budget("yaaihh-engine-check", "wall_ms")
+// The check itself, run under its budget by whoever was given it. What it took is charged by the engine; over the
+// budget the owner is asked before anything goes on.
+Act Run-Engine-Check(by: H.Party)
+  Returns        B.Result<String>
+  Conditioned by R.Assigned(by, "engine-check")
+  Does {
+    do B.with_budget("yaaihh-engine-check", {
+      perform B.Command("./ops/release/train-check.sh engine")
+    })
+  }
+
+// ===== 3. A ratchet ==============================================================================================
+// For a tree nobody has put a number on, no number is chosen here. Its limit is what it measured the first time,
+// and every smaller measurement after that is the new limit: it can shrink and cannot grow without him
+// (`B.Raise-Limit`).
+
+Fact Ratcheted(bucket: B.Bucket, dim: B.Dimension)
+Extend Event B.Measurement
+  Creates    B.Limit-Set(bucket, dim, value) When Ratcheted(bucket, dim) && Not(Exists m : B.Cap(bucket, dim, m))
+           , B.Limit-Set(bucket, dim, value) When Ratcheted(bucket, dim) && B.Cap(bucket, dim, m) && value < m
+  Terminates B.Limit-Set(bucket, dim, m)     When Ratcheted(bucket, dim) && B.Limit-Set(bucket, dim, m) && value < m
+
++B.Bucket("yaaihh-agent-base"). +B.Measures("yaaihh-agent-base", "agent-base"). +Ratcheted("yaaihh-agent-base", "repo_mb").
+
+// ===== 4. Slop ===================================================================================================
+// The project's own counter (agent-base/bin/slop-count): comment lines in the code that ships which name a
+// ticket, a post, an agent or the owner. Its last line is the total. It is ratcheted: the first measurement is the
+// limit.
+
++B.Dimension("slop_lines").
++B.Gauge("slop_lines", "sh -c 'agent-base/bin/slop-count | sed -n \"s/^total: \\([0-9]*\\) .*/\\1/p\"' --").
++B.Bucket("yaaihh-slop"). +B.Measures("yaaihh-slop", "."). +Ratcheted("yaaihh-slop", "slop_lines").
+
+// ===== 5. The guard: nothing of the library's world in the engine ================================================
+// The engine knows a run, a party and a line of the record. A thread, a post, an item, a star, a lead, the owner,
+// a team, an archive, a group, a merge, a bare agent, and every project's and agent's name are the library's and
+// the projects'. A change that adds one of those words to the engine's code is denied, and the denial says where
+// the thing belongs.
+// Edge: a word that is right there for another reason (`merge` of two maps, `post` as in HTTP). The work's own
+// text then names the file (`R.May-Touch`), written before the work by whoever gave it. That is a sentence
+// somebody answers for, not a switch on the guard.
+// Edge: the guard reads what a patch adds, not the whole file, so it does not deny a change for words that were
+// there before; and it does not see a file written by a command (std.hooks 4).
+
+Fact Engine-Tree(glob: String)
++Engine-Tree("crates/coordd/src/**"). +Engine-Tree("crates/docket/machine/src/**").
+Fact Library-Word(word: String)
++Library-Word("thread"). +Library-Word("post"). +Library-Word("item"). +Library-Word("star").
++Library-Word("lead"). +Library-Word("owner"). +Library-Word("team"). +Library-Word("archive").
++Library-Word("group"). +Library-Word("merge"). +Library-Word("bare").
++Library-Word("yaaihh"). +Library-Word("tovrin").
+
+fn with_clean_engine<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, "tool_called", payload), k where who == agent => {
+        // file by file: the word must be added in a file of the engine's tree, not merely in the same patch. A
+        // moved file adds only what the move changes in it; what a file brings along shows in the count below.
+        if Exists g, w, kd, p, f, a, r : Engine-Tree(g) && Library-Word(w) && H.Changing(agent, kd, p, f, a, r)
+                                      && matches_glob(p, g) && contains(a, w)
+                                      && Not(Exists t, m : R.Assigned(agent, t) && R.May-Touch(t, m) && matches_glob(p, m)) {
+          resume k(H.Deny("This adds a word of the library's world to the engine's code. The engine knows a run, a party and a line. Write the thing as a fact, an act or a program in the library or the project's text. If the word means something else here, the work you were given must name this file."))
+        } else {
+          answer <- perform H.Hook(who, "tool_called", payload);
+          resume k(answer)
+        }
+      }
+  }
+}
+
+// What judges, what is a test, and where a new file must be named, for std.rails' guards.
++R.Test("crates/**/tests/**"). +R.Test("agent-base/tests/**").
++R.One-Place("crates/*/src/**"). +R.One-Place("agent-base/bin/**").
++R.Condition("zero_engine_hardcoding").             // verified by a looker reading the diff against this guard's list

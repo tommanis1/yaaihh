@@ -1,7 +1,9 @@
 // Teams and model tiers (vault designs/teams-and-tiers-2026-11-10.md), the owner's install (10 Nov, m312-m329). coordd
 // asks these acts; an act left out is not checked.
 
-// The order of models within a family: a subagent runs a lower tier than the agent that starts it.
+// The order of models: one number each, within and across families (the model classes, paper-research N-101; the
+// owner on N-188, N-199, N-201). A subagent runs a lower tier of its own family than the agent that starts it; a
+// call's `where` compares an agent's model with a class by this number (coordd models.rs).
 Fact tier Identified by model * Int
 +tier("claude-haiku-5-5", 1).
 +tier("claude-sonnet-5-5", 2).
@@ -10,8 +12,40 @@ Fact tier Identified by model * Int
 +tier("claude-opus-5", 3).
 +tier("claude-fable-5-1", 4).
 +tier("claude-fable-5-2", 4).
+// The GPT models (the owner on N-265.p3, on "sol = medium, astra = large … Shall I set it that way?": "sol = medium adb
+// stra large is fine … jsut leave out terra just luna sol and astra is fine"; paper-research N-101 p683): luna small,
+// sol medium, astra large; no terra.
 +tier("gpt-6-luna", 1).
-+tier("gpt-6-astra", 2).
++tier("gpt-6-sol", 2).
++tier("gpt-6-astra", 3).
+// The newer two (the owner on N-265.p5, on "put gpt-6.1-terra at small … the newer sol takes medium and gpt-6-sol is
+// marked replaced": "yes add these he"; priced in the catalog from upstream's sources, yaaihh f21bf6c).
++tier("gpt-6.1-terra", 1).
++tier("gpt-6.1-sol", 2).
+// gpt-6.2-sol, Codex's go-to (its model list, 19 Nov: gpt-6.1-sol "previous generation"), takes medium, and
+// gpt-6.1-sol is marked replaced: coordd's calls run on it (runtime-design §5; paper-research N-1397.p20). Priced
+// as 6.1-sol is, from models.dev and LiteLLM (prices/resources/model_prices.json).
++tier("gpt-6.2-sol", 2).
+
+// The models a newer one of the same family and number has replaced (paper-research N-101 p611; the owner on N-257:
+// "5.5 is the more recent model"). No model-for takes one, for an agent coordd makes or a call; an agent that already
+// runs one keeps its number above, so a call's `where` still reads it. With two models of one number left, the cheaper
+// is taken, and at the same price the first by name (policy/solve.rs).
+Fact replaced Identified by model
++replaced("claude-sonnet-5").
++replaced("claude-opus-5").
++replaced("claude-fable-5-1").
++replaced("gpt-6-sol").
++replaced("gpt-6.1-sol").
+Only for model-for:
+  not replaced(option)
+
+// The classes: a name for a number of the order above. A call's `where` names them (`where model >= medium`), and so
+// may `coord new --model` and `coord fork --model`; a project names its own the same way (`+class("s", 1).`).
+Fact class Identified by String * Int
++class("small", 1).
++class("medium", 2).
++class("large", 3).
 
 // Claude Code's Agent tool (the PreToolUse hook): within the agent's family and a lower tier; another family is a
 // team's job. A call naming no model runs the agent's own model, so it is refused here.

@@ -1,0 +1,5 @@
+{{ if left }}Your turn ended without an answer to this step, so it comes again.{{ end }}{{ if why }}Your last message could not be read as an answer to this step{{ why }}{{ end }}
+{{ gives }}
+{{ if put }}
+{{ include "put.tmpl" }}
+{{ end }}

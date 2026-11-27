@@ -1,0 +1,20 @@
+// box-run-test.sh's one ticket: a layer over the project's repositories at the head of its root, a fresh agent that
+// commits one file in it, and that commit handed to the runner.
+kind boxrun
+  form file: Text, text: Text
+  result OnLine(top: Ref) | Cannot(why: Text) | Red(errors: Text)
+  pattern
+    layer {
+      let agent a in {
+        r <- step a commit_file(file, text);
+        match r {
+          Cannot(why) => return Cannot(why)
+          Commit(c) =>
+            v <- step runner hand_in(c);
+            match v {
+              OnLine(top, _) => return OnLine(top)
+              Red(errors) => return Red(errors)
+            }
+        }
+      }
+    }

@@ -1,0 +1,2 @@
+Fact x Identified by Int
+	Derived from (Foreach x1, x2: x((x1 + x2)/2))

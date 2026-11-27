@@ -1,0 +1,160 @@
+module yaaihh.desk
+
+import std.hooks as H
+import std.comms as C
+import std.budgets as B
+import std.control as Ctrl
+
+// The desk: what the owner works at. A thread, a post, who the owner is, what is "with you", what agents say among
+// themselves, and what his project's Home page sets. All of it is this text. The engine
+// knows a run, a party and a line; it knows none of the words below.
+//
+//   1  threads and posts     where words are; who opened what; how a thread ends
+//   2  with you              what reaches him: his own threads, and what agents say to him. Nothing else.
+//   3  among agents          everything else agents write, on a surface of its own
+//   4  Home                  repositories, the mode an agent runs in, the model for each account
+
+// ===== 1. Threads and posts ======================================================================================
+// A post is a passage of the record (`C.Node`) put on a thread. A thread is named by whoever opens it.
+
+Fact Thread Identified by String
+Fact Title(thread: Thread, words: String)
+Fact Opened-By(thread: Thread, by: H.Party)
+Fact Posted(node: C.Node, thread: Thread)
+Fact Under(thread: Thread, parent: Thread)
+Fact Ended(thread: Thread, how: String)             // done, dropped, kept
+
+Fact His-Thread(thread: Thread)
+  Holds when Opened-By(thread, o) && C.Role(o, "owner")
+
+Act Open-Thread(by: H.Party, thread: Thread, words: String)
+  Conditioned by Not(Exists w : Opened-By(thread, w))
+  Creates        thread, Opened-By(thread, by), Title(thread, words)
+// When a passage was written, in seconds since 1970. It is a line of the record and creates no fact: the window
+// reads the line, and no rule reads a time, so no number of it stands in the state.
+Event Written(node: C.Node, seconds: Int)
+Act Post-On(by: H.Party, node: C.Node, thread: Thread)
+  Conditioned by C.Spoken(node, by) && Holds(thread) && Not(Exists h : Ended(thread, h))
+  Creates        Posted(node, thread)
+  Does {
+    at <- perform Now();
+    Written(node, at)
+  }
+Act Place-Under(by: H.Party, thread: Thread, parent: Thread)
+  Conditioned by (Opened-By(thread, by) || C.Role(by, "owner")) && thread != parent && Not(Under(parent, thread))
+  Terminates     Under(thread, p) When Under(thread, p)
+  Creates        Under(thread, parent)
+// A thread he opened is ended by him. An agent ends only a thread it opened itself.
+Act End-Thread(by: H.Party, thread: Thread, how: String)
+  Conditioned by (C.Role(by, "owner") || (Opened-By(thread, by) && Not(His-Thread(thread))))
+                 && Not(Exists h : Ended(thread, h))
+  Creates        Ended(thread, how)
+
+// His own words are a driver's line (`C.Owner-Says`), on the thread he wrote them on.
+Fact His(node: C.Node)                              // a post of the owner's own, whoever it was to, or nobody
+Event Owner-Posts(node: C.Node, thread: Thread)     // his window's line
+  Creates Posted(node, thread), His(node)
+
+// His words to a party are delivered by this module, and it says when the delivery has come back.
+// His own words go straight to the party he wrote them to: slow mode is not for him. Only the fork applies.
+// Once the delivery has come back his words are handed over. This module says so: they are then not given a second
+// time at the agent's next turn (std.comms 4), and his window shows them as taken.
+Event Handed(node: C.Node, to: H.Party)
+  Creates C.Heard(to, node)
+on C.Owner-Says(node, to) where C.Role(owner, "owner") do {
+  text <- perform C.TextOf("{{ node }}");
+  do Ctrl.with_fork_on_busy(to, {
+    perform Ctrl.Deliver(owner, to, text)
+  });
+  Handed(node, to)
+}
+
+// ===== 2. With you ===============================================================================================
+// What his window shows him without his asking. It is worked out from two facts and nothing else: what he wrote to
+// a party, and what a party said to him by `C.Says-To-Owner`. So what agents write for each other cannot stand
+// here, by how the fact is made and not by a filter somebody has to remember.
+
+Fact With-You(who: H.Party, node: C.Node)           // his talk with WHO
+  Holds when C.Owner-Said(node, who)
+  Holds when C.For-Owner-Inbox(node) && C.Spoken(node, who)
+
+Fact His-List(thread: Thread)                       // the threads in his lists, his left bar, his count
+  Holds when His-Thread(thread) && Not(Exists h : Ended(thread, h))
+
+Fact Seen-By-Him(node: C.Node)
+Act Open-Post(owner: H.Party, node: C.Node)         // his window performs it when he opens the post
+  Conditioned by C.Role(owner, "owner") && C.For-Owner-Inbox(node)
+  Creates        Seen-By-Him(node)
+Fact Unseen(node: C.Node)                           // the dot
+  Holds when C.For-Owner-Inbox(node) && Not(Seen-By-Him(node))
+
+// ===== 3. Among agents ===========================================================================================
+// Everything a party wrote that is not said to him. It has its own surface, which he opens when he wants to.
+
+Fact Among-Agents(node: C.Node)
+  Holds when C.Spoken(node, w) && Not(C.Role(w, "owner")) && Not(C.For-Owner-Inbox(node))
+
+// The two never meet: no passage is both. The scenario files check that this fact never holds.
+Fact Crossed(node: C.Node)
+  Holds when Among-Agents(node) && With-You(w, node) && Not(C.Owner-Said(node, w))
+
+// ===== 4. Home ===================================================================================================
+// What his project's Home page shows and sets. Each setting has three places, the nearest winning: his choice for
+// one agent, the project's, the installation's. With none set, an agent runs Safe. A mode is Safe (asks first),
+// Guarded (runs commands, its safety check kept) or Yolo (runs everything, the check off).
+
+Fact Repository(path: String)                       // the project's repositories: an agent's working folders
+Fact Mode Identified by String
++Mode("safe"). +Mode("guarded"). +Mode("yolo").
+Fact Agent-Mode(agent: H.Party, mode: Mode)
+Fact Project-Mode(mode: Mode)
+Fact Install-Mode(mode: Mode)
+
+Fact Mode-Of(agent: H.Party, mode: Mode)
+  Holds when Agent-Mode(agent, mode)
+  Holds when H.Running-On(agent, h, v) && Project-Mode(mode) && Not(Exists m : Agent-Mode(agent, m))
+  Holds when H.Running-On(agent, h, v) && Install-Mode(mode) && Not(Exists m : Agent-Mode(agent, m)) && Not(Exists m : Project-Mode(m))
+  Holds when H.Running-On(agent, h, v) && Mode(mode) && mode == "safe" && Not(Exists m : Agent-Mode(agent, m))
+             && Not(Exists m : Project-Mode(m)) && Not(Exists m : Install-Mode(m))
+
+Act Set-Agent-Mode(owner: H.Party, agent: H.Party, mode: Mode)
+  Conditioned by C.Role(owner, "owner")
+  Terminates     Agent-Mode(agent, m) When Agent-Mode(agent, m)
+  Creates        Agent-Mode(agent, mode)
+Act Set-Project-Mode(owner: H.Party, mode: Mode)
+  Conditioned by C.Role(owner, "owner")
+  Terminates     Project-Mode(m) When Project-Mode(m)
+  Creates        Project-Mode(mode)
+
+// Guarded and Yolo run commands unasked; Yolo alone has the harness's own safety check off (std.hooks 6), in a box
+// too: every other agent keeps it on.
+Extend Fact H.Runs-Unasked
+  Holds when Mode-Of(agent, "guarded")
+  Holds when Mode-Of(agent, "yolo")
+Extend Fact H.Safety-Check-Override
+  Holds when Mode-Of(agent, "yolo") && enabled == false
+  Holds when H.Party(agent) && Not(Mode-Of(agent, "yolo")) && enabled == true
+
+// The model for each way of running one: his choice for an agent, else the project's for that account, else his
+// own for that account everywhere.
+Fact Account Identified by String
+Fact On-Account(agent: H.Party, account: Account)
+Fact Offers(account: Account, model: String)
+Fact Agent-Model(agent: H.Party, model: String)
+Fact Project-Model(account: Account, model: String)
+Fact His-Model(account: Account, model: String)
+
+Extend Fact B.On-Model
+  Holds when On-Account(agent, a) && Offers(a, model) && Agent-Model(agent, model)
+  Holds when On-Account(agent, a) && Offers(a, model) && Project-Model(a, model) && Not(Exists m : Agent-Model(agent, m))
+  Holds when On-Account(agent, a) && Offers(a, model) && His-Model(a, model) && Not(Exists m : Agent-Model(agent, m))
+             && Not(Exists m : Project-Model(a, m))
+
+Act Put-On-Account(owner: H.Party, agent: H.Party, account: Account)
+  Conditioned by C.Role(owner, "owner")
+  Terminates     On-Account(agent, a) When On-Account(agent, a)
+  Creates        On-Account(agent, account)
+Act Set-Agent-Model(owner: H.Party, agent: H.Party, model: String)
+  Conditioned by C.Role(owner, "owner") && On-Account(agent, a) && Offers(a, model)
+  Terminates     Agent-Model(agent, m) When Agent-Model(agent, m)
+  Creates        Agent-Model(agent, model)

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type add_multiple\nNew type add_single\nNew type created\nNew type unbounded\n-unbounded(1)\n-unbounded(3)\n+unbounded(5)\n-unbounded(7)\nexecuted transition: \nadd_single(int(5)) \n+created(5)\nquery successful\nquery successful\nquery successful\nquery successful\nexecuted transition: \nadd_multiple() \nquery successful\nquery successful\nquery successful\nquery successful\n+unbounded(1)\n+unbounded(3)\n+unbounded(7)\nexecuted transition: \nadd_multiple() \n+created(1)\n+created(3)\n+created(7)\nquery successful\nquery successful\nquery successful\nquery successful\n#25 > "
+ }
+}

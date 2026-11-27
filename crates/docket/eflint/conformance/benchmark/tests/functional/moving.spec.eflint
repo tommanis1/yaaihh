@@ -1,0 +1,11 @@
+Fact person Identified by string
+    Derived from (person(Dan))
+Fact place Identified by string
+Fact at Identified by person * place
+
+Act move
+    Actor person
+    Related to place1, place2
+    Holds when at(person, place1)
+    Terminates at(person, place1)
+    Creates at(person, place2)

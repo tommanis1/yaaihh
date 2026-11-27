@@ -1,0 +1,13 @@
+// Making agents from an agent's turn (`coord new NAME TEXT`, `coord fork [FROM] --name NEW TEXT`; item 11, paper-research
+// N-101 p344). coordd asks make-agent(actor, recipient, source, thread): ACTOR makes RECIPIENT, a copy of SOURCE ("none":
+// a new agent), in THREAD (the thread of the step the actor owes, "t"; "none" when it owes none). Beside it coordd
+// supplies made(agent, by, from, thread) for every agent made so far. The base rule: an agent copies itself, as
+// `coord fork` always let it; it makes no other agent. A project says more in a file of its own named assign.eflint,
+// which replaces this one: the act again with this line, if it keeps it, and its own beside it, for example
+//   Holds when role(actor, "orchestrator") and source == "none"
+// A copy of another agent also needs what `coord log` needs (read-session).
+Act make-agent
+  Actor agent
+  Recipient agent
+  Related to source, thread
+  Holds when source == actor

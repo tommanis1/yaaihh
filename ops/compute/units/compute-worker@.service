@@ -1,0 +1,16 @@
+[Unit]
+Description=compute: a stateless NativeLink worker running actions under %i (bwrap | podman)
+After=compute-server.service
+
+[Service]
+# where this checkout is (edit to yours); COMPUTE_SCHEDULER, COMPUTE_SERVER and COMPUTE_TLS_DIR for a remote scheduler
+EnvironmentFile=-%h/.config/compute/env
+Environment=COMPUTE_SANDBOX=%i
+Environment=COMPUTE_STATE=%h/.local/state/compute-worker-%i
+ExecStart=%h/yaaihh/ops/compute/nl.sh run worker
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

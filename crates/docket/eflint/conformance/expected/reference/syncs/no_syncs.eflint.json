@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type do\nNew type performed\nexecuted transition: \ndo(performed(\"A\")) \nexecuted transition: \ndo(performed(\"B\")) \nexecuted transition: \ndo(performed(\"C\")) \n+performed(\"A\")\n+performed(\"B\")\n+performed(\"C\")\nquery successful\n#4 > "
+ }
+}

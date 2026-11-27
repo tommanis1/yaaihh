@@ -1,0 +1,87 @@
+module std.harness_bump
+
+import std.hooks as H
+import std.comms as C
+
+// Pinned harness versions: no live agent updates itself, and a pin moves only after a real probe closes Verify-Intent.
+
+// ===== 1. The pins ===============================================================================================
+
+// `via` is the program that starts the harness: the harness itself, or one that runs it and relays what it does.
+Fact Pin-Stated(harness: H.Harness, via: H.Harness, version: H.Version)
+Fact Pin-Set(harness: H.Harness, via: H.Harness, version: H.Version)
+Fact Pinned(harness: H.Harness, via: H.Harness, version: H.Version)
+  Holds when Pin-Set(harness, via, version)
+  Holds when Pin-Stated(harness, via, version) && Not(Exists s : Pin-Set(harness, via, s))
+
+// A version started through another program: the model is reached through that program's relay, not natively.
+Fact Relayed(harness: H.Harness, via: H.Harness, version: H.Version)
+  Holds when Pinned(harness, via, version) && via != harness
+
+// The versions whose bridges in std/bridges/ were read; tests/routing.rs fails when the two differ.
++Pin-Stated("claude-code", "claude-code", "2.1.332").
++Pin-Stated("codex", "codex", "0.160.0").
++Pin-Stated("opencode", "opencode", "1.18.34").
++Pin-Stated("agy", "agy", "agy-1.5.18").
++Pin-Stated("agy", "t3code", "t3code-0.1.11").
+
+// ===== 2. A bump =================================================================================================
+
+Fact Check Identified by String
+// The probe's checks, each run on the candidate in its staging folder against the pinned version's own run.
++Check("hook_moments"). +Check("system_prompt"). +Check("trust_popup"). +Check("model_flags").
+
+Fact Bump-Owed-To(role: String)   // a project says which role's party a bumper owes the verified intent to
+Fact Bumps(role: String)          // a project says which roles may propose and commit a bump; the owner always may
+Fact May-Bump(actor: H.Party)
+  Holds when C.Role(actor, "owner")
+  Holds when C.Role(actor, r) && Bumps(r)
+Fact Bump-Asked(holder: H.Party, harness: H.Harness, via: H.Harness, version: H.Version)
+Fact Staged(harness: H.Harness, via: H.Harness, version: H.Version)
+Fact Passed(harness: H.Harness, via: H.Harness, version: H.Version, check: Check)
+Fact Failed(harness: H.Harness, via: H.Harness, version: H.Version, check: Check)
+// A version a pin has left. Going back to it is a rollback, and only the owner proposes one.
+Fact Was-Pinned(harness: H.Harness, via: H.Harness, version: H.Version)
+
+// Every check passed and none failed, on a candidate that was really installed, for this launcher.
+Fact Probed(harness: H.Harness, via: H.Harness, version: H.Version)
+  Holds when Staged(harness, via, version) && Not(Exists c : Check(c) && Not(Passed(harness, via, version, c)))
+             && Not(Exists c : Failed(harness, via, version, c))
+
+// The bumper owes a verified intent; only the probe's lines close it, never the bumper (spec 9).
+Duty Verify-Intent(holder: H.Party, claimant: H.Party, harness: H.Harness, via: H.Harness, version: H.Version)
+  Holds when    Bump-Asked(holder, harness, via, version) && C.Role(claimant, r) && Bump-Owed-To(r)
+                && Not(Probed(harness, via, version))
+  Violated when Exists c : Failed(harness, via, version, c)
+
+// A proposal starts the probe over: what an earlier probe of that version found is not read again, so a version
+// probed once, or pinned once and left, is never pinned again on that old word.
+Act Propose-Bump(actor: H.Party, harness: H.Harness, via: H.Harness, version: H.Version)
+  Conditioned by May-Bump(actor) && Pinned(harness, via, old) && old != version && Not(Bump-Asked(actor, harness, via, version))
+                 && (Not(Was-Pinned(harness, via, version)) || C.Role(actor, "owner"))
+  Terminates     Staged(harness, via, version) When Staged(harness, via, version),
+                 Passed(harness, via, version, c) When Passed(harness, via, version, c),
+                 Failed(harness, via, version, c) When Failed(harness, via, version, c)
+  Creates        Bump-Asked(actor, harness, via, version)
+
+// bump-check.sh's lines: the candidate installed in its staging folder, then one line for each check. A new staging
+// starts the checks over, and a check that passes again clears its earlier failure.
+Event Candidate-Staged(harness: H.Harness, via: H.Harness, version: H.Version)
+  Terminates Passed(harness, via, version, c) When Passed(harness, via, version, c),
+             Failed(harness, via, version, c) When Failed(harness, via, version, c)
+  Creates    Staged(harness, via, version)
+Event Check-Passed(harness: H.Harness, via: H.Harness, version: H.Version, check: Check)
+  Conditioned by Staged(harness, via, version)
+  Terminates     Failed(harness, via, version, check) When Failed(harness, via, version, check)
+  Creates        Passed(harness, via, version, check)
+Event Check-Failed(harness: H.Harness, via: H.Harness, version: H.Version, check: Check)
+  Conditioned by Staged(harness, via, version)
+  Terminates     Passed(harness, via, version, check) When Passed(harness, via, version, check)
+  Creates        Failed(harness, via, version, check)
+
+// The pin moves only once the duty no longer holds because the probe passed: an unverified bump is refused.
+Act Commit-Pin(actor: H.Party, harness: H.Harness, via: H.Harness, version: H.Version)
+  Conditioned by May-Bump(actor) && Bump-Asked(actor, harness, via, version) && Probed(harness, via, version)
+                 && Not(Exists c : Verify-Intent(actor, c, harness, via, version))
+  Terminates     Pin-Set(harness, via, s) When Pin-Set(harness, via, s), Bump-Asked(actor, harness, via, version)
+  Creates        Pin-Set(harness, via, version), Was-Pinned(harness, via, s) When Pinned(harness, via, s)

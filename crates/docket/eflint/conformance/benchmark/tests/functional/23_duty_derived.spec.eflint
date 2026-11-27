@@ -1,0 +1,5 @@
+Duty d Holder string1 Claimant string2
+  Derived from (Foreach string1, string2: d(string1, string2))
+  Violated when True
+
+Extend Fact string Derived from string("foo")

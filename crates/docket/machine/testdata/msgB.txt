@@ -1,0 +1,14 @@
+Happy to. Before I build anything, a few questions so we design the game you have in mind:
+
+1. Genre or feel. For example: arcade (dodge or shoot, endless runner), puzzle (match, sliding tiles, logic grid), word game, idle or clicker, a small platformer, or a two-player game on one screen.
+2. Controls. Keyboard, mouse or touch, or both? Does it need to work on phones?
+3. Session length. Quick rounds of about a minute with a high score, or something with levels and progress?
+4. Look. Minimal geometric shapes, pixel art, or something else? Do you have your own art or sound you'd like to use?
+5. Your role. Should I just build it, or do you want to write or learn the code too? If so, which language or framework do you prefer? Plain HTML/JS/canvas in one file is the simplest option.
+
+If you don't have a preference yet, here are three small ideas that work well as a first game:
+- Orbit dodge: you circle a planet, tap to switch between orbits, and avoid incoming debris. It uses one button and keeps score.
+- Tile flood: fill the whole grid with one colour in as few moves as possible. It's a calm puzzle with a new layout every day.
+- Lantern maze: you explore a dark maze with a small circle of light, collect keys and watch a timer.
+
+Once we've settled on a design, I can build it as a single HTML file and publish it as a private page you can play and share.

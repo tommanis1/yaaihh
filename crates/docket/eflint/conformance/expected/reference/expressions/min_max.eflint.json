@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type do\nNew type max\nNew type min\nNew type x\nquery successful\nquery successful\nexecuted transition: \ndo() \n+min(10)\n+max(110)\nquery successful\nquery successful\nquery successful\nquery successful\n#9 > "
+ }
+}

@@ -1,0 +1,9 @@
+// BRANCH checked by the runner, a program agent: Red when its head does not contain COMMIT, else what the check at
+// the head says (no branch: the repository's checked-out one). The verdict comes back as its answer.
+/// a branch checked by the runner: Red when its head does not contain the commit, else the check's verdict
+kind check
+  letter K
+  form commit: Ref, branch: Ref?
+  result Green | Red(log: Text)
+  pattern
+    step runner check(commit, branch)

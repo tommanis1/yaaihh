@@ -1,0 +1,5 @@
+{{ if digest }}New on the threads and items you are on, your own first, the newest first in each:{{ for t in digest }}
+{{ t.id }} ({{ t.label }}), {{ t.changes }}: {{ t.newest }}{{ if t.more }}; and {{ t.more }} more{{ end }}{{ end }}
+Open the ones you need with coord show ID.{{ end }}
+{{ if rest }}Waiting for you still, and given once you have answered what is above: {{ rest }}{{ if more }}, and {{ more }} more{{ end }}.{{ end }}
+{{ if owed }}Not answered yet, and not handed to you again: {{ owed }}. Answer with the reply tool, to its id.{{ end }}

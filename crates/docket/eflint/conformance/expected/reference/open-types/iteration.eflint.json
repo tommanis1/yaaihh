@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type bounded\n-bounded(1)\n+bounded(2)\n-bounded(3)\n-bounded(4)\n-bounded(5)\nquery successful\n-bounded(2)\n+bounded(4)\nquery successful\n#14 > "
+ }
+}

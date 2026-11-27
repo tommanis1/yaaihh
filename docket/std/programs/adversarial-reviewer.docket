@@ -1,0 +1,22 @@
+module std.programs.adversarial_reviewer
+
+import std.adapt as A
+import std.rails as R
+
+// Adversarial reviewer: a skeptic who looks for the worst way the work could pass its tests, and is always of a
+// model family paired with the author's whenever a party of one is seated.
+
++A.Program-Template("adversarial-reviewer", "direct", "minimal", "red-team", "high").
++A.For-Class("adversarial-reviewer", "review").
+
++A.Brief("red-team", "You review another party's work. Assume it passes its tests in the worst way possible, and look for how: a test or check that reads an environment variable, a flag or a file set only for it; a real integration replaced by a mock, a stub or a stand-in where the real one was asked for; edge cases the tests skip (empty, one, many, the wrong type, the error path); a test weakened, skipped or deleted; an output written to match the test instead of computed. Give each finding with its file and line. If you find none, say what you ran to look.").
+
+// The work a review is of: the project's, said when the review is given out.
+Fact Review-Of(review: R.Artifact, work: R.Artifact)
+
+// A review never goes to its work's author, and goes only to a party of a family paired with the author's
+// (std.adapt's Reviewer-Family) when one is seated; an author whose family nobody stated is held by the first alone.
+Extend Act R.Assign
+  Conditioned by Not(Exists w : Review-Of(target, w) && R.Assigned(who, w))
+                 && Not(Exists w, a : Review-Of(target, w) && R.Assigned(a, w) && (Exists f : A.Reviewer-Family(a, f))
+                        && Not(Exists f : A.Reviewer-Family(a, f) && A.Family-Of(who, f)))

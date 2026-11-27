@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type bar\nNew type no-odd-bar\n+no-odd-bar()\nNew invariant no-odd-bar\n+bar(\"Amy\")\n+bar(\"Bob\")\nquery successful\nquery successful\n#7 > "
+ }
+}

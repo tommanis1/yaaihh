@@ -1,0 +1,38 @@
+// The owner's accounts (N-412 ask 12): the numbers of ours about them, which are not in coordd's code.
+
+// A key's limits are counted per minute: a key account, or an opencode one (read as a key's), out for rate_limit with
+// no time named is taken again after this.
+// In seconds; the shortest instance holds. With none, such an account stays out until the owner clears it. A project
+// says otherwise in a file of its own named accounts.eflint, which replaces this one.
+Fact key-again-after Identified by Int
++key-again-after(60).
+
+// The window opener of his sign-in accounts (0.2 list, line 20; the owner, 20 Nov 08:55, relayed on N-412 post 2083:
+// "open the 5 hour windows when applicable for claude code non gateway too", and 08:58, N-1104 post 458: "no window
+// open ing message yo ucna do that"). A 5-hour window starts at the first request after the last one reset, so an
+// account nobody uses starts its next window late. coordd follows the gateway's opener (its service_window_opener.go)
+// for each signed-in account, on what is on file of it and with no read of its own (the owner, 20 Nov, N-1104 post
+// 586: "launching a special action every time i refresh limits is bad"): the windows its sessions said, his last
+// Check limits, and the last opening's own answer, whose rate_limit_event says the window that runs (coordd:
+// accounts/opener.rs).
+// - No 5-hour limit on it: it is looked at again after window-look-idle.
+// - Its window running: at its reset, plus window-look-after-reset.
+// - At or over its plan's weekly ceiling (placement.eflint's weekly-ceiling), or taking no requests (out, deaf, being
+//   removed): after window-look-idle.
+// - Opened within window-look-idle: after window-look-idle (one opening per account within it).
+// - Otherwise Claude Code in its folder sends window-opening's prompt on window-opening's model. An answer that names
+//   no 5-hour window is taken to have started one, which runs 5 hours: it is looked at again after
+//   window-look-after-opening, plus window-look-after-reset.
+// - An opening that failed: again after window-look-failed.
+// In seconds. Without all of these, no window is opened. A project says otherwise in a file of its own named
+// accounts.eflint, which replaces this one.
+Fact window-look-after-reset Identified by Int
++window-look-after-reset(30).
+Fact window-look-after-opening Identified by Int
++window-look-after-opening(18000).
+Fact window-look-idle Identified by Int
++window-look-idle(1800).
+Fact window-look-failed Identified by Int
++window-look-failed(600).
+Fact window-opening Identified by String * String
++window-opening("claude-haiku-5-5", "Respond with zoo7").

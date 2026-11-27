@@ -1,0 +1,6 @@
+// The limited form's minder (paper-research m1520): it may only rest or close. agent-base's shape call with Program
+// taken out: a ticket resting at a hole is never given a program here. Rest: nothing yet.
+// Close(result): close the ticket with RESULT, which must fit the kind's result.
+
+call shape(this: Ticket) -> Rest | Close(result: Any)
+  task shape

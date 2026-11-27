@@ -1,0 +1,21 @@
+module scenario.s5
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import tovrin.ratchet as Ratchet
+import tovrin.runner as Runner
+import tovrin.cex as Cex
+import tovrin.budgets as Budgets
+
+// Scenario 5's parties, a red case, two counterexamples, and three measurements: 15 % over its bound, 9 % over,
+// and one with no bound yet.
++H.Party("o1").  +C.Role("o1", "owner").
++H.Party("or1"). +C.Role("or1", "orch").
++H.Party("b1").  +R.Of-Family("b1", "anthropic").
++Ratchet.Case("lemma-3"). +Ratchet.Case("lemma-4"). +Runner.Cut("c1"). +Runner.Worker-Mb(2400).
++Ratchet.In-Suite("lemma-3", "proofs"). +Ratchet.Red-Case("lemma-3").
++R.Artifact("cex-17"). +Cex.Counterexample-Artifact("cex-17").
++R.Artifact("cex-18"). +Cex.Counterexample-Artifact("cex-18").
++Budgets.Baseline("lemma-3", "run_ms", 1000). +Budgets.Measured("lemma-3", "run_ms", 1150).
++Budgets.Baseline("lemma-4", "run_ms", 1000). +Budgets.Measured("lemma-4", "run_ms", 1090).

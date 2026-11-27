@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+# ask JSON: one request to coordd's socket ($COORDD_SOCK) as the window sends it, for the requests that have no
+# `coord` word (the Accounts page's switch, the key's field). Prints the reply's `out`; exit 1 when coordd refused.
+import json, os, socket, sys
+
+s = socket.socket(socket.AF_UNIX)
+s.connect(os.environ["COORDD_SOCK"])
+s.sendall(sys.argv[1].encode() + b"\n")
+reply = json.loads(s.makefile().readline())
+print(reply["out"])
+sys.exit(0 if reply["ok"] else 1)

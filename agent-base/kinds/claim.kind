@@ -1,0 +1,41 @@
+// A defect claimed by an agent (tickets-patterns syntax.tex, Kinds: claim): triaged by the lead, fixed and reviewed
+// (fix), then checked by the runner on BRANCH, the branch the fix must reach. When the reviewers cannot tell
+// whether the fix works (NeedsDecision), or the lead finds it turns on what the right behaviour is (Decide), the
+// owner decides. A dismissal leaves through Dismissal, so that the fix and the check are written once.
+/// a defect an agent claims: triaged by the lead, fixed, reviewed, and checked on the branch the fix must reach
+kind claim
+  form what: Text, evidence: Text, where: Ref, branch: Ref
+  result Fixed(commit: Ref) | Dismissed(why: Text)
+  raises NoFix, Exhausted, Stalled
+  pattern
+    try {
+      // no lead running (a new project): the owner triages it, as the lead's Decide (N-1978 p2)
+      verdict <- try { step role lead assess(what, evidence, where) } handle {
+        NoWorker(w) => return Decide("No lead is running in this project to triage this claim: is it a defect to fix?")
+      };
+      note <- match verdict {
+        Dismiss(why) => raise Dismissal(why)
+        Accept(n) => return n
+        Decide(q) =>
+          d <- open decision(q, what);
+          match d {
+            Yes(n) => return n
+            No(why) => raise Dismissal(why)
+          }
+      };
+      commit <- try { open fix(what, evidence, where, note, branch) } handle {
+        NeedsDecision(c) =>
+          d <- open decision("A reviewer could not tell whether this commit fixes the defect claimed here. Does it?", c);
+          match d {
+            Yes(n) => return c
+            No(why) => raise NoFix(why)
+          }
+      };
+      res <- open check(commit, branch);
+      match res {
+        Green => return Fixed(commit)
+        Red(log) => raise NoFix(log)
+      }
+    } handle {
+      Dismissal(why) => return Dismissed(why)
+    }

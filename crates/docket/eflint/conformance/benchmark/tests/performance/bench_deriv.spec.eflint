@@ -1,0 +1,2 @@
+Fact x Identified by int
+	Derived from (Foreach x: x(x.int - 1) Where 0 < x.int)

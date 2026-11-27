@@ -1,0 +1,19 @@
+// An agent works from the beginning of a turn to that turn's end: facts that the record's own lines make and end (the
+// engine page's move 6, piece 1; paper-research N-1446 p3020, 8). A program reads `working` with `decide`, through a
+// decision whose rules read it (piece 2); a policy line reads it as any fact, as a project's `copy-answers` (p3020, 1).
+
+Fact working Identified by agent
+
+// its turn begins: the machine's own `turn_began` line, which coordd writes as the turn's first input is taken
+// (core.rs begin_turn; docket-edge6 N-1446 p3082, p3099)
+Event turn_began
+  Related to agent
+  Creates working(agent)
+
+// the turn ends, as it ended or cut short (its process exited, or its session started again)
+Event turn_ended
+  Related to agent
+  Terminates working(agent)
+Event turn_cut
+  Related to agent
+  Terminates working(agent)

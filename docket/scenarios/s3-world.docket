@@ -1,0 +1,18 @@
+module scenario.s3
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+
+// Scenario 3's parties: `b1` on Claude Code, and three on agy through t3code: started in full access, started to
+// ask first, and with no mode stated.
++H.Party("o1"). +C.Role("o1", "owner").
++H.Party("w1"). +R.Artifact("start-work").
+// In this test the harness that carries an answer back is the runner's stand-in, so it is the stand-in that must
+// be let a deny at a tool call; the agent's own bridge says the same for Claude Code.
++H.Harness("stand-in"). +H.Version("1"). +H.Lets("stand-in", "1", "tool_called", "deny").
++R.Judges("crates/coordd/src/ticket/tests.rs", "start-work").
++H.Party("b1"). +H.Running-On("b1", "claude-code", "2.1.332").
++H.Party("a1"). +H.Running-On("a1", "agy", "t3code-0.1.11"). +H.Started-In("a1", "full-access").
++H.Party("a2"). +H.Running-On("a2", "agy", "t3code-0.1.11"). +H.Started-In("a2", "approval-required").
++H.Party("a3"). +H.Running-On("a3", "agy", "t3code-0.1.11").

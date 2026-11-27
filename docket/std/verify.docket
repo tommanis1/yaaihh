@@ -1,0 +1,172 @@
+module std.verify
+
+// A change ships only when an independent party planned, ran and had attested an E2E test of each intent it claims.
+// The norms are built and tested; the run is not: no driver carries its Effects yet, so no release step reads Released.
+
+import std.budgets as B
+
+Fact Party   Identified by String
+Fact Change  Identified by String
+Fact Intent  Identified by String              // what the person wants the change to do, in their words
+Fact Finding Identified by String
+
+Fact Authored(change: Change, author: Party)
+Fact Claimed(change: Change, intent: Intent, author: Party)
+Fact Verifier-Of(change: Change, intent: Intent, verifier: Party)
+Fact Test-Plan(change: Change, intent: Intent, plan_ref: String)
+Fact Challenged(plan_ref: String, by: Party, why: String)
+Fact Built(change: Change, artifact: String)
+Fact Ran-Clean(change: Change, intent: Intent, plan_ref: String, evidence_ref: String)
+Fact Attested(change: Change, intent: Intent, plan_ref: String, evidence_ref: String)
+Fact Failure(change: Change, finding: Finding)
+Fact Failed-On(finding: Finding, intent: Intent, verifier: Party, evidence_ref: String)
+Fact Fix-Claimed(change: Change, finding: Finding)
+Fact Cleared(change: Change, finding: Finding)
+Fact Released(change: Change)
+
+// A verifier who commits to the change, before or after it was seated, is independent of it no more.
+Fact Independent(change: Change, intent: Intent, verifier: Party)
+  Holds when Verifier-Of(change, intent, verifier) && Not(Authored(change, verifier))
+
+Fact Live-Plan(change: Change, intent: Intent, plan_ref: String)
+  Holds when Test-Plan(change, intent, plan_ref) && Not(Exists b, w : Challenged(plan_ref, b, w))
+
+Fact Open-Failure(change: Change, finding: Finding)
+  Holds when Failure(change, finding) && Not(Cleared(change, finding))
+
+// Owed until a run of a plan that still stands is attested: a challenge after the attestation opens it again.
+Duty Verify-Intent(holder: Party, claimant: Party, change: Change, intent: Intent)
+  Holds when Verifier-Of(change, intent, holder) && Claimed(change, intent, claimant)
+             && Not(Exists p, e : Attested(change, intent, p, e) && Live-Plan(change, intent, p))
+
+// Owed by every author to the verifier who found it; only that verifier's clearing ends it (spec 9).
+Duty Resolve(holder: Party, claimant: Party, change: Change, finding: Finding)
+  Holds when Open-Failure(change, finding) && Authored(change, holder) && Failed-On(finding, i, claimant, e)
+
+Act Claim(by: Party, change: Change, intent: Intent, verifier: Party)
+  Conditioned by verifier != by && Not(Authored(change, verifier)) && Not(Exists a : Claimed(change, intent, a))
+                 && Not(Released(change))
+  Creates        Claimed(change, intent, by), Authored(change, by), Verifier-Of(change, intent, verifier)
+
+// The version control driver's line: a commit to CHANGE by PARTY.
+Event Committed-By(change: Change, author: Party)
+  Creates Authored(change, author)
+
+// The build driver's line: ARTIFACT was built from CHANGE.
+Event Built-From(change: Change, artifact: String)
+  Creates Built(change, artifact)
+
+// Think before acting: one standing plan at a time, and a challenged one is never taken back.
+Act Submit-Plan(by: Party, change: Change, intent: Intent, plan_ref: String)
+  Conditioned by Independent(change, intent, by) && Not(Exists p : Live-Plan(change, intent, p))
+                 && Not(Exists b, w : Challenged(plan_ref, b, w)) && str_len(plan_ref) > 0
+  Creates        Test-Plan(change, intent, plan_ref)
+
+// Anyone but its verifier may say why a plan could not falsify the change; the verifier must write a stronger one.
+Act Challenge-Plan(by: Party, change: Change, intent: Intent, plan_ref: String, why: String)
+  Conditioned by Live-Plan(change, intent, plan_ref) && Not(Verifier-Of(change, intent, by)) && str_len(why) > 0
+  Creates        Challenged(plan_ref, by, why)
+
+// The E2E runner's line, after PLAN_REF ran clean on a built artifact of CHANGE and it kept EVIDENCE_REF; no program performs it.
+Event Ran-Clean-On(verifier: Party, change: Change, intent: Intent, plan_ref: String, evidence_ref: String)
+  Conditioned by Independent(change, intent, verifier) && Live-Plan(change, intent, plan_ref)
+                 && (Exists a : Built(change, a)) && str_len(evidence_ref) > 0
+  Creates        Ran-Clean(change, intent, plan_ref, evidence_ref)
+
+// The E2E runner's line, attesting that clean run once no failure is open; no program performs it.
+Event Attest(verifier: Party, change: Change, intent: Intent, plan_ref: String, evidence_ref: String)
+  Conditioned by Independent(change, intent, verifier) && Ran-Clean(change, intent, plan_ref, evidence_ref)
+                 && Live-Plan(change, intent, plan_ref) && Not(Exists f : Open-Failure(change, f))
+  Creates        Attested(change, intent, plan_ref, evidence_ref)
+
+Act Report-Failure(by: Party, change: Change, intent: Intent, plan_ref: String, finding: Finding, evidence_ref: String)
+  Conditioned by Independent(change, intent, by) && Live-Plan(change, intent, plan_ref) && Not(Failure(change, finding))
+                 && str_len(evidence_ref) > 0
+  Creates        Failure(change, finding), Failed-On(finding, intent, by, evidence_ref)
+
+// A fix claimed makes every clean run before it stale.
+Act Claim-Fix(by: Party, change: Change, finding: Finding)
+  Conditioned by Authored(change, by) && Open-Failure(change, finding)
+  Creates        Fix-Claimed(change, finding)
+  Terminates     Ran-Clean(change, i, p, e)
+
+// Cleared by the verifier who found it, once a standing plan has run clean on a build after the fix was claimed.
+Act Clear-Failure(by: Party, change: Change, finding: Finding)
+  Conditioned by Fix-Claimed(change, finding) && Open-Failure(change, finding) && Failed-On(finding, i, by, e)
+                 && Independent(change, i, by) && Ran-Clean(change, i, p, r) && Live-Plan(change, i, p)
+  Creates        Cleared(change, finding)
+
+Act Release(by: Party, change: Change)
+  Conditioned by (Exists i, a : Claimed(change, i, a)) && Not(Exists v, a, i : Verify-Intent(v, a, change, i))
+                 && Not(Exists a, v, f : Resolve(a, v, change, f))
+  Creates        Released(change)
+
+// ===== The program ===============================================================================================
+
+type Verdict = Delivered | Falsified(finding: String)
+
+Effect Diff(change: Change) -> String                                  // the version control driver's
+// The verifier's model: from the intent, the diff and why earlier plans were too weak, a plan that could falsify it.
+Effect Synthesize(verifier: Party, change: Change, intent: Intent, diff: String, weak: List<String>) -> String
+// The E2E runner's: one thing a person does to the built change, and what they then see.
+Effect Interact(change: Change, step: String) -> String
+Effect Expect(change: Change, seen: String, wanted: String) -> Bool
+// The E2E runner's: the evidence of the run; on Delivered it performs Ran-Clean-On with it.
+Effect Seal(verifier: Party, change: Change, intent: Intent, plan_ref: String, verdict: Verdict) -> String
+// The E2E runner's: it performs Attest for that clean run.
+Effect Confirm(verifier: Party, change: Change, intent: Intent, plan_ref: String, evidence_ref: String) -> Unit
+Effect Await-Fix(change: Change, finding: Finding) -> Unit
+Effect Seat-Verifier(change: Change, intent: Intent) -> Party          // a fresh session with no hand in CHANGE
+Effect Start-Verify(verifier: Party, change: Change, intent: Intent) -> Unit
+
+// The scenario is a program the synthesis wrote: the gap's filling, checked as a text when it arrives (spec 8.6).
+fn scenario(change: Change) -> Program<Verdict> {
+  v <- ...;
+  return v
+}
+
+fn verify(change: Change, intent: Intent) -> Program<Bool> {
+  me <- return self;
+  diff <- perform Diff(change);
+  iterate round = 0 {
+    standing <- return (Foreach p : p When Live-Plan(change, intent, p));
+    plan <- match standing {
+      | [p] => return p
+      | _ => {
+          weak <- return (Foreach w : w When Exists p, b : Test-Plan(change, intent, p) && Challenged(p, b, w));
+          p <- perform Synthesize(self, change, intent, diff, weak);
+          Submit-Plan(self, change, intent, p);
+          return p
+        }
+    };
+    verdict <- do scenario(change);
+    match verdict {
+      | Delivered => {
+          evidence <- perform Seal(self, change, intent, plan, verdict);
+          fixed <- return (Foreach f : f When Exists e : Fix-Claimed(change, f) && Open-Failure(change, f) && Failed-On(f, intent, me, e));
+          par f in fixed { Clear-Failure(self, change, f) };
+          perform Confirm(self, change, intent, plan, evidence);
+          return Done(Not(Exists v, a : Verify-Intent(v, a, change, intent)))
+        }
+      | Falsified(f) => {
+          evidence <- perform Seal(self, change, intent, plan, verdict);
+          Report-Failure(self, change, intent, plan, Finding(f), evidence);
+          perform Await-Fix(change, Finding(f));
+          return Again(round + 1)
+        }
+    }
+  }
+}
+
+// What the author starts: a verifier seated for the intent, the claim made, and the verifier's own run begun.
+Act Request-Verification(by: Party, change: Change, intent: Intent)
+  Does {
+    v <- perform Seat-Verifier(change, intent);
+    Claim(self, change, intent, v);
+    perform Start-Verify(v, change, intent)
+  }
+
+// What the seated verifier starts, in its own session: as many rounds as BUCKET's limits pay for, then the owner is asked.
+Act Run-Verification(by: Party, change: Change, intent: Intent, bucket: B.Bucket) Returns B.Result<Bool>
+  Conditioned by Independent(change, intent, by)
+  Does { do B.with_budget(bucket, verify(change, intent)) }

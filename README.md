@@ -1,59 +1,50 @@
 # yaaihh
 
-A desktop app for running a team of coding agents (Claude Code and Codex) on your own machine, and staying in charge
-of them.
+A desktop app and coordination engine for running a team of coding agents (Claude Code, Codex, OpenCode, and Antigravity) on your own machine, and staying in charge of them.
 
-Each agent is a real Claude Code or Codex session in its own terminal. yaaihh shows every agent live, lets you and the
-agents write to each other, files the questions agents ask you into threads, and reads every turn with a small
-"clerk" that keeps the mail tidy and notices an agent that stopped when it shouldn't have.
-
-<!-- screenshots: docs/images/agents.png, agent.png, questions.png, clerk.png; docs/images/loop.gif -->
+Each agent runs as a real session of its own harness in its own terminal. `yaaihh` shows every agent live, routes messages and questions into threads, tracks usage and cost, and enforces project workflow rules written in **Docket** — a small coordination language that combines algebraic effects for agent interaction with normative rules (eFLINT) for permissions, duties, and authority.
 
 ## What it does
 
-- **Agents, live.** A grid of every agent with its state (working, idle, waiting on a check, blocked on you), its
-  tokens and cost, and its terminal. Open one to type into its terminal directly or read its chat.
-- **Mail.** You and the agents write to each other with `coord msg NAME TEXT`. Mail sent to an agent mid-turn is held
-  and arrives when its turn ends, so nothing is lost and no turn is cut off; `--esc` interrupts an agent below you.
-- **Questions in threads.** An agent asks you with `coord ask`. Your answers go back into the question's thread, and
-  the Questions page shows what is open and who is waiting on it.
-- **The clerk.** Small rules ("nets") run on every event: when an agent's turn ends, the clerk files its questions,
-  posts its reports into the right thread, and nudges an agent that said what it would do next and then stopped. The
-  rules are text you can edit on the Clerk page, try on past events before turning them on, and correct by marking
-  each decision right or wrong.
-- **Survives restarts.** Agents' terminals are held by small processes of their own, so restarting the app or the
-  per-project daemon never stops an agent. After a reboot yaaihh brings each project back and resumes the agents that
-  were running, each in its own conversation.
-- **Boxes (optional).** A project can run its agents in a Docker Sandbox with permission prompts off, on a private
-  clone of your repository, or directly on your machine with Claude Code's own permission prompts.
+- **Agents, live.** A view of every agent with its state (working, idle, waiting on a check, blocked on you), its token usage and cost, and its live terminal. Open any agent to type into its terminal directly or read its chat.
+- **Programmable coordination with Docket.** Instead of hardcoding review gates, delegation limits, budgets, and escalation rules inside prompts or glue scripts, a project writes them as Docket programs (`docket/`). A Docket engine (`coordd-v2`) evaluates normative rules (permissions, obligations, violations) alongside algebraic-effect handlers that intercept harness hooks (`tool_called`, `turn_end`, `permission_asked`), coordinate sub-agents, and enforce budgets.
+- **Threads and mail.** You and the agents communicate through `coord msg` and `coord ask`. Messages sent to an agent mid-turn are held and delivered when its turn ends so turns are not cut off; `coord esc` stops a running turn without ending the session.
+- **Multi-harness support.** Drivers for Claude Code, Codex, OpenCode, and Antigravity (`agy`), each translating native hook events and transcript usage into a uniform coordination layer.
+- **Survives restarts.** Each agent's terminal is held by a small process of its own (`coord-pty`), so restarting the app or daemon never drops a running agent. After a reboot, projects resume their active sessions cleanly.
+- **Sandboxed or host projects.** Run agents inside isolated boxes with permission prompts disabled on a project clone, or directly on the host with the harness's own permission model.
 
 ## Requirements
 
-- Linux with a systemd user session and cgroup v2 (agents get delegated cgroups for memory limits).
-- [Claude Code](https://claude.com/claude-code) and/or the Codex CLI, logged in.
-- Python 3 (the agents' mail channel), `jq`.
-- To build: Rust (the version in `yaaihh/rust-toolchain.toml`; `rustup` picks it up) and a C++ compiler (clingo, the
-  clerk's rule solver, is built from source and linked in).
-- For boxes only: Docker Sandboxes (`sbx`).
+- Linux with a systemd user session and cgroup v2 (used for process identity and resource limits).
+- At least one supported coding harness logged in: [Claude Code](https://claude.com/claude-code), Codex CLI, OpenCode, or Antigravity (`agy`).
+- Python 3 (for the agent mail channel and harness bridges) and `jq`.
+- To build from source: Rust (toolchain pinned in `rust-toolchain.toml`) and a C++ compiler.
+- Optional: Docker Sandboxes (`sbx`) for boxed projects.
 
-## Install
+## Build & Install
 
 ```sh
 git clone https://github.com/tommanis1/yaaihh && cd yaaihh
-./release.sh build && ./release.sh live      # builds into releases/, links agent-base/bin, starts yaaihh
-yaaihh/install-desktop.sh                     # the desktop entry and login autostart (tray)
+cargo build --release
 ```
+
+To cut and switch a local release bundle without interrupting running agents:
+
+```sh
+./ops/release/release.sh build && ./ops/release/release.sh live
+```
+
+The GUI is built on [rune](https://github.com/tommanis1/rune) (our fork on the `yaaihh` branch, pinned in `crates/yaaihh/Cargo.toml`).
 
 ## Quickstart: a project on your machine
 
-1. Start yaaihh, click **+** next to Projects, give it a name, turn **Boxed** off, and give the folder your agents
-   will work in.
+1. Start `yaaihh`, click **+** next to **Projects**, give it a name, turn **Boxed** off, and point it at the folder your agents will work in.
 2. Start an agent from a shell with the project's environment:
    ```sh
    agent-base/bin/host-coordd sh my-project roster add alice claude-opus-5-5 prompt.md ~/code/my-repo
    ```
-   `prompt.md` is the agent's first message (its task).
-3. Alice appears in yaaihh. Write to her from her page; her questions land in Questions.
+   `prompt.md` holds the agent's initial task.
+3. `alice` appears in `yaaihh`. Write to her directly or through threads; questions she asks with `coord ask` appear under **Questions**.
 
 ## Configuration
 
@@ -69,11 +60,7 @@ id    = "my-project"
 boxed = false
 ```
 
-Keep your own boxes, project files and this config in a repository of your own (a "flavour") and link the config
-into place; yaaihh itself stays generic.
-
-Agents use their own Claude Code and Codex logins. To send a project's agents through a model proxy instead, write
-`~/agent-coord/PROJECT/route`:
+To route a project's agents through a local model proxy instead of direct logins, write `~/agent-coord/PROJECT/route`:
 
 ```sh
 ANTHROPIC_BASE_URL=http://127.0.0.1:8317
@@ -83,8 +70,7 @@ KEY_COMMAND=/path/to/print-the-proxy-key
 
 ## Extensions
 
-yaaihh is a library as well as the app. A variant adds pages of its own (a section in the sidebar, its own state,
-requests to the projects' coordds, scenes) by building a small binary:
+`yaaihh` is a library as well as an executable. A custom flavour can register additional sidebar sections, pages, daemon requests, and price tables through `yaaihh::ext::Extension` (see `crates/yaaihh/src/ext.rs`):
 
 ```rust
 fn main() {
@@ -92,19 +78,19 @@ fn main() {
 }
 ```
 
-where `EXTENSION` is a `yaaihh::ext::Extension` (see `yaaihh/crates/yaaihh/src/ext.rs`). `release.sh build` builds
-`flavor/app` instead of the plain app when a flavour is checked out at `flavor/`.
-
 ## Layout
 
-- `yaaihh/`: the Rust workspace: `yaaihh` (the app), `coordd` (one per project: agents, mail, questions, the
-  clerk), `coordc` (its client), `coord-pty` (an agent's terminal holder), `coord-types`, `prices`.
-- `agent-base/`: what the agents run with: `coord`, `roster`, Claude Code settings and hooks, git hooks, the box
-  script and kit, and the clerk's default nets, calls and policy.
-- `release.sh`: build, try (`dev`), go live and roll back without stopping running agents.
-- `flavor/`, `proxy/` (not part of this repository, ignored): your own flavour and extensions, checked out beside.
+- `crates/docket/`: **Docket** language implementation — `v2` (parser, type/capability checker, algebraic-effects evaluator), `eflint` (incremental normative rule engine), `machine`, `eval`, and `ls`.
+- `crates/drivers/`: harness and system drivers (`claude`, `codex`, `opencode`, `agy`, `turns`, `session`, `clerk`, `compute`, `host`, `window`, `verify`, `hook-ir`).
+- `crates/coordd/`, `crates/coordd-v2/`, `crates/coord-pty/`, `crates/coord-types/`: per-project coordination daemons, terminal holders, and wire types.
+- `crates/yaaihh/`: the desktop UI library and application (including the interactive Docket program visualizer and live thread/agent views).
+- `crates/usage/`, `crates/usage-rollup/`, `crates/cold-store/`, `crates/symbols/`: token/cost accounting, rollups, episode storage, and symbol indexing.
+- `docket/`: Docket standard library (`docket/std/`), default coordination programs (`docket/defaults/`), examples, and test scenarios.
+- `agent-base/`: agent runtime scripts (`coord`, `roster`, `host-coordd`, `agy-rpc`, `codex-rpc`), harness hooks, and box helpers.
+- `docs/specs/`: design specifications (including `docs/specs/docket-v2-spec.md`).
+- `ops/`: release scripts (`ops/release/`), build runner, compute worker, voice, and web MCP tools.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the components fit together.
 
 ## License
 

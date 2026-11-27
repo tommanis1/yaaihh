@@ -1,0 +1,21 @@
+{
+  "name": "yaaihh-open",
+  "publisher": "yaaihh",
+  "displayName": "yaaihh open",
+  "description": "Opens in this window what yaaihh asks: a file at a line, a commit's diff, a repository in the Explorer.",
+  "version": "0.0.1",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  }
+}

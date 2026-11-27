@@ -1,0 +1,151 @@
+module tovrin.runner
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.control as Ctrl
+import tovrin.ratchet as Ratchet
+
+// Shared-Cache Parallel Agda 2.9 Runner.
+// Explicitly forbids serial one-module-at-a-time checking; requires parallel `-j` + shared cache.
+//
+//   1  no serial checks    a command that runs Agda, and how it must be run
+//   2  hypothesis first    whoever asks for a run says first what it will show, and reads what it did show
+//   3  one run for a cut   those who want the same cut checked wait on one run, as wide as memory allows
+//   4  the stall alarm     thirty minutes without a line of output: somebody is told; nothing is killed
+
+// ===== 1. No serial checks =======================================================================================
+// Only a command whose program is agda is judged, read from the parsed tool call; `-j1` is serial.
+
+fn runs_agda(command: String) -> Bool {
+  return matches_glob(command, "agda *") || matches_glob(command, "*/agda *")       // the program itself
+      || matches_glob(command, "*&& agda *") || matches_glob(command, "*; agda *")  // or after another command
+}
+fn runs_agda_validly(command: String) -> Bool {
+  return matches_glob(command, "*agda*-j*")
+      && Not(matches_glob(command, "*-j1 *")) && Not(matches_glob(command, "*-j 1 *")) && Not(matches_glob(command, "*-j1"))
+      && Not(matches_glob(command, "*--no-shared-cache*"))
+}
+
+// The arm names the power it uses, so the text loads for a harness that cannot deny (spec 12); and where it has
+// no objection it asks outward, so other arms are still heard.
+on H.Hook(agent, "tool_called", payload) where H.Running-On(agent, h, v) && H.Lets(h, v, "tool_called", "deny") do {
+  use <- perform H.Tool-Use(agent, payload);
+  if use.tool == "command" && runs_agda(use.command) && Not(runs_agda_validly(use.command)) {
+    return H.Deny("tovrin.runner: serial Agda checking is forbidden; use parallel Agda 2.9 (-j) with shared _build cache.")
+  } else {
+    perform H.Hook(agent, "tool_called", payload)
+  }
+}
+
+// ===== 2. Hypothesis first =======================================================================================
+// A run is an experiment. Before it: what do you expect it to show, and why. After it: was that so. An agent whose
+// last run surprised it states a new hypothesis before the next; it cannot run again and again until green.
+
+Fact Cut Identified by String                       // a commit
+Fact Hypothesis(who: H.Party, cut: Cut, expects: String)
+Fact Job(job: String, who: H.Party, cut: Cut, s: Ratchet.Suite)
+Fact Finished(job: String, said: String)
+Fact Read-Outcome(job: String, as_expected: Bool, learned: String)
+
+Act State-Hypothesis(who: H.Party, cut: Cut, expects: String)
+  Conditioned by str_len(expects) > 0
+  Creates        Hypothesis(who, cut, expects)
+
+Fact Unread-Job(who: H.Party, job: String)
+  Holds when Job(job, who, c, s) && Finished(job, said) && Not(Exists e, l : Read-Outcome(job, e, l))
+
+// Edge: one hypothesis for many runs. A hypothesis is used up by the job it was stated for.
+Act Submit(who: H.Party, job: String, cut: Cut, s: Ratchet.Suite)
+  Conditioned by Hypothesis(who, cut, e)
+                 && Not(Exists j : Unread-Job(who, j))                  // read the last run first
+                 && Not(Ratchet.Blocked-Suite(s)) && Not(Ratchet.Excluded-Suite(s))
+  Creates        Job(job, who, cut, s)
+  Terminates     Hypothesis(who, cut, e) When Hypothesis(who, cut, e)
+
+Act Read-Result(who: H.Party, job: String, as_expected: Bool, learned: String)
+  Conditioned by Unread-Job(who, job) && str_len(learned) > 0
+  Creates        Read-Outcome(job, as_expected, learned)
+
+// ===== 3. One run for a cut, in parallel =========================================================================
+
+Fact Going(cut: Cut, s: Ratchet.Suite, run: String)
+Fact Workers(n: Int)                                // the widths the project allows: never 1
++Workers(2). +Workers(4). +Workers(8). +Workers(16).
+Fact Worker-Mb(mb: Int)                             // what one Agda worker holds, as the runner last measured it
+Fact Check-Command(line: String)                    // the project's: Agda 2.9 on a cut with -j, on the shared cache
++Check-Command("build-runner agda").                // the shape of the line; the runner's own line goes here
+
+Event Run-Starts(cut: Cut, s: Ratchet.Suite, run: String)
+  Conditioned by Not(Exists r : Going(cut, s, r))
+  Creates        Going(cut, s, run)
+Event Run-Ends(cut: Cut, s: Ratchet.Suite, run: String, said: String)
+  Terminates Going(cut, s, run)
+  Creates    Finished(j, said) When Job(j, w, cut, s) && Not(Exists x : Finished(j, x))
+
+// Edge: no room for two workers. The run then waits for memory. It is never started with one worker, and it never
+// takes more than the box has left (tovrin.budgets, std.budgets 4).
+Fact Box-Left(mb: Int)
+  Holds when B.Cap("tovrin-box", "ram_mb", max) && mb == max - Sum(Foreach j, m : m When B.Reserved(j, "tovrin-box", m))
+Fact Widest(n: Int)
+  Holds when Workers(n) && Worker-Mb(mb) && Box-Left(left) && n * mb <= left
+             && Not(Exists n2 : Workers(n2) && n2 > n && n2 * mb <= left)
+
+// Run from the reaction below, so as this module, which is the runner: its reservation and its `Run-Proof-Suite`
+// are its own acts, and the Events are a reaction's to perform.
++H.Party("tovrin.runner"). +C.Role("tovrin.runner", "runner").
+fn check(cut: Cut, s: Ratchet.Suite, run: String) -> Program<Unit> {
+  Run-Starts(cut, s, run);
+  wide <- return (Foreach n : n When Widest(n));
+  match wide {
+    | [n] => {
+        par mb in (Foreach m : m When Worker-Mb(m)) { B.Reserve(self, run, "tovrin-box", n * mb) };
+        Ratchet.Run-Proof-Suite(self, s, run);
+        par how in (Foreach c : c When Check-Command(c)) {
+          said <- perform B.Command("{{ how }} -j{{ n }} --suite {{ s }} {{ cut }}");
+          do B.job_ended(run);
+          Run-Ends(cut, s, run, said)
+        };
+        return ()
+      }
+    | _ => Run-Ends(cut, s, run, "waiting: no memory for two workers")
+  }
+}
+
+// Those who want the same suite on the same cut wait on the one run: `Run-Starts` is refused while it goes, and
+// `Run-Ends` gives every such job its result. The run is named by the job that started it.
+on Submit(_, job, cut, s) where Not(Exists r : Going(cut, s, r)) do {
+  do check(cut, s, job)
+}
+
+// ===== 4. The stall alarm ========================================================================================
+// A run that has written nothing for thirty minutes is called out to `orch` and to whoever asked for it, once. It
+// goes on running: a run is ended by `orch` or the owner, never by a clock.
+
+Fact Spoke-At(run: String, minute: Int)
+Event Run-Spoke(run: String, minute: Int)           // the runner's line whenever a run writes output
+  Terminates Spoke-At(run, m) When Spoke-At(run, m)
+  Creates    Spoke-At(run, minute)
+Fact Stalled(run: String)
+  Holds when Going(c, s, run) && Spoke-At(run, m) && B.Now(now) && now >= m + 30
+Fact Alarmed(run: String)
+Event Alarm(run: String)
+  Conditioned by Stalled(run) && Not(Alarmed(run))
+  Creates        Alarmed(run)
+
+on B.Tick(_) where Exists r : Stalled(r) && Not(Alarmed(r)) do {
+  par r in (Foreach r : r When Stalled(r) && Not(Alarmed(r))) {
+    Alarm(r);
+    par o in (Foreach o : o When C.Role(o, "orch")) {
+      perform Ctrl.Deliver(self, o, "A run has written nothing for thirty minutes: {{ r }}. It is still running. Look at it; end it only if it is stuck.")
+    };
+    par w in (Foreach j, w, c, s : w When Job(j, w, c, s) && Going(c, s, r)) {
+      perform Ctrl.Deliver(self, w, "The run you asked for has written nothing for thirty minutes. orch has been told.")
+    }
+  }
+}
+
+Act End-Stuck(actor: H.Party, run: String)
+  Conditioned by (C.Role(actor, "orch") || C.Role(actor, "owner")) && Going(c, s, run)
+  Terminates     Going(c, s, run) When Going(c, s, run)

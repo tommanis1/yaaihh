@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# A stand-in for Claude Code in accounts-try.sh: it calls no model and signs in nowhere. It is started by roster as
+# `claude` would be, records how (one line in $COORD/accounts-try/starts.jsonl), sends its session's start hook, and
+# then stays, as a session does. A turn is made from outside: SIGUSR1 writes a prompt and its answer in its transcript
+# with the prompt and stop hooks, as a real turn does, and runs its settings' status line if the try left an input
+# for it. Hung up, it ends.
+#
+# A start's line: agent, session, resumed (the --resume it was given), config (CLAUDE_CONFIG_DIR, empty when unset),
+# endpoint (whether ANTHROPIC_BASE_URL is set), key_helper (whether its settings file names one), projects (where
+# config's projects link leads), trusted (whether config's .claude.json has this folder's trust dialog accepted),
+# telemetry (OTEL_EXPORTER_OTLP_ENDPOINT, where its telemetry would go; empty when unset), token ("set" when its
+# environment has the header its exporter would send, OTEL_EXPORTER_OTLP_HEADERS; the value is not recorded), resume
+# (CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1" when the start is to go on with a cut turn) and resume_age ("set" when
+# the bound on that turn's age is given). SIGUSR1 is a turn that is answered, SIGUSR2 one cut by the account's limit.
+set -u
+# `claude auth login`, `claude auth status --json` and `claude auth logout`, as coordd runs them under an account's
+# folder (accounts/signin.rs): the login prints a URL and a prompt, takes one line, and with the code `good-code` marks
+# the folder (a file of the stand-in's own, no login) and exits 0; any other code exits 1. The status says the mark;
+# the logout takes it away.
+case "${1:-} ${2:-}" in
+"auth login")
+  echo "Opening browser to sign in..."
+  echo "If the browser didn't open, visit: https://claude.example/oauth/authorize?stand-in=1"
+  printf 'Paste code here if prompted > '
+  IFS= read -r code || exit 1
+  # where it runs, for the try: coordd puts a sign-in in a cgroup of its own (signin/ID)
+  sed -n 's/^0:://p' /proc/self/cgroup >"${CLAUDE_CONFIG_DIR:?}/.stand-in-cgroup"
+  [ "$code" = good-code ] || { echo "Invalid code"; exit 1; }
+  : >"${CLAUDE_CONFIG_DIR:?}/.stand-in-signed"; echo "Login successful."; exit 0 ;;
+"auth status")
+  if [ -f "${CLAUDE_CONFIG_DIR:?}/.stand-in-signed" ]; then echo '{"loggedIn": true, "authMethod": "claude.ai"}'; exit 0; fi
+  echo '{"loggedIn": false, "authMethod": "none"}'; exit 1 ;;
+"auth logout")
+  rm -f "${CLAUDE_CONFIG_DIR:?}/.stand-in-signed"; echo "Successfully logged out from your Anthropic account."; exit 0 ;;
+esac
+T=${COORD:?}/accounts-try
+sid='' settings=''
+while [ $# -gt 0 ]; do
+  case $1 in
+  --resume) sid=$2; shift 2 ;;
+  --settings) settings=$2; shift 2 ;;
+  *) shift ;;
+  esac
+done
+resumed=$sid
+[ -n "$sid" ] || sid=$(cat /proc/sys/kernel/random/uuid)
+cfg=${CLAUDE_CONFIG_DIR:-}
+# the transcript: under the config folder's `projects`, as Claude Code's is (an account's is a link to the try's
+# conversations, so the file is the same one whichever way the session runs); through the route, that folder itself
+mkdir -p "$T/projects/-try"
+tr=${cfg:+$cfg/projects/-try/$sid.jsonl}
+[ -n "$tr" ] || tr=$T/projects/-try/$sid.jsonl
+projects='' trusted=false
+if [ -n "$cfg" ]; then
+  projects=$(readlink -f "$cfg/projects" 2>/dev/null || true)
+  [ "$(jq -r --arg d "$PWD" '.projects[$d].hasTrustDialogAccepted // false' "$cfg/.claude.json" 2>/dev/null)" != true ] || trusted=true
+fi
+helper=false given=false
+[ -z "$settings" ] || [ "$(jq 'has("apiKeyHelper")' "$settings" 2>/dev/null)" != true ] || helper=true
+# on an account folder Claude Code runs the helper for its key; whether it gave one is recorded, the key is not
+[ -z "$cfg" ] || [ "$helper" != true ] || [ -z "$(sh -c "$(jq -r .apiKeyHelper "$settings")" 2>/dev/null)" ] || given=true
+jq -nc --arg agent "${AGENT_NAME:-}" --arg session "$sid" --arg resumed "$resumed" --arg config "$cfg" \
+  --arg endpoint "${ANTHROPIC_BASE_URL:+set}" --argjson key_helper "$helper" --argjson key_given "$given" --arg projects "$projects" --argjson trusted "$trusted" \
+  --arg telemetry "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" --arg token "${OTEL_EXPORTER_OTLP_HEADERS:+set}" \
+  --arg resume "${CLAUDE_CODE_RESUME_INTERRUPTED_TURN:-}" --arg resume_age "${CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS:+set}" \
+  '{agent: $agent, session: $session, resumed: $resumed, config: $config, endpoint: $endpoint, key_helper: $key_helper, key_given: $key_given, projects: $projects, trusted: $trusted, telemetry: $telemetry, token: $token, resume: $resume, resume_age: $resume_age}' >>"$T/starts.jsonl"
+at() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
+# hook EVENT [SOURCE [MORE]]: the session's hook EVENT, its input with the fields of MORE (a JSON object) added
+hook() {
+  local more=${3:-}; [ -n "$more" ] || more='{}'
+  jq -nc --arg s "$sid" --arg t "$tr" --arg c "$PWD" --arg src "${2:-}" --argjson more "$more" '{session_id: $s, transcript_path: $t, cwd: $c, source: $src} + $more' | "$AGENT_BASE/claude/hook" "$1" >/dev/null
+}
+n=0
+turn() {
+  n=$((n + 1))
+  jq -nc --arg at "$(at)" --arg s "$sid" '{type: "user", timestamp: $at, sessionId: $s, message: {role: "user", content: "a prompt"}}' >>"$tr"
+  hook prompt
+  sleep 0.5
+  jq -nc --arg at "$(at)" --arg s "$sid" --arg id "msg_$sid-$n" '{type: "assistant", timestamp: $at, sessionId: $s, message: {id: $id, role: "assistant", model: "claude-opus-5-5", stop_reason: "end_turn", content: [{type: "text", text: "an answer"}], usage: {input_tokens: 10, output_tokens: 5}}}' >>"$tr"
+  # the status line, as Claude Code runs it after an answer: the command its settings name, given what the try says
+  # the API answered of the account's windows ($T/statusline.json), if both are there
+  local cmd; cmd=$(jq -r '.statusLine.command // empty' "$settings" 2>/dev/null)
+  if [ -n "$cmd" ] && [ -f "$T/statusline.json" ]; then sh -c "$cmd" <"$T/statusline.json" >/dev/null; fi
+  # its telemetry, as Claude Code's exporter sends it: one logs body with the turn's request, to the endpoint and with
+  # the header its environment names; then the same without the header. The two statuses are kept, nothing else.
+  if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" ]; then
+    local body with without
+    body=$(jq -nc --arg s "$sid" --arg id "req_$sid-$n" '{resourceLogs: [{scopeLogs: [{logRecords: [{attributes: [
+      {key: "event.name", value: {stringValue: "api_request"}}, {key: "session.id", value: {stringValue: $s}},
+      {key: "request_id", value: {stringValue: $id}}, {key: "model", value: {stringValue: "claude-opus-5-5"}},
+      {key: "input_tokens", value: {stringValue: "10"}}, {key: "output_tokens", value: {stringValue: "5"}},
+      {key: "cache_read_tokens", value: {stringValue: "0"}}, {key: "cache_creation_tokens", value: {stringValue: "0"}},
+      {key: "duration_ms", value: {stringValue: "1234"}}]}]}]}]}')
+    with=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H "${OTEL_EXPORTER_OTLP_HEADERS/=/: }" -d "$body" "$OTEL_EXPORTER_OTLP_ENDPOINT/v1/logs")
+    without=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "$body" "$OTEL_EXPORTER_OTLP_ENDPOINT/v1/logs")
+    echo "$with $without" >"$T/telemetry.sent"
+  fi
+  hook stop
+  # for the try: the turn is over and coordd was told (it waits for this before it stops coordd)
+  echo "$n" >"$T/turn-ended.${AGENT_NAME:-none}"
+}
+# a turn whose request meets the account's limit, as Claude Code leaves it: the error row in the transcript and the
+# StopFailure hook (`failed`) with the limit, and no answer
+cut() {
+  n=$((n + 1))
+  jq -nc --arg at "$(at)" --arg s "$sid" '{type: "user", timestamp: $at, sessionId: $s, message: {role: "user", content: "a prompt"}}' >>"$tr"
+  hook prompt
+  sleep 0.5
+  jq -nc --arg at "$(at)" --arg s "$sid" '{type: "assistant", timestamp: $at, sessionId: $s, isApiErrorMessage: true, error: "rate_limit", apiErrorStatus: 429, quotaLimits: {status: "rejected", resetsAt: (now | floor + 1800), rateLimitType: "five_hour"}, message: {role: "assistant", model: "<synthetic>", content: [{type: "text", text: "You have hit your session limit"}]}}' >>"$tr"
+  hook failed '' '{"error": "rate_limit", "error_details": "429 Too Many Requests"}'
+}
+trap turn USR1
+trap cut USR2
+trap 'exit 0' HUP TERM INT
+: >>"$tr"
+hook start "$([ -n "$resumed" ] && echo resume || echo startup)"
+echo $$ >"$T/pid.${AGENT_NAME:-none}"
+echo "stand-in claude: session $sid${cfg:+, config $cfg}"
+while :; do sleep 0.2; done

@@ -1,0 +1,94 @@
+// Where an agent that runs on the owner's accounts runs (0.2 list, line 22), and where each LLM call coordd runs itself
+// goes: the router's choice of the place that serves a model (accounts/router.rs; the owner, N-1104 p676: "one
+// component that sits in front of the gateway ... call it a router"). The model is decisions.eflint's; this file
+// says only where it runs. His rule, 20 Nov 08:55: "try to load balance new placements of agents round robin across
+// one tier, move to the next tier if no space". coordd asks `account-for` at each start of such an agent, a first
+// start, a restart and a move alike (accounts/router.rs `take`, under the accounts' lock, where it also binds the
+// answer), and for each call (`Router::call`, binding nothing), with the model asked (`call.model`), and supplies the
+// facts below for that moment. An agent already on an account that can take requests keeps it (a restart is not a
+// move); the rule places the others. A project says otherwise in a file of its own named placement.eflint, which
+// replaces this one.
+
+// The places: each of his accounts by its id, and "the gateway" where the coord has the gateway.
+Fact place Identified by String
+// The tier he put each in (the Accounts page's Priority), the highest first. The gateway's is written here until the
+// window sets it: 0, under every tier the window gives an account (1 and up), so it is the last, where agents go when
+// no account has space.
+Fact place-tier Identified by place * Int
++place-tier("the gateway", 0).
+// It can take requests now: signed in, not out, not refused, not deaf, not being removed (coordd).
+Fact usable Identified by place
+// Its plan as Claude Code names it (`claude auth status`'s subscriptionType: pro, max, team, enterprise), and its
+// weekly use in whole per cent (rounded down) as last seen, while that week lasts (coordd, from what Claude Code said;
+// none known, none supplied).
+Fact plan Identified by place * String
+Fact weekly-used Identified by place * Int
+// Its place in its tier's round: 0 is the next after the one chosen last in that tier (coordd, from turn.json).
+Fact turn Identified by place * Int
+// Messages are not known to reach its sessions: none has entered a session's input on it since its sign-in, or
+// since one handed to a session on it was never seen there (coordd, state.json `heard`); and how many agents of his,
+// of any coord, run on it (its bindings).
+Fact unheard Identified by place
+Fact taken Identified by place * Int
+// It serves the model asked, by the gateway's id (claude-sonnet-5-5; `call.model`, its `:EFFORT` left off): an account
+// of Claude Code each of Anthropic's own (claude-...), a variant as claude-fable-5-2[1m] too; an opencode account its
+// provider's (only those of the agent's provider are asked); the gateway those its lists name, by base id, and one
+// they stopped naming until ten minutes of them lacked it, and every model before one was read (coordd).
+Fact serves Identified by place * String
+// The `--model` Claude Code is given when a call runs on his accounts, by the gateway's id (a call of a model with no
+// row here runs elsewhere). They are the gateway's own Claude models (CLIProxyAPI's
+// internal/registry/models/models.json, its `claude` part), so a call or an agent that goes from the gateway to an
+// account finds the same models under the same names, and the models the policy chooses among do not change (coordd
+// adds these to the gateway's list while one of his Claude Code accounts is signed in).
+Fact claude-code-model Identified by String * String
++claude-code-model("claude-opus-5-5", "claude-opus-5-5").
++claude-code-model("claude-sonnet-5-5", "claude-sonnet-5-5").
++claude-code-model("claude-haiku-5-5", "claude-haiku-5-5").
++claude-code-model("claude-fable-5-2", "claude-fable-5-2").
++claude-code-model("claude-fable-5-1", "claude-fable-5-1").
++claude-code-model("claude-fable-5", "claude-fable-5").
++claude-code-model("claude-opus-5", "claude-opus-5").
++claude-code-model("claude-sonnet-5", "claude-sonnet-5").
++claude-code-model("claude-opus-4-8", "claude-opus-4-8").
++claude-code-model("claude-opus-4-7", "claude-opus-4-7").
++claude-code-model("claude-opus-4-6", "claude-opus-4-6").
++claude-code-model("claude-sonnet-4-6", "claude-sonnet-4-6").
++claude-code-model("claude-opus-4-5-20251101", "claude-opus-4-5-20251101").
++claude-code-model("claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929").
++claude-code-model("claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001").
++claude-code-model("claude-opus-4-1-20250805", "claude-opus-4-1-20250805").
++claude-code-model("claude-opus-4-20250514", "claude-opus-4-20250514").
++claude-code-model("claude-sonnet-4-20250514", "claude-sonnet-4-20250514").
++claude-code-model("claude-3-7-sonnet-20250219", "claude-3-7-sonnet-20250219").
++claude-code-model("claude-3-5-haiku-20241022", "claude-3-5-haiku-20241022").
+
+// The weekly use at or over which an account of a plan has no space for a new agent, and its 5-hour window is not
+// opened: the gateway's window opener's ceilings (its service_window_opener.go names the plans claude_pro and
+// claude_max), one place for both (paper-research N-412 post 2089). A plan not named here has no ceiling. The 5-hour
+// window is no space line: an account at its 5-hour limit is out, and below it the window starts again within hours.
+Fact weekly-ceiling Identified by String * Int
++weekly-ceiling("pro", 70).
++weekly-ceiling("max", 80).
+
+Decision account-for
+  Options place
+  Requires usable(option)
+  Requires serves(option, call.model)
+// no space at its plan's weekly ceiling: such an account is passed over for any place that has space, in its tier or
+// the next. Where none has (no gateway, and every account that can take one at its ceiling), the agent runs on one of
+// them all the same, by tier and turn: it does not stand still (the owner, 20 Nov 08:45: "blocking everybody because
+// one account goes down is not okay").
+Prefer for account-for When weekly-used(option) >= weekly-ceiling(plan(option)):
+  minimise 1
+// messages not yet known to reach it, with agents on it already: such an account takes one agent, whose messages say
+// whether more may come, and the next go where that is known, or through the gateway (on 20 Nov a Team seat with
+// channels off took 35 agents, none of which heard a message). Where nothing else can take them, they go there all the
+// same. Found deaf, it takes none and its agents move (coordd: `usable`).
+Prefer for account-for When unheard(option):
+  minimise taken(option)
+// The first tier that has space, the highest first.
+Prefer for account-for:
+  maximise place-tier(option)
+// Round robin within it.
+Prefer for account-for:
+  minimise turn(option)

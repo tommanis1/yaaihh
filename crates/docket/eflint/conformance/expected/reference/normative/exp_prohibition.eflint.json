@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type counter\nNew type person\n+counter(0)\nNew type count\nNew type force_stop\n+count(person(\"Alice\"),person(\"Bob\"))\n+force_stop(person(\"Bob\"),person(\"Alice\"))\nexecuted transition: \ncount(person(\"Alice\"),person(\"Bob\")) (ENABLED)\n-counter(0)\n+counter(1)\nexecuted transition: \ncount(person(\"Alice\"),person(\"Bob\")) (ENABLED)\n-counter(1)\n+counter(2)\nquery successful\nexecuted transition: \nforce_stop(person(\"Bob\"),person(\"Alice\")) (ENABLED)\n-count(person(\"Alice\"),person(\"Bob\"))\nquery successful\nexecuted transition: \ncount(person(\"Alice\"),person(\"Bob\")) (DISABLED)\nviolations:\n  disabled action: count(person(\"Alice\"),person(\"Bob\"))\n-counter(2)\n+counter(3)\nquery successful\n#11 > "
+ }
+}

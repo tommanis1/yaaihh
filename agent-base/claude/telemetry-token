@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# telemetry-token COMMAND...: run COMMAND with the coord's telemetry token as the one header its OpenTelemetry exporter
+# sends, so that coordd's receiver takes its rows (crates/coordd/src/accounts/telemetry.rs: a row must come
+# from a session this coordd started). roster starts a session on one of the owner's accounts through this.
+#
+# The token goes from its file ($COORD/telemetry.token, the owner's only) into the environment here and nowhere else:
+# it is in no command line, no reply of coordd's and no log. Without the file (no receiver runs) COMMAND runs as it
+# is, and its rows come without durations.
+if t=$(cat "${COORD:?}/telemetry.token" 2>/dev/null) && [ -n "$t" ]; then
+  export OTEL_EXPORTER_OTLP_HEADERS="x-coord-token=$t"
+fi
+exec "$@"

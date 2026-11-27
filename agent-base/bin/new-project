@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# new-project: make a project and start its coordd, on the coordds' machine (docket-core7, N-412 post 286; N-547).
+#
+#   new-project box  ID REPO [FILE]   a boxed project: box.sh up ID REPO (a Docker Sandbox on a private clone of REPO)
+#   new-project host ID DIR  [FILE]   a host project: coordd-ID as the owner's user (host-coordd start ID), its agents
+#                                     working in DIR; DIR "": each agent in its own home, agents/NAME/home
+#
+# What the window's New project dialog runs (yaaihh projects.rs `start`): as it is on Linux, through
+# `wsl.exe -d DISTRO -e` from Windows, where the folder, the file, ~/agent-coord and box.sh are WSL's and none of
+# them can be reached from the Windows side. It does what the Linux window did itself: checks the folder (and the
+# project file, when given), makes ~/agent-coord/ID with its `project` (FILE) and, for a host project, its `repo`
+# (DIR; box.sh up writes a box's itself), then starts the coordd. A leading ~ in DIR and FILE is this machine's home.
+# The last line it prints is the outcome; when it fails, why, on stderr, and its exit code is not 0.
+#
+# What it writes: ~/agent-coord/ID (refused when it is there already, so nothing is overwritten), and in it `project`
+# (FILE; for a host project given none, its own definition/project.toml saying host_relay = true) and, for a host
+# project given DIR, `repo` (coordd's first agent works there, main.rs `owner_roster`; with DIR "" none, and no
+# scratch folder: each agent starts in its own home, the owner's Stream 4A N-1979), and the empty `claude-home`
+# (0700): its agents' own Claude Code folder, never the owner's ~/.claude (roster `own_home`; paper-research N-1446
+# p3051); and `route`, the machine's ~/agent-coord/route, so coordd's own calls (clean, intake, minder: Codex only,
+# decisions.eflint) reach the gateway as every other project's do (Stream 6 item 3a, waits.md item 14): for a host
+# project a link to it, one file to change; for a box a copy (0600), as a box mounts its coord folder alone and a link
+# would point nowhere in it. With no machine route, none, and stderr says its helpers have no model; nothing else
+# (what box.sh up or host-coordd start then write is theirs).
+# It writes no projects.toml: the window adds the entry to its own config (on Windows %APPDATA%\yaaihh).
+# Way back: a project made by it is taken away as any other (host-coordd stop ID, or box.sh down ID; its coord
+# folder kept).
+set -uo pipefail
+AB=$(cd "$(dirname "$0")/.." && pwd -P)
+usage() { sed -n '4,6p' "$0" | sed 's/^# //' >&2; exit 2; }
+kind=${1:-}; ID=${2:-}; DIR=${3:-}; FILE=${4:-}
+[ $# -ge 3 ] && [ $# -le 4 ] || usage
+case $kind in box | host) ;; *) usage ;; esac
+fail() { echo "new-project: $*" >&2; exit 1; }
+# what the window's id_of gives: a box's name and a unit's name both take it
+[[ $ID =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail "not a project id: $ID (lower-case letters, digits and -)"
+tilde() { case $1 in "~") echo "$HOME" ;; "~/"*) echo "$HOME/${1#\~/}" ;; *) echo "$1" ;; esac; }
+if [ -n "$DIR" ]; then
+  DIR=$(tilde "$DIR")
+  [ -d "$DIR" ] || fail "no folder $DIR"
+elif [ "$kind" = box ]; then
+  fail "a boxed project clones a repository: name it"
+fi
+if [ -n "$FILE" ]; then
+  FILE=$(tilde "$FILE")
+  [ -f "$FILE" ] || fail "no file $FILE"
+fi
+COORD=$HOME/agent-coord/$ID
+# a coord folder there already is another project's record (or a removed one's): refused, never written into
+[ ! -e "$COORD" ] || fail "there is a coord folder $COORD already"
+mkdir -p "$HOME/agent-coord" && mkdir "$COORD" || fail "cannot make $COORD"
+if [ -n "$FILE" ]; then printf '%s\n' "$FILE" >"$COORD/project" || fail "cannot write $COORD/project"; fi
+# the machine's one model route (lib/route.sh): linked, but copied into a box, which sees nothing outside its coord
+route=$HOME/agent-coord/route
+if [ -f "$route" ]; then
+  if [ "$kind" = host ]; then ln -s "$route" "$COORD/route"; else (umask 077; cp "$route" "$COORD/route"); fi || fail "cannot write $COORD/route"
+else
+  echo "new-project: no $route: $ID reaches no gateway, so coordd's own calls (clean, intake, minder) have no model" >&2
+fi
+if [ "$kind" = host ]; then
+  # no project file given: one of its own, as coordd's Add a repository makes it (project.rs `add_repo`, which then adds
+  # to it), saying host_relay = true, so what it sends to the host and to other projects is carried (the owner through
+  # fresh, N-1725; paper-research N-1446 p3502), and norms = "clingo": coordd's own default since N-1978 p3, said here so
+  # an older coordd does not compare both engines every tick. A file he gives is his and says what it says.
+  if [ -z "$FILE" ]; then
+    mkdir "$COORD/definition" && printf '[project]\nhost_relay = true\nnorms = "clingo"\n' >"$COORD/definition/project.toml" \
+      && printf '%s\n' "$COORD/definition/project.toml" >"$COORD/project" || fail "cannot write $COORD/definition/project.toml"
+  fi
+  # no folder given: no scratch folder in the coord's; coordd starts each agent in its own home (agents/NAME/home)
+  if [ -n "$DIR" ]; then printf '%s\n' "$DIR" >"$COORD/repo" || fail "cannot write $COORD/repo"; fi
+  (umask 077; mkdir "$COORD/claude-home") || fail "cannot make $COORD/claude-home"
+  exec "$AB/bin/host-coordd" start "$ID"
+fi
+exec "$AB/box/box.sh" up "$ID" "$DIR"

@@ -1,0 +1,6 @@
+// replaces: text-reader.eflint
+//
+// The role "text-reader", the read of a text change (the dialect's policy/text-reader.eflint, where the lead holds it;
+// paper-research N-1446 p2894), in part 3's eFLINT text (`interp::load`): this file's first line leaves the dialect's
+// file out, and nothing of it is written here. No act reads the role, the decision `fills` that does is norms.rs's,
+// and `role` stays coordd's until E4 (yaaihh.eflint), so this text writes no rule on it.

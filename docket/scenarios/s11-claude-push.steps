@@ -1,0 +1,94 @@
+# Scenario 10: words reach a Claude Code agent by push (std.delivery, std.bridges.claude_code). Idle, what waits is
+# pushed at once as one word; in a turn, only an interrupting word goes in, and the rest is pushed as one word at
+# the turn's end, which also reads what the turn was handed; a failed turn hands its words back. The form of its
+# lines is in the head of docket/gate/script-b.steps. The stand-in answers each push; a push it has no answer for
+# fails the step, so a step with no `stand-in:` line before it shows that nothing was pushed.
+load ../std/hooks.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/delivery.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/agy.docket
+load s11-delivery-world.docket
+carries: Agy-Kick, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Measure, Model, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, TextOf
+# w2 is not delivered to: its word waits, and nothing is pushed
+o1: Post(o1, w2, m0, "hello", Normal) -> performed -> ended ()
+holds Unread(w2, m0, Normal)
+holds Needs-Agent(w2, message)
+# w1 is idle: its word is pushed at once and handed, and w1 is woken until the turn it begins ends
+holds Idle(w1)
+stand-in: Push-Channel(w1, _) -> ()
+o1: Post(o1, w1, m1, "look at the map", Normal) -> performed -> ended ()
+record has [m1 from o1] look at the map
+holds In-Flight(w1, m1)
+holds Woken(w1)
+not Idle(w1)
+not Needs-Agent(w1, message)
+# woken, before its turn has begun: a second word is not pushed, and waits
+o1: Post(o1, w1, m2, "and the legend", Normal) -> performed -> ended ()
+holds Needs-Agent(w1, message)
+w1: Reach(w1, turn_begins) -> performed -> ended ()
+holds In-Turn(w1)
+# in the turn: a directive waits too
+brain: Direct(brain, w1, "ship the map first", 5) -> performed -> ended ()
+brain: Direct(brain, w1, "keep the outline small", 2) -> performed -> ended ()
+holds Needs-Agent(w1, directive)
+# an interrupting word goes in at once, into the turn; only a director's may interrupt
+stand-in: Push-Channel-Now(w1, _) -> ()
+o1: Post(o1, w1, m3, "stop: the build is red", Interrupt) -> performed -> ended ()
+record has interrupting] [m3 from o1] stop: the build is red
+holds In-Flight(w1, m3)
+w2: Post(w2, w1, m4, "look here", Interrupt) -> refused policy -> raised Refused
+w1: Post(w1, w1, m4, "a note to myself", Normal) -> refused policy -> raised Refused
+o1: Post(o1, w1, m1, "an id used again", Normal) -> refused policy -> raised Refused
+# the turn ends: what it was handed is read, and what came during it is pushed as one word, the first directive first
+stand-in: Push-Channel(w1, _) -> ()
+w1: Reach(w1, turn_end) -> performed -> ended ()
+record has First: ship the map first
+record has Directives: keep the outline small; ship the map first
+record has [m2 from o1] and the legend
+not Unread(w1, m1, Normal)
+not Unread(w1, m3, Interrupt)
+holds In-Flight(w1, m2)
+holds Directive-Given(w1, "ship the map first")
+holds Woken(w1)
+not Needs-Agent(w1, directive)
+# its next turn takes it, and a turn's end with nothing new pushes nothing
+w1: Reach(w1, turn_begins) -> performed -> ended ()
+w1: Reach(w1, turn_end) -> performed -> ended ()
+not Unread(w1, m2, Normal)
+holds Idle(w1)
+# a word pushed into a turn that fails is handed back, and goes with the next word
+stand-in: Push-Channel(w1, _) -> ()
+o1: Post(o1, w1, m5, "redo the tiles", Normal) -> performed -> ended ()
+w1: Reach(w1, turn_begins) -> performed -> ended ()
+w1: Reach(w1, overloaded) -> performed -> ended ()
+not In-Flight(w1, m5)
+holds Unread(w1, m5, Normal)
+holds Idle(w1)
+# an item given to it while idle is pushed with what waits
+stand-in: Push-Channel(w1, _) -> ()
+o1: Assign(o1, w1, map-work) -> performed -> ended ()
+record has Assigned: map-work
+record has [m5 from o1] redo the tiles
+holds Briefed(w1, map-work)
+holds In-Flight(w1, m5)
+# it hands the work in: what it was handed is read, and the item is claimed done
+w1: Report-Work(w1, "the map is done", "commit 1a2b3c", map-work) -> performed -> ended reported; map-work claimed done
+holds Reported(w1, "the map is done", "commit 1a2b3c")
+holds Hand-In(w1, map-work, "commit 1a2b3c")
+holds Claimed-Done(w1, map-work)
+not Unread(w1, m5, Normal)
+w1: Report-Work(w1, "", "", "") -> refused policy -> raised Refused
+# w3 is delivered to and runs no session yet: an interrupting word is not typed in, and waits (N-1978 p5, point 2)
+o1: Post(o1, w3, u1, "start with the map", Interrupt) -> performed -> ended ()
+not In-Flight(w3, u1)
+holds Needs-Agent(w3, message)
+# its session starts: what waited is pushed then, at once
+stand-in: Push-Channel(w3, _) -> ()
+driver: Session-Started(w3, claude-code, 2.1.332) -> performed
+record has [u1 from o1] start with the map
+holds In-Flight(w3, u1)
+holds Woken(w3)

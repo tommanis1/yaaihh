@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""agy-import: an Antigravity CLI chat as a native agy agent of the project (coord import-agy), copied, never linked.
+
+  agy-import CONVERSATION-ID [--name NAME] [--model MODEL] [--effort LEVEL] [--dir DIR] [--dry-run]
+  agy-import --place AGENT-FOLDER APP     agy-rpc, before each start: the agent's chat into agy's data folder APP
+
+The chat is its conversation file `conversations/ID.db` (SQLite, its last writes maybe still in `ID.db-wal` beside it)
+and its folder `brain/ID/` in Antigravity CLI's data folder ($AGY_APP_DIR, else ~/.gemini/antigravity-cli). The import
+copies both into the agent's own folder ($COORD/agents/NAME/agy/chat), and nothing of the owner's is written, linked or
+opened by our agy: the conversation file and its WAL are copied as they stand, read only, and SQLite's online backup of
+that copy, checked whole, is the agent's; the folder is copied whole. At each start agy-rpc has the copy moved into the
+data folder of the agy it runs (agy's own ACP client, on the account's Google sign-in or key; `--place`), which resumes
+the conversation by its id, so the agent goes on from that exact context, and the copy goes with the agent when its
+account changes. Its terminal shows the chat's history from the copy, up to the byte it had at the import. An agent
+imported before copies, as links to the owner's own chat, is not started: its last writes may be in a WAL beside our
+link rather than beside the owner's file, which no copy can join for sure; remove it and import the chat again.
+
+--dry-run reads and prints what it would do, and writes nothing. Refused: an id or a name that could name another
+folder or line, a chat a process holds open (close it in Antigravity CLI first; two writers would break it), a name that
+is an agent already, a missing part, a link inside the chat's folder, a copy that does not check whole; at a start, a
+chat a process holds open, or one imported for a later agy than the pinned one (an older agy would write a newer
+agy's chat). A start that fails leaves nothing of the import behind. NAME defaults to agy-ID's first eight
+characters, MODEL to the chat's last model with its level apart (`gemini-4-neon-medium` is `gemini-4-neon` at
+`medium`; --effort over it), DIR to the current folder.
+"""
+import argparse, ast, json, os, re, shutil, sqlite3, subprocess, sys, tempfile
+
+BIN = os.path.dirname(os.path.abspath(__file__))
+# an id that names no other folder and no other line (and roster resumes by: `resume: ID`, 36 characters)
+CID = re.compile(r'[A-Za-z0-9_-]{1,128}')
+UUID = re.compile(r'[0-9a-f-]{36}')
+NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}')
+MODEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
+
+
+def of_rpc(name):
+    """agy-rpc's NAME (AGY_VERSION, AGY_LEVELS), read from its text beside this one: one place holds each."""
+    with open(os.path.join(BIN, 'agy-rpc')) as f:
+        m = re.search(rf'^{name} = (.+)$', f.read(), re.M)
+    return ast.literal_eval(m.group(1))
+
+
+def version(v):
+    return tuple(int(x) for x in v.split('.'))
+
+
+def parts(app, cid):
+    """The chat's conversation file, folder and transcript in APP; an error naming the first part missing, or a link
+    in its folder (copied, it would name the owner's files still)."""
+    db, brain = os.path.join(app, 'conversations', f'{cid}.db'), os.path.join(app, 'brain', cid)
+    log = os.path.join(brain, '.system_generated', 'logs', 'transcript.jsonl')
+    for p in (db, brain, log):
+        if not os.path.exists(p):
+            raise SystemExit(f'agy-import: no {p}; is {cid} an Antigravity CLI conversation of {app}?')
+    for at, dirs, files in os.walk(brain):
+        for n in dirs + files:
+            if os.path.islink(os.path.join(at, n)):
+                raise SystemExit(f'agy-import: {os.path.join(at, n)} is a link; nothing is imported')
+    return db, brain, log
+
+
+def read(log):
+    """The transcript's steps, its user messages, its last model and its byte length."""
+    steps, said, model = 0, 0, ''
+    with open(log, 'rb') as f:
+        data = f.read()
+    for line in data.splitlines():
+        try:
+            v = json.loads(line)
+        except ValueError:
+            continue
+        steps += 1
+        said += v.get('type') == 'USER_INPUT'
+        model = v.get('model') or model
+    return steps, said, model, len(data)
+
+
+def holders(db, brain):
+    """The processes, by pid, holding open conversation file DB (its WAL and shared memory too) or a file under folder
+    BRAIN, read from /proc."""
+    files = [os.path.realpath(db) + ext for ext in ('', '-wal', '-shm')]
+    under = os.path.realpath(brain) + os.sep
+    out = []
+    for pid in filter(str.isdigit, os.listdir('/proc')):
+        try:
+            seen = [os.readlink(f'/proc/{pid}/fd/{fd}') for fd in os.listdir(f'/proc/{pid}/fd')]
+        except OSError:
+            continue
+        if any(s in files or s.startswith(under) for s in seen):
+            out.append(int(pid))
+    return out
+
+
+def spec(model, effort):
+    """The agent's model, `agy/MODEL[:LEVEL]`: Google's `models/` and our `agy/` left off, a level its name ends in
+    (`gemini-4-neon-medium`) taken apart as its level, EFFORT given over that."""
+    m = model.strip().removeprefix('agy/').removeprefix('models/')
+    if not MODEL.fullmatch(m):
+        raise SystemExit(f'agy-import: {model!r} is no model name (one name, no level after a colon)')
+    base, _, level = m.rpartition('-')
+    if base and level in of_rpc('AGY_LEVELS'):
+        m, effort = base, effort or level
+    return f'agy/{m}' + (f':{effort}' if effort else '')
+
+
+def snapshot(db, dest):
+    """Conversation file DB, with what its WAL holds, as the one SQLite file DEST: DB and its WAL copied as they stand
+    (read only: SQLite never opens the owner's, so not even its shared memory is written), then SQLite's online backup
+    of that copy into DEST, which must check whole."""
+    raw = dest + '.raw'
+    for ext in ('', '-wal'):
+        if os.path.exists(db + ext):
+            shutil.copyfile(db + ext, raw + ext)
+    try:
+        src, out = sqlite3.connect(raw), sqlite3.connect(dest)
+        try:
+            src.backup(out)
+            whole = out.execute('PRAGMA integrity_check').fetchone()[0]
+        finally:
+            out.close()
+            src.close()
+    except sqlite3.Error as e:
+        raise SystemExit(f'agy-import: {db} could not be copied ({e}); nothing is imported')
+    finally:
+        for ext in ('', '-wal', '-shm', '-journal'):
+            if os.path.exists(raw + ext):
+                os.unlink(raw + ext)
+    if whole != 'ok':
+        raise SystemExit(f'agy-import: the copy of {db} does not check whole ({whole}); nothing is imported')
+
+
+def copy_chat(app, cid, into):
+    """The chat CID of data folder APP copied into folder INTO, laid out as a data folder; its transcript's bytes. Refused
+    while a process holds it open, before the copy and after it (a writer in between would leave a torn copy)."""
+    db, brain, log = parts(app, cid)
+    if held := holders(db, brain):
+        raise SystemExit(f'agy-import: {cid} is held open by pid {", ".join(map(str, held))}: close the chat in Antigravity CLI first')
+    upto = os.path.getsize(log)
+    os.makedirs(os.path.join(into, 'conversations'), mode=0o700)
+    snapshot(db, os.path.join(into, 'conversations', f'{cid}.db'))
+    shutil.copytree(brain, os.path.join(into, 'brain', cid))
+    if held := holders(db, brain):
+        raise SystemExit(f'agy-import: {cid} was opened by pid {", ".join(map(str, held))} while it was copied; nothing is imported')
+    return upto
+
+
+def record(agy, chat):
+    """The agent's `imported` (in its folder AGY): written whole or not at all."""
+    chat['transcript'] = os.path.join(chat['at'], 'brain', chat['conversation'], '.system_generated', 'logs', 'transcript.jsonl')
+    fd, tmp = tempfile.mkstemp(dir=agy, prefix='.imported.')
+    with os.fdopen(fd, 'w') as f:
+        json.dump(chat, f)
+    os.replace(tmp, os.path.join(agy, 'imported'))
+
+
+def place(agy, app):
+    """`--place`: agent folder AGY's chat moved into agy's data folder APP, from where it is (its copy in AGY, or the
+    data folder of the agy it ran on last), once no process holds it there. Nothing moved when anything is in its way."""
+    with open(os.path.join(agy, 'imported')) as f:
+        chat = json.load(f)
+    if 'at' not in chat:
+        raise SystemExit('agy-import: this agent was imported as links to your own Antigravity CLI chat, before imports were '
+                         'copies; it is not started: remove it, then import the chat again (coord import-agy)')
+    if version(chat['agy']) > version(of_rpc('AGY_VERSION')):
+        raise SystemExit(f'agy-import: the chat was imported for agy {chat["agy"]}; the pinned agy {of_rpc("AGY_VERSION")} is older and would write it')
+    cid, at = chat['conversation'], chat['at']
+    if os.path.realpath(at) == os.path.realpath(app):
+        return
+    db, brain = os.path.join('conversations', f'{cid}.db'), os.path.join('brain', cid)
+    names = [db, db + '-wal', db + '-shm', brain]
+    if not os.path.isfile(os.path.join(at, db)) or not os.path.isdir(os.path.join(at, brain)):
+        raise SystemExit(f'agy-import: the chat is not in {at}, where it was put last; not started')
+    if held := holders(os.path.join(at, db), os.path.join(at, brain)):
+        raise SystemExit(f'agy-import: the chat in {at} is held open by pid {", ".join(map(str, held))}; not moved')
+    for n in names:
+        if os.path.lexists(os.path.join(app, n)):
+            raise SystemExit(f'agy-import: {os.path.join(app, n)} is there already, not this agent\'s chat; not moved')
+    moved = []
+    try:
+        for n in names:
+            if os.path.lexists(os.path.join(at, n)):
+                os.makedirs(os.path.dirname(os.path.join(app, n)), mode=0o700, exist_ok=True)
+                shutil.move(os.path.join(at, n), os.path.join(app, n))
+                moved.append(n)
+        record(agy, dict(chat, at=app))
+    except BaseException:
+        for n in reversed(moved):
+            shutil.move(os.path.join(app, n), os.path.join(at, n))
+        raise
+
+
+def registered(coord, name):
+    """Whether NAME is in the project's registry: roster took it in."""
+    try:
+        with open(os.path.join(coord, 'registry.jsonl')) as f:
+            return any(json.loads(line).get('name') == name for line in f if line.strip())
+    except (OSError, ValueError):
+        return False
+
+
+def main(argv):
+    if argv[:1] == ['--place']:
+        if len(argv) != 3:
+            raise SystemExit('usage: agy-import --place AGENT-FOLDER APP')
+        place(os.path.abspath(argv[1]), os.path.abspath(argv[2]))
+        return 0
+    a = argparse.ArgumentParser(prog='coord import-agy', description=__doc__.split('\n')[0])
+    a.add_argument('conversation')
+    a.add_argument('--name')
+    a.add_argument('--model')
+    a.add_argument('--effort', choices=of_rpc('AGY_LEVELS'))
+    a.add_argument('--dir', default=os.getcwd())
+    a.add_argument('--dry-run', action='store_true')
+    o = a.parse_args(argv)
+    coord, base = os.environ.get('COORD', ''), os.environ.get('AGENT_BASE', os.path.dirname(BIN))
+    if not coord:
+        raise SystemExit('agy-import: COORD names no project; run it as coord import-agy')
+    cid = o.conversation
+    if not CID.fullmatch(cid) or not UUID.fullmatch(cid):
+        raise SystemExit(f'agy-import: {cid!r} is no conversation id (36 characters of 0-9, a-f and -, as roster resumes one)')
+    name = f'agy-{cid[:8]}' if o.name is None else o.name
+    if not NAME.fullmatch(name) or '..' in name:
+        raise SystemExit(f'agy-import: {name!r} is no agent name (letters, digits, `_`, `.` and `-`, a letter or digit first, no `..`)')
+    app = os.environ.get('AGY_APP_DIR') or os.path.expanduser('~/.gemini/antigravity-cli')
+    db, brain, log = parts(app, cid)
+    steps, said, last, upto = read(log)
+    if not (o.model or last):
+        raise SystemExit('agy-import: the chat names no model; give --model')
+    model = spec(o.model or last, o.effort)
+    agent = os.path.join(coord, 'agents', name)
+    held = holders(db, brain)
+    print(f'chat      {cid}: {steps} steps, {said} of his messages, last model {last or "none"}')
+    print(f'agent     {name} on {model}, in {o.dir}')
+    print(f'copied    {db}, its last writes with it, as SQLite backs it up, and {brain}')
+    print(f'          into {agent}/agy/chat; at each start moved into the data folder of the agy that runs it')
+    print(f'history   from the copy, its first {upto} bytes')
+    if held:
+        print(f'held open by pid {", ".join(map(str, held))}: close the chat in Antigravity CLI first')
+    if os.path.lexists(agent):
+        print(f'refused   {name} is an agent of this project already; give --name')
+    if o.dry_run:
+        print('dry run   nothing written')
+        return 0
+    if held or os.path.lexists(agent):
+        return 1
+    # made whole in a folder of its own beside the agents, then put in place at once
+    stage = tempfile.mkdtemp(dir=os.path.join(coord, 'agents'), prefix=f'.import-{name}-')
+    try:
+        os.mkdir(os.path.join(stage, 'agy'), 0o700)
+        upto = copy_chat(app, cid, os.path.join(stage, 'agy', 'chat'))
+        record(os.path.join(stage, 'agy'), {'conversation': cid, 'from': app, 'at': os.path.join(agent, 'agy', 'chat'), 'upto': upto, 'agy': of_rpc('AGY_VERSION')})
+        os.rename(stage, agent)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    with tempfile.NamedTemporaryFile('w', suffix='.md', delete=False) as f:
+        f.write(f'resume: {cid}\n')
+    try:
+        rc = subprocess.run([os.path.join(base, 'bin', 'roster'), 'add', name, model, f.name, o.dir]).returncode
+    finally:
+        os.unlink(f.name)
+    if rc != 0 and not registered(coord, name):
+        shutil.rmtree(agent, ignore_errors=True)
+        print(f'undone    roster did not take {name} in; nothing of the import is left', file=sys.stderr)
+    return rc
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

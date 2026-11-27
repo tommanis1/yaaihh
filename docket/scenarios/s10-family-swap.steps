@@ -1,0 +1,90 @@
+# Scenario 10: the U-curve's far end. Work refuted below the top effort its model takes goes one step up and stays
+# with its builder; work refuted at the top, the first time or after it was raised there, is released and given to a
+# builder of another family, whom the host picks. The refutations are the owner's own findings.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load s10-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+o1: Assign(o1, w1, t1) -> performed -> ended ()
+o1: Assign(o1, w2, t2) -> performed -> ended ()
+o1: Require(o1, t1, tests_green) -> performed -> ended ()
+o1: Require(o1, t2, tests_green) -> performed -> ended ()
+holds Effort-For(w1, proof, high)
+holds At-Top(w1, t1)
+holds Effort-For(w2, feature, medium)
+not At-Top(w2, t2)
+# below the top: refuted, w2 keeps t2 and goes one step up
+w2: Claim-Done(w2, t2) -> performed -> ended ()
+o1: Refute-Condition(o1, o1, t2, tests_green, "the test only checks the one case") -> performed -> ended ()
+holds Assigned(w2, t2)
+holds Raised(w2, t2, medium)
+holds Effort-For(w2, feature, high)
+holds At-Top(w2, t2)
+# refuted again, now at high, m1's top: the second strike gives t2 to a builder of another family
+w2: Claim-Done(w2, t2) -> performed -> ended ()
+stand-in: Pick-Other(builder, [w2]) -> x1
+o1: Refute-Condition(o1, o1, t2, tests_green, "still only the one case") -> performed -> ended ()
+not Assigned(w2, t2)
+holds Assigned(x1, t2)
+holds Taken-From(w2, t2)
+not Raised(w2, t2, medium)
+# at the top: refuted, t1 leaves w1 for a builder of another family
+w1: Claim-Done(w1, t1) -> performed -> ended ()
+stand-in: Pick-Other(builder, [w1]) -> x1
+o1: Refute-Condition(o1, o1, t1, tests_green, "the proof assumes what it shows") -> performed -> ended ()
+not Assigned(w1, t1)
+holds Assigned(x1, t1)
+holds Given-By(t1, std.adapt)
+# work that was not refuted is not moved so
+o1: Assign(o1, w2, t3) -> performed -> ended ()
+std.adapt: Release-Work(std.adapt, w2, t3) -> refused policy -> raised Refused
+holds Assigned(w2, t3)
+# refuted once and then found met: what was raised for it ends
+o1: Require(o1, t3, tests_green) -> performed -> ended ()
+w2: Claim-Done(w2, t3) -> performed -> ended ()
+o1: Refute-Condition(o1, o1, t3, tests_green, "no test for the empty case") -> performed -> ended ()
+holds Raised(w2, t3, medium)
+holds Effort-For(w2, feature, high)
+w2: Claim-Done(w2, t3) -> performed -> ended ()
+o1: Verify-Condition(o1, o1, t3, tests_green) -> performed -> ended ()
+not Raised(w2, t3, medium)
+holds Effort-For(w2, feature, medium)
+# refuted at the top on x1 too: it does not go back to w1, whose model failed it at its top; o1, who gave it, is
+# told once, and a third refutation tells nobody
+holds Taken-From(w1, t1)
+x1: Claim-Done(x1, t1) -> performed -> ended ()
+stand-in: Deliver(std.adapt, o1, _) -> ""
+o1: Refute-Condition(o1, o1, t1, tests_green, "the proof still assumes it") -> performed -> ended ()
+holds Assigned(x1, t1)
+not Assigned(w1, t1)
+record has no builder of another family is left
+holds Left-Unmoved(t1)
+x1: Claim-Done(x1, t1) -> performed -> ended ()
+o1: Refute-Condition(o1, o1, t1, tests_green, "and again") -> performed -> ended ()
+holds Assigned(x1, t1)
+# two holders at the top, one refutation: one pick, one new holder
+o1: Require(o1, t4, tests_green) -> performed -> ended ()
+o1: Assign(o1, w3, t4) -> performed -> ended ()
+o1: Assign(o1, w4, t4) -> performed -> ended ()
+w3: Claim-Done(w3, t4) -> performed -> ended ()
+stand-in: Pick-Other(builder, _) -> x2
+o1: Refute-Condition(o1, o1, t4, tests_green, "both missed it") -> performed -> ended ()
+holds Assigned(x2, t4)
+not Assigned(w3, t4)
+not Assigned(w4, t4)

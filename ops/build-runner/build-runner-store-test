@@ -1,0 +1,560 @@
+#!/usr/bin/env bash
+# build-runner-store-test DIR: the build runner's store mode (N-412 p925; rulings p927, conditions p928), in DIR (made
+# empty first; nothing outside it is touched). Worktrees of one workspace (crate shared_name with a build script that
+# writes OUT_DIR/gen.rs, a binary printing both constants) differing in one constant, through one service:
+#   1. a cold job misses and puts; the same tree in a new empty place is all hits and prints its own constants;
+#   2. another worktree misses only the crates whose sources differ: the build script's run is a hit; the entries it
+#      put record who put them;
+#   3. two jobs at once, each in a place of its own;
+#   4. a test reads OUT_DIR at run time: tests run inside the job's namespace (docket-core3 p928 point 2);
+#   5. a stored blob changed on disk is caught by its hash: moved aside, compiled instead, the right binary;
+#   6. the gc: a blob no entry names goes, named ones stay (a job after it is all hits); at cap 0 everything goes and
+#      the next job compiles all;
+#   7. build script runs (docket-core3 N-412 p935): one with no rerun-if lines misses when a file of its package is
+#      added; a changed C compiler version is a miss; a run leaving a link in OUT_DIR is not stored, and a stored tree
+#      naming a path outside OUT_DIR is not restored, each with a line in the store's log;
+#   8. the rules: a job without --folder, a release build, a test with no -p and no name: refused with the command to
+#      use; a job inside them runs;
+#   9. a train's job hits builders' entries, and its end line counts them;
+#  10. --keep DIR: a check's proc-macro library and OUT_DIR are copied to DIR and its JSON names them there;
+#  11. --keep and --out outside the caller's worktree (an absolute path, .., a link out) are refused, nothing written;
+#  12. a variable passed for the tests (REPLAY_*) changes no build script's key; one a script names with
+#      rerun-if-env-changed does;
+#  13. a job inside a hold is counted as the train's;
+#  14-18 (docket-core8 p1003): three store jobs at once in three places; a hold lends the places its steps do not use;
+#      a failed job's end line says cargo's own error; --folder and --env names refused in words; two jobs missing
+#      the same entries compile each once;
+#  19. a restart asked while a hold runs lets the hold's steps run and comes after it (N-412 p1073);
+#  20-21. two places are kept for --front, and beside a train at most two --front jobs run (N-412 p1084, p1096);
+#  22. a --front --train job runs beside another train's hold and is logged as the train's (N-412 p1114); --train and
+#      holds from an agent not named a train's are refused (docket-core3 p1133);
+#  24. where a job stands (N-1334): the steps are in the job's stream and not in its output, which is what it is
+#      without them, with every store key unchanged; the caller's file ends with the job's rc and its tests' counts;
+#      a build -q (its bar has no `Building`) brings its binary back with the steps as without them, and a test -q
+#      (no binary named) counts its tests.
+#  25. by content (step 1 of the storage page, N-1446 p2726, p2727): a job asked so writes nothing into the tree; its
+#      end line names each file's blob and a handed folder whose files are links to those blobs; the gc at cap 0 leaves
+#      the handed file to fetch; a handed folder over an hour old goes at the next such job.
+set -euo pipefail
+D=$(realpath -m "${1:?build-runner-store-test DIR}")
+BR=$(dirname "$(readlink -f "$0")")/build-runner
+rm -rf "$D"; mkdir -p "$D"
+export BUILD_RUNNER_STORE=1 BUILD_RUNNER_RULES=0 BUILD_RUNNER_HOME=$D/home BUILD_RUNNER_JOBS=2 BUILD_RUNNER_PARALLEL=3 \
+  BUILD_RUNNER_UNIT=build-runner-store-test CARGO_NET_OFFLINE=true BUILD_RUNNER_FILE=$BR
+ME=$(sed -n 's#.*/agents/\([^/]*\)/.*#\1#p' /proc/$$/cgroup)  # this session's agent, as coordd placed it
+# in no agent's cgroup (the build VM): the service takes the name the request carries, as the tower's does
+[ -n "$ME" ] || { ME=store-test; export BUILD_RUNNER_TRUST_AGENT=1 BUILD_RUNNER_AGENT=store-test; }
+export BUILD_RUNNER_TRAIN_AGENTS="docket-core,$ME"  # the test's holds and --train are its own
+mk() {  # mk NAME CONST [SLEEP]: a git worktree; shared_name's build script sleeps SLEEP seconds (default none)
+  local w=$D/$1
+  mkdir -p "$w/shared/src" "$w/app/src"
+  printf '[workspace]\nmembers = ["shared", "app"]\nresolver = "2"\n' >"$w/Cargo.toml"
+  printf '[package]\nname = "shared_name"\nversion = "0.1.0"\nedition = "2021"\n' >"$w/shared/Cargo.toml"
+  printf 'pub const WHO: &str = "%s";\ninclude!(concat!(env!("OUT_DIR"), "/gen.rs"));\n' "$2" >"$w/shared/src/lib.rs"
+  printf '#[cfg(test)]\nmod t { #[test] fn gen() { assert!(std::fs::read_to_string(concat!(env!("OUT_DIR"), "/gen.rs")).unwrap().contains("made")); } }\n' >>"$w/shared/src/lib.rs"
+  printf 'fn main() {\n    std::thread::sleep(std::time::Duration::from_secs(%s));\n    println!("cargo::rerun-if-changed=build.rs");\n    std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("gen.rs"), "pub const GEN: &str = \\"made\\";\\n").unwrap();\n}\n' "${3:-0}" >"$w/shared/build.rs"
+  printf '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nshared_name = { path = "../shared" }\n' >"$w/app/Cargo.toml"
+  printf 'fn main() { println!("{} {}", shared_name::WHO, shared_name::GEN); }\n' >"$w/app/src/main.rs"
+  git -C "$w" init -q && git -C "$w" add -A && git -C "$w" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm "$2"
+}
+fail() { echo "FAIL: $*"; exit 1; }
+L=$D/home/build-runner.log
+S=$D/home/store
+endline() { grep -a " end rc " "$L" | grep -a "$D/$1:" | tail -1 | sed "s#$D/##g"; }  # the last end line of worktree $1
+lastrun() { tail -1 "$S/runs.jsonl"; }
+build() {  # build W [ARGS]: W's build through the runner; its binary must print "from-W made"
+  local w=$1; shift
+  (cd "$D/$w" && python3 -I "$BR" cargo build -q "$@" >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w's build"; }
+  got=$("$D/$w/target/debug/app")
+  [ "$got" = "from-$w made" ] || fail "$w printed $got"
+}
+mk a from-a; mk b from-b; mk c from-c 4
+
+systemctl --user stop build-runner-store-test 2>/dev/null || true  # a run cut short may have left the test's own unit
+python3 -I "$BR" start
+trap 'systemctl --user stop build-runner-store-test' EXIT
+restart() { systemctl --user stop build-runner-store-test; env "$@" python3 -I "$BR" start; }
+
+echo "== 1. a cold, then a again in a new empty place"
+build a
+endline a
+endline a | grep -q "(store 0 hit [1-9][0-9]* miss)" || fail "a's first job was not all misses"
+build a
+endline a
+endline a | grep -q "(store [1-9][0-9]* hit 0 miss)" || fail "a's second job missed"
+[ -z "$(ls -A "$D/home/places" 2>/dev/null)" ] || fail "a place was left after the job: $(ls -A "$D/home/places")"
+
+echo "== 2. b misses only what reads its constant"
+build b
+endline b
+python3 -I - "$S/runs.jsonl" <<'EOF' || fail "b's misses"
+import json, re, sys
+r = json.loads(open(sys.argv[1]).read().splitlines()[-1])
+names = sorted(re.sub(r"-[0-9a-f]+$", "", m) for m in r["missed"])
+print("b missed:", names)
+sys.exit(names != ["app", "shared_name"])
+EOF
+python3 -I - "$S" "$D/b" <<'EOF' || fail "no entry records b as its putter"
+import json, sys, pathlib
+by = [v["by"] for e in pathlib.Path(sys.argv[1], "entries").glob("*/*/*.json") for v in json.loads(e.read_text())]
+mine = [b for b in by if isinstance(b, dict) and b.get("wt") == sys.argv[2]]
+print(f"{len(mine)} variants put by b's job")
+sys.exit(not mine)
+EOF
+
+echo "== 3. two at once: c (its build script sleeps 4 s) and a, each in its own place"
+(cd "$D/c" && python3 -I "$BR" cargo build -q >"$D/err-c" 2>&1) & pc=$!
+for _ in $(seq 200); do grep -aq "start in place p0 .*$D/c " "$L" && break; sleep 0.05; done
+build a
+wait $pc || { cat "$D/err-c"; fail "c's build"; }
+[ "$("$D/c/target/debug/app")" = "from-c made" ] || fail "c printed wrong"
+grep -a "start in place\| end rc" "$L" | tail -4 | sed "s#$D/##g"
+grep -a "start in place p1 .*$D/a " "$L" >/dev/null || fail "a did not run in place p1 beside c"
+[ "$(grep -an " end rc .*$D/a:" "$L" | tail -1 | cut -d: -f1)" -lt "$(grep -an " end rc .*$D/c:" "$L" | tail -1 | cut -d: -f1)" ] \
+  || fail "a's job did not end while c's ran"
+
+echo "== 4. a test reads OUT_DIR at run time, inside the job's namespace"
+(cd "$D/a" && python3 -I "$BR" cargo test -q -p shared_name >"$D/t-a" 2>&1) || { cat "$D/t-a"; fail "a's test"; }
+grep -q "test result: ok. 1 passed" "$D/t-a" || { cat "$D/t-a"; fail "a's test result"; }
+
+echo "== 5. a stored blob changed on disk"
+bad=$(python3 -I - "$S" "$D/a/shared/src/lib.rs" <<'EOF'
+import hashlib, json, sys, pathlib
+want = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+for e in pathlib.Path(sys.argv[1], "entries", "rustc").glob("*/*.json"):
+    for v in json.loads(e.read_text()):
+        if any(p.endswith("/shared/src/lib.rs") and h == want for p, h in v["inputs"].items()):
+            for n, (h, ex) in v["out"].items():
+                if n.endswith(".rlib"):
+                    print(pathlib.Path(sys.argv[1], "blobs", h[:2], h + (".x" if ex else "")))
+                    sys.exit(0)
+EOF
+)
+[ -f "$bad" ] || fail "no blob found for a's shared_name rlib"
+chmod u+w "$bad"; printf 'x' >>"$bad"; chmod a-w "$bad"   # read-only again: only its hash tells
+build a
+endline a
+grep -q "differs from its hash" "$S/store.log" || fail "the store's log does not say the blob differed"
+lastrun | grep -q '"missed": \[[^]]*shared_name' || fail "shared_name was not compiled again"
+ls -A "$(dirname "$bad")" | grep -q '^\.bad-' || fail "the blob was not moved aside"
+
+echo "== 6. the gc"
+stray=$S/blobs/00/$(printf '0%.0s' $(seq 64)); mkdir -p "$(dirname "$stray")"; printf 'stray' >"$stray"; chmod 444 "$stray"
+python3 -I "$BR" gc
+grep -a "store gc:" "$L" | tail -1 | sed "s#$D/##g"
+[ ! -e "$stray" ] || fail "the blob no entry names was kept"
+[ -z "$(find "$S/blobs" -name '.bad-*')" ] || fail "the blob moved aside was kept"
+build a
+endline a | grep -q "(store [1-9][0-9]* hit 0 miss)" || { endline a; fail "a missed after the gc took only unnamed blobs"; }
+BUILD_RUNNER_STORE_CAP_GB=0 python3 -I "$BR" gc
+grep -a "store gc:" "$L" | tail -1 | sed "s#$D/##g"
+[ -z "$(find "$S/entries" -name '*.json')" ] || fail "entries left at cap 0"
+[ -z "$(find "$S/blobs" -type f)" ] || fail "blobs left at cap 0"
+build a
+endline a | grep -q "(store 0 hit [1-9][0-9]* miss)" || { endline a; fail "a hit after the store was emptied"; }
+
+echo "== 7. build script runs (docket-core3 N-412 p935): no rerun-if lines, a compiler's version, a link in OUT_DIR"
+runs() {  # runs W ARGS...: W's job through the runner (ARGS before the verb); prints the crates and runs that missed
+  local w=$1; shift
+  (cd "$D/$w" && python3 -I "$BR" cargo "$@" build -q >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w's build"; }
+  python3 -I -c 'import json,re,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); print(" ".join(sorted(re.sub(r"-[0-9a-f]+$","",m) for m in r["missed"])) or "-")' "$S/runs.jsonl"
+}
+# 7a. a script with no rerun-if lines is keyed on every file of its package
+mk n from-n; sed -i '/rerun-if-changed/d' "$D/n/shared/build.rs"; git -C "$D/n" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qam no-rerun
+runs n >/dev/null
+[ "$(runs n)" = - ] || fail "n's second job missed"
+echo notes >"$D/n/shared/notes.txt"
+got=$(runs n); echo "n after a new package file: missed $got"
+[ "$got" = run:shared_name ] || fail "a package file added: the script's run did not miss alone (missed: $got)"
+# 7b. a script's key holds the C compiler's version: a stand-in cc, its version changed, the same path and variables
+mkdir -p "$D/tools"
+cc_says() { printf '#!/bin/sh
+[ "$1" = --version ] && { echo "stand-in cc %s"; exit 0; }
+exec /usr/bin/cc "$@"
+' "$1" >"$D/tools/cc"; chmod +x "$D/tools/cc"; }
+cc_says 1
+export CC=$D/tools/cc
+runs a --env CC >/dev/null
+[ "$(runs a --env CC)" = - ] || fail "a's job with CC missed a second time"
+cc_says 2
+got=$(runs a --env CC); echo "a after cc's version changed: missed $got"
+[ "$got" = run:shared_name ] || fail "the compiler's version changed: the script's run did not miss alone (missed: $got)"
+unset CC
+# 7c. a run that leaves a link in OUT_DIR is not stored; a stored tree naming a path outside OUT_DIR is a miss
+mk k from-k
+printf 'fn main() {\n    println!("cargo::rerun-if-changed=build.rs");\n    let o = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());\n    std::fs::write(o.join("gen.rs"), "pub const GEN: &str = \\"made\\";\\n").unwrap();\n    let _ = std::fs::remove_file(o.join("link"));\n    std::os::unix::fs::symlink("gen.rs", o.join("link")).unwrap();\n}\n' >"$D/k/shared/build.rs"
+git -C "$D/k" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qam link
+runs k >/dev/null
+got=$(runs k); echo "k again (its script leaves a link): missed $got"
+[ "$got" = run:shared_name ] || fail "a run that left a link was restored (missed: $got)"
+grep -q "is a link" "$S/store.log" || fail "no log line for the link"
+runs a >/dev/null
+python3 -I - "$S" <<'EOF2'
+import json, pathlib, sys
+for e in pathlib.Path(sys.argv[1], "entries", "script").glob("*/*.json"):
+    vs = json.loads(e.read_text())
+    for v in vs:
+        v["out"]["../escape"] = next(iter(v["out"].values()))
+    e.write_text(json.dumps(vs))
+EOF2
+got=$(runs a); echo "a with its stored tree naming ../escape: missed $got"
+[ "$got" = run:shared_name ] || fail "a stored tree with a path outside OUT_DIR was restored (missed: $got)"
+grep -q "outside OUT_DIR" "$S/store.log" || fail "no log line for the path outside OUT_DIR"
+[ ! -e "$D/home/places/escape" ] && [ ! -e "$D/home/at/escape" ] || fail "a file was written outside OUT_DIR"
+
+echo "== 8. the rules"
+restart BUILD_RUNNER_RULES=1
+refused() {  # refused WANT ARGS...: the job is refused, exit 3, and the message names WANT
+  local want=$1; shift
+  rc=0; (cd "$D/a" && python3 -I "$BR" cargo "$@" >"$D/r7" 2>&1) || rc=$?
+  [ $rc = 3 ] || { cat "$D/r7"; fail "not refused (rc $rc): $*"; }
+  grep -qF -- "$want" "$D/r7" || { cat "$D/r7"; fail "the refusal of '$*' does not say $want"; }
+  sed "s#$D/##g" "$D/r7"
+}
+refused "build-runner cargo --folder engine|window|flavour|proxy|symbols build" build -q
+refused "--profile quick" --folder engine build --release -q
+refused "-p PACKAGE -- TEST_NAME" --folder engine test -q -p shared_name
+(cd "$D/a" && python3 -I "$BR" cargo --folder engine test -q -p shared_name -- gen >"$D/t-a" 2>&1) || { cat "$D/t-a"; fail "a test within the rules"; }
+(cd "$D/a" && python3 -I "$BR" cargo --folder engine build -q >"$D/t-a" 2>&1) || { cat "$D/t-a"; fail "a build within the rules"; }
+echo "== 9. a train's job takes hits from builders' entries and counts them (paper-research N-412 p933)"
+(cd "$D/a" && python3 -I "$BR" cargo --train build -q >"$D/err-a" 2>&1) || { cat "$D/err-a"; fail "a's train job"; }
+endline a
+endline a | grep -q "(store \([1-9][0-9]*\) hit 0 miss, \1 of the hits from builders' entries)" || fail "the train's hits were not all counted as builders'"
+echo "== 10. --keep DIR: rust-analyzer's build data copied out of the place, the JSON naming the copies (hs-ls, p941)"
+mk m from-m
+mkdir -p "$D/m/pm/src"
+printf '[package]\nname = "pm"\nversion = "0.1.0"\nedition = "2021"\n[lib]\nproc-macro = true\n' >"$D/m/pm/Cargo.toml"
+printf 'use proc_macro::TokenStream;\n#[proc_macro]\npub fn answer(_: TokenStream) -> TokenStream { "42".parse().unwrap() }\n' >"$D/m/pm/src/lib.rs"
+printf '[workspace]\nmembers = ["shared", "app", "pm"]\nresolver = "2"\n' >"$D/m/Cargo.toml"
+printf 'pm = { path = "../pm" }\n' >>"$D/m/app/Cargo.toml"
+printf 'fn main() { println!("{} {} {}", shared_name::WHO, shared_name::GEN, pm::answer!()); }\n' >"$D/m/app/src/main.rs"
+git -C "$D/m" add -A && git -C "$D/m" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm pm
+(cd "$D/m" && python3 -I "$BR" cargo --folder engine --keep ra check --message-format=json >"$D/j10" 2>"$D/e10") || { cat "$D/e10"; fail "m's check with --keep"; }
+python3 -I - "$D/j10" "$D/m/ra" <<'EOF'
+import json, os, sys
+keep = sys.argv[2]
+so = out = None
+for l in open(sys.argv[1]):
+    if not l.startswith("{"):
+        continue
+    m = json.loads(l)
+    if m.get("reason") == "compiler-artifact" and "proc-macro" in m["target"]["kind"]:
+        so = next((f for f in m["filenames"] if f.endswith(".so")), so)
+    if m.get("manifest_path", "").endswith("/pm/Cargo.toml"):
+        assert m["manifest_path"] == os.path.dirname(keep) + "/pm/Cargo.toml", ("the mount's path, not m's", m["manifest_path"])
+    if m.get("reason") == "build-script-executed":
+        out = m["out_dir"]
+print("proc-macro:", so.replace(keep, "ra"), "; OUT_DIR:", out.replace(keep, "ra"))
+assert so.startswith(keep + "/so/") and os.path.isfile(so), so
+assert out.startswith(keep + "/out/") and "made" in open(os.path.join(out, "gen.rs")).read(), out
+EOF
+[ $? = 0 ] || fail "--keep: the JSON does not name copies that are there"
+
+echo "== 11. --keep and --out write only inside the caller's worktree (or ~/agent-coord/*/lsp/ for --keep; p945)"
+nowhere=/tmp/build-runner-store-test-$$; mkdir -p "$D/outside"; ln -sfn "$D/outside" "$D/m/lnk"
+for o in "--keep $nowhere" "--keep ../../x" "--keep lnk/ra" "--out ../o" "--out lnk/o"; do
+  rc=0; (cd "$D/m" && python3 -I "$BR" cargo --folder engine $o check --message-format=json >"$D/r11" 2>&1) || rc=$?
+  [ $rc = 3 ] && grep -q "refused: --" "$D/r11" || { cat "$D/r11"; fail "$o was not refused (rc $rc)"; }
+  echo "$o: $(grep -o 'refused: .*' "$D/r11" | sed "s#$D/##g")"
+done
+AC=$(realpath ~/agent-coord)
+# tovrin-dev's lsp/; another coord's than the caller's (p947); and, when this test runs in a session that carries its
+# own COORD, a caller that names another coord itself: the service takes the session's (p949)
+for c in "tovrin-dev tovrin-dev" "research yaaihh" ${COORD:+"yaaihh yaaihh"}; do
+  set -- $c; t=$AC/$2/lsp/build-runner-store-test-$$
+  rc=0; (cd "$D/m" && COORD=$AC/$1 python3 -I "$BR" cargo --folder engine --keep "$t" check --message-format=json >"$D/r11" 2>&1) || rc=$?
+  [ $rc = 3 ] && [ ! -e "$t" ] || { cat "$D/r11"; fail "--keep $2's lsp/ with COORD $1 was not refused"; }
+  echo "--keep ~/agent-coord/$2/lsp/… with COORD $1: refused"
+done
+# --no-copy: a build and a test --no-run run whole and copy nothing out (docket-core8 N-971 p3)
+(cd "$D/m" && python3 -I "$BR" cargo --folder engine --no-copy build -q >"$D/r11" 2>&1 && python3 -I "$BR" cargo --folder engine --no-copy test -q --no-run >>"$D/r11" 2>&1) || { cat "$D/r11"; fail "--no-copy jobs"; }
+[ ! -e "$D/m/target" ] || fail "--no-copy copied into m/target: $(find "$D/m/target" -type f | head -3)"
+echo "--no-copy: build and test --no-run ran, m/target not made"
+# a link planted inside the --keep folder: no folder is made outside it, nothing copied there
+mkdir -p "$D/m/ra2"; ln -sfn "$D/outside" "$D/m/ra2/out"; ln -sfn "$D/outside" "$D/m/ra2/so"
+(cd "$D/m" && python3 -I "$BR" cargo --folder engine --keep ra2 check --message-format=json >"$D/r11" 2>&1) || { cat "$D/r11"; fail "m's check with a planted link"; }
+grep -q "leads outside it: not copied" "$S/../build-runner.log" || fail "no log line for the planted link"
+[ ! -e "$nowhere" ] && [ ! -e "$D/x" ] && [ ! -e "$D/o" ] && [ -z "$(ls -A "$D/outside")" ] || fail "something was written outside m"
+echo "== 12. a variable only the tests read is no input of a build script; one a script names is (docket-core N-412 p978)"
+mk v from-v
+sed -i 's|println!("cargo::rerun-if-changed=build.rs");|println!("cargo::rerun-if-changed=build.rs");\n    println!("cargo::rerun-if-env-changed=GEN_SEED");|' "$D/v/shared/build.rs"
+git -C "$D/v" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qam seed
+vrun() { (cd "$D/v" && env "$@" python3 -I "$BR" cargo --folder engine --env REPLAY_X --env GEN_SEED test -q -p shared_name -- gen >"$D/r12" 2>&1) || { cat "$D/r12"; fail "v's test ($*)"; }
+  python3 -I -c 'import json,re,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[-1]); print(" ".join(sorted(re.sub(r"-[0-9a-f]+$","",m) for m in r["missed"])) or "-")' "$S/runs.jsonl"; }
+vrun REPLAY_X=1 GEN_SEED=a >/dev/null
+got=$(vrun REPLAY_X=2 GEN_SEED=a); echo "REPLAY_X changed: missed $got"
+[ "$got" = - ] || fail "a variable no script names made a miss: $got"
+got=$(vrun REPLAY_X=2 GEN_SEED=b); echo "GEN_SEED (named by the script) changed: missed $got"
+[ "$got" = run:shared_name ] || fail "the variable the script names did not make its run miss: $got"
+
+echo "== 13. a job inside a hold is the train's: its end line counts the builders' hits"
+(cd "$D/v" && python3 -I "$BR" hold -- python3 -I "$BR" cargo --front --folder rel build -q >"$D/r13" 2>&1) || { cat "$D/r13"; fail "the hold's job"; }
+endline v
+endline v | grep -q "of the hits from builders' entries" || fail "the hold's job was not counted as the train's"
+tail -1 "$S/runs.jsonl" | grep -q '"train": true' || fail "runs.jsonl does not mark the hold's job as the train's"
+echo "== 14. in the store no job is cold: three places, three jobs at once (docket-core8 N-412 p1003 point 1)"
+mk x1 from-x1 3; mk x2 from-x2 4; mk x3 from-x3 5   # build scripts of their own (other sleeps: other keys)
+for w in x1 x2 x3; do (cd "$D/$w" && python3 -I "$BR" cargo --folder engine build -q >"$D/err-$w" 2>&1) & done
+seen=; for _ in $(seq 300); do
+  n=$(grep -ac "start in place p[012] .*$D/x[123] " "$L" || true); e=$(grep -ac " end rc .*$D/x[123]:" "$L" || true)
+  [ "$n" = 3 ] && [ "$e" = 0 ] && { seen=1; break; }; sleep 0.05; done
+wait
+grep -a "start in place .*$D/x[123] " "$L" | sed "s#$D/##g"
+[ -n "$seen" ] || fail "three store jobs did not run at once in three places"
+
+echo "== 15. a hold lends the places its steps do not use; its next step takes the next place that frees (point 2)"
+(cd "$D/x1" && python3 -I "$BR" hold -- sh -c "sleep 6; python3 -I $BR cargo --folder rel build -q" >"$D/h15" 2>&1) & ph=$!
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q 'hold' && break; sleep 0.05; done
+echo 'pub const MORE: u8 = 1;' >>"$D/x2/shared/src/lib.rs"; echo 'pub const MORE: u8 = 1;' >>"$D/x3/shared/src/lib.rs"
+for w in x2 x3; do (cd "$D/$w" && python3 -I "$BR" cargo --folder engine build -q >"$D/err-$w" 2>&1) & done
+seen=; for _ in $(seq 200); do
+  [ "$(grep -ac "start in place .*$D/x[23] " "$L" || true)" = 4 ] && { seen=1; break; }; sleep 0.05; done
+wait $ph || { cat "$D/h15"; fail "the hold"; }
+wait
+[ -n "$seen" ] || { python3 -I "$BR" status; fail "two outside jobs did not both run while the hold's steps used no place"; }
+echo "while the hold slept, both outside jobs ran; its step after them: rc 0"
+
+echo "== 16. a failed job's reason: cargo's own error is not 'tests failed' (point 3)"
+rc=0; (cd "$D/x1" && python3 -I "$BR" cargo --folder engine test -q --profile nope -p shared_name -- gen >"$D/r16" 2>&1) || rc=$?
+endline x1
+endline x1 | grep -q ", failed: profile \`nope\` is not defined" || fail "the end line does not say cargo's error"
+
+echo "== 17. --folder and --env names refused in words (point 6)"
+for o in "--folder ../x" "--folder .hidden" "--env CARGO_TARGET_DIR" "--env RUSTC_WRAPPER" "--env BUILD_STORE_BY" "--env BUILD_STORE" "--env PATH" "--env HOME" "--env LD_PRELOAD" "--env CARGO_BUILD_JOBS" "--env RUSTDOCFLAGS"; do
+  rc=0; (cd "$D/x1" && CARGO_TARGET_DIR=/nowhere RUSTC_WRAPPER=/nowhere BUILD_STORE_BY=x BUILD_STORE=/nowhere LD_PRELOAD= CARGO_BUILD_JOBS=1 RUSTDOCFLAGS= python3 -I "$BR" cargo --folder engine $o build -q >"$D/r17" 2>&1) || rc=$?
+  [ $rc = 3 ] && grep -q "refused: --" "$D/r17" || { cat "$D/r17"; fail "$o was not refused in words (rc $rc)"; }
+  echo "$o: $(grep -o 'refused: .*' "$D/r17")"
+done
+(cd "$D/x1" && CARGO_TARGET_DIR=/nowhere python3 -I "$BR" cargo --folder engine build -q >"$D/r17" 2>&1) || { cat "$D/r17"; fail "CARGO_TARGET_DIR in the caller's environment, not passed on"; }
+[ ! -e /nowhere ] || fail "CARGO_TARGET_DIR reached cargo"
+echo "CARGO_TARGET_DIR in the caller's environment only: not passed on, the job ran in its place"
+LK=$(command -v cc)
+(cd "$D/x1" && CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$LK CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C debuginfo=0" python3 -I "$BR" cargo --folder engine \
+  --env CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER --env CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS build -q >"$D/r17" 2>&1) || { cat "$D/r17"; fail "a target's linker and flags refused (speech's engine, p1217)"; }
+lastrun | python3 -I -c 'import json,sys; r=json.load(sys.stdin); assert r["miss"] > 0, r; print("a target linker and flags passed:", r["hit"], "hit", r["miss"], "miss (the flags are in the key)")' || fail "the target's flags did not reach the key"
+
+echo "== 18. two jobs missing the same entries: one compiles each, the other waits and hits (p1003 point 2)"
+mk y1 from-y 2; mk y2 from-y 2
+(cd "$D/y1" && python3 -I "$BR" cargo --folder engine build -q >"$D/err-y1" 2>&1) & p1=$!
+(cd "$D/y2" && python3 -I "$BR" cargo --folder engine build -q >"$D/err-y2" 2>&1) & p2=$!
+wait $p1 && wait $p2 || { cat "$D/err-y1" "$D/err-y2"; fail "y1 or y2"; }
+tot=$(tail -2 "$S/runs.jsonl" | python3 -I -c 'import json,sys; print(sum(json.loads(l)["miss"] for l in sys.stdin))')
+tail -2 "$S/runs.jsonl" | python3 -I -c 'import json,re,sys; [print(r["wt"].rsplit("/",1)[1], r["hit"], "hit", r["miss"], "miss:", " ".join(sorted(re.sub(r"-[0-9a-f]+$","",m) for m in r["missed"]))) for r in map(json.loads, sys.stdin)]'
+[ "$tot" -le 5 ] || fail "both compiled: $tot misses between them (one cold job is 4, and the script's run may go twice)"
+echo "== 19. a restart asked while a hold runs: the service serves the hold's steps, then restarts (N-412 p1073)"
+(cd "$D/x1" && python3 -I "$BR" hold -- sh -c "sleep 3; python3 -I $BR cargo --folder rel build -q" >"$D/h19" 2>&1) & ph=$!
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q 'hold' && break; sleep 0.05; done
+(python3 -I "$BR" restart >"$D/r19" 2>&1) & pr=$!
+wait $ph || { cat "$D/h19"; fail "the hold's step did not run while a restart waited (train 19's deadlock)"; }
+wait $pr || { cat "$D/r19"; fail "the restart"; }
+grep -a "restart asked while a hold runs" "$L" | tail -1 | sed "s#$D/##g"
+grep -q "restarted, pid" "$D/r19" || { cat "$D/r19"; fail "the restart did not come after the hold"; }
+python3 -I "$BR" status >/dev/null || fail "no service after the restart"
+echo "the hold's step ran, the hold ended, then the restart came"
+echo "== 20. places are kept for --front: three jobs on three places, a --front one starts beside them, a plain one waits (N-412 p1084)"
+mk z1 from-z1 6; mk z2 from-z2 7; mk z3 from-z3 8; mk z4 from-z4 3; mk z5 from-z5 2
+for w in z1 z2 z3; do (cd "$D/$w" && python3 -I "$BR" cargo --folder engine build -q >"$D/err-$w" 2>&1) & done
+for _ in $(seq 200); do [ "$(grep -ac "start in place .*$D/z[123] " "$L" || true)" = 3 ] && break; sleep 0.05; done
+(cd "$D/z4" && python3 -I "$BR" cargo --folder engine build -q >"$D/err-z4" 2>&1) & p4=$!
+sleep 0.5
+(cd "$D/z5" && python3 -I "$BR" cargo --front --folder engine build -q >"$D/err-z5" 2>&1) & p5=$!
+wait
+grep -a "start in place .*$D/z[1-5] \| end rc .*$D/z[1-5]:" "$L" | sed "s#$D/##g" | cut -c1-120
+order=$(grep -an "start in place .*$D/z[1-5] \| end rc .*$D/z[1-5]:" "$L" | sed -E "s#^([0-9]+):.*(start|end rc).*$D/(z[1-5]).*#\2 \3#" | tr '\n' ' ')
+echo "order: $order"
+case "$order" in *"start z5"*) ;; *) fail "z5 did not start";; esac
+first_end=$(grep -an " end rc .*$D/z[123]:" "$L" | head -1 | cut -d: -f1)
+z5s=$(grep -an "start in place .*$D/z5 " "$L" | cut -d: -f1); z4s=$(grep -an "start in place .*$D/z4 " "$L" | cut -d: -f1)
+[ "$z5s" -lt "$first_end" ] || fail "the --front job waited for one of the three to end"
+[ "$z4s" -gt "$first_end" ] || fail "the plain job took the place kept for --front"
+echo "the --front job ran in a kept place beside the three; the plain one waited for a place"
+echo "== 21. beside a train at most two --front jobs run, in the kept places (at 15:11 nine ran on three; p1096)"
+mk v1 from-v1 4; mk v2 from-v2 5; mk v3 from-v3 6
+(cd "$D/x1" && python3 -I "$BR" hold -- sh -c "sleep 14" >"$D/h21" 2>&1) & ph=$!
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q 'hold' && break; sleep 0.05; done
+for w in v1 v2 v3; do (cd "$D/$w" && python3 -I "$BR" cargo --front --folder engine build -q >"$D/err-$w" 2>&1) & done
+sleep 1; python3 -I "$BR" status | { grep -a "v[123]" || true; } | sed "s#$D/##g" | cut -c1-160
+wait $ph || { cat "$D/h21"; fail "the hold"; }
+wait
+grep -a "start in place .*$D/v[123] \| end rc .*$D/v[123]:" "$L" | sed "s#$D/##g" | cut -c1-120
+s3=$(grep -an "start in place .*$D/v[123] " "$L" | sed -n 3p | cut -d: -f1); e1=$(grep -an " end rc .*$D/v[123]:" "$L" | head -1 | cut -d: -f1)
+[ -n "$s3" ] && [ "$s3" -gt "$e1" ] || fail "three --front jobs ran at once beside the hold"
+echo "beside the hold two --front jobs ran at once, the third after one ended"
+echo "== 22. --front --train: a window-only train's job runs beside an engine train's hold, and is the train's (N-412 p1114)"
+mk u1 from-u1 1
+(cd "$D/x1" && python3 -I "$BR" hold -- sh -c "sleep 12" >"$D/h22" 2>&1) & ph=$!
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q 'hold' && break; sleep 0.05; done
+(cd "$D/u1" && python3 -I "$BR" cargo --front --train --folder window build -q >"$D/err-u1" 2>&1) || { cat "$D/err-u1"; fail "u1 beside the hold"; }
+python3 -I "$BR" status | grep -q 'hold' || fail "u1 waited for the hold to end"
+lastrun | python3 -I -c 'import json,sys; r=json.load(sys.stdin); assert r["train"] and r["wt"].endswith("/u1"), r; print("u1: train", r["train"])' || fail "u1 not the train's"
+endline u1
+wait $ph || { cat "$D/h22"; fail "the hold"; }
+echo "u1 ran and ended while the hold ran, logged as the train's"
+echo "== 22b. --train and a hold from an agent that is not a train's: refused in words (docket-core3 N-412 p1133)"
+restart BUILD_RUNNER_TRAIN_AGENTS=docket-core
+python3 -I - "$BR" <<'EOF' || fail "the agent read from a cgroup"
+import importlib.machinery, importlib.util, os, sys
+l = importlib.machinery.SourceFileLoader("br", sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader("br", l)); l.exec_module(m)
+u = os.getuid()
+prod = f"0::/user.slice/user-{u}.slice/user@{u}.service/app.slice/coordd-research.service/agents/docket-core/main\n"
+for text, want in ((prod, "docket-core"), ("0::/docket-try/agents/docket-core/main\n", None),
+                   (f"1:name=x:/user.slice/user-{u}.slice/user@{u}.service/app.slice/coordd-research.service/agents/docket-core/main\n0::/x/agents/docket-core/main\n", None),
+                   (prod.replace("/agents/docket-core/main", "/agents/docket-core"), None)):
+    got = m.agent_of_cgroup(text)
+    assert got == want, (text, got)
+    print(f"{text.splitlines()[-1][3:][-60:]!s:62} -> {got}")
+EOF
+for o in "cargo --front --train --folder window build -q" "cargo --train --folder window build -q" "hold -- true"; do
+  rc=0; (cd "$D/u1" && python3 -I "$BR" $o >"$D/r22" 2>&1) || rc=$?
+  [ $rc != 0 ] && grep -q "refused: .* is a train's: only docket-core" "$D/r22" || { cat "$D/r22"; fail "$o from ${ME:-no agent} was not refused (rc $rc)"; }
+  echo "$o: $(grep -o "refused: .*" "$D/r22" | cut -c1-110)"
+done
+restart
+echo "== 23. two compiles of a miss on the build machine (paper-research N-412 p1342): a stand-in rustc"
+W=$(dirname "$BR")/build-store-rustc; t=$D/twice; rm -rf "$t"; mkdir -p "$t/store" "$t/out"
+printf 'pub fn f() {}\n' >"$t/x.rs"
+cat >"$t/rustc" <<'RSEOF'
+#!/bin/sh
+case "$1" in -vV) echo "rustc 0.0.0-stand-in"; echo "host: x86_64-unknown-linux-gnu"; exit 0;; esac
+out=; prev=; src=; for a; do [ "$prev" = --out-dir ] && out=$a; case $a in *.rs) src=$a;; esac; prev=$a; done
+n=$(($(cat "$T/count" 2>/dev/null || echo 0) + 1)); echo $n >"$T/count"
+if [ "$MODE" = differ ] && [ $n = 2 ]; then printf 'rlib-B'; else printf 'rlib-A'; fi >"$out/libx-h.rlib"
+printf '%s/libx-h.rlib: %s\n\n%s:\n' "$out" "$src" "$src" >"$out/x-h.d"
+RSEOF
+chmod +x "$t/rustc"
+tw() { (cd "$t" && env -u CARGO_TARGET_DIR T="$t" BUILD_STORE="$t/store" BUILD_STORE_RUN="$t/run" "$@" python3 -I "$W" "$t/rustc" \
+  --crate-name x --edition=2021 "$t/x.rs" --crate-type lib --emit=dep-info,metadata,link -C extra-filename=-h --out-dir "$t/out"); }
+entries() { find "$t/store/entries" -name '*.json' 2>/dev/null | wc -l; }
+rc=0; tw BUILD_STORE_TWICE=1 MODE=differ 2>"$t/e1" || rc=$?
+[ $rc != 0 ] || fail "differing compiles: rc 0"
+grep -q "two compiles of x-h gave different results (libx-h.rlib)" "$t/e1" || { cat "$t/e1"; fail "no words"; }
+[ "$(entries)" = 0 ] && grep -qx "differ:x-h" "$t/run" || fail "an entry was stored, or no differ note"
+echo "differing: rc $rc, $(entries) entries, compiled $(cat "$t/count") times: $(cut -c1-90 "$t/e1")"
+rm -f "$t/count" "$t/run"; tw BUILD_STORE_TWICE=1 MODE=same || fail "equal compiles failed"
+[ "$(entries)" = 1 ] && [ "$(cat "$t/count")" = 2 ] || fail "equal: $(entries) entries, $(cat "$t/count") compiles"
+echo "equal: $(entries) entry, compiled $(cat "$t/count") times"
+rm -f "$t/count" "$t/out/"*; tw BUILD_STORE_TWICE=1 MODE=differ || fail "the hit"
+[ ! -e "$t/count" ] && grep -qx "hit:b" "$t/run" || fail "the hit compiled"
+echo "a hit: compiled 0 times"
+rm -rf "$t/store" "$t/count" "$t/out/"*; mkdir "$t/store"; tw MODE=differ || fail "without the setting"
+[ "$(cat "$t/count")" = 1 ] && [ "$(entries)" = 1 ] || fail "without the setting: $(cat "$t/count") compiles"
+echo "without the setting: compiled once, stored"
+echo "== 24. where a job stands (N-1334): steps in the job's stream, its output as without them, the caller's file"
+restart
+J=$D/home/jobs
+[ -n "$(ls -A "$J" 2>/dev/null)" ] || fail "24: the jobs before this one wrote no file"  # steps 1 to 23 ran with the steps on
+rm -rf "$J"
+# the same job without and with the steps, each after a job that filled the store: the two outputs, their times
+# taken out and their lines sorted (two units end in either order), are the same; no bar and no step line is in either
+(cd "$D/a" && BUILD_RUNNER_STEPS=0 python3 -I "$BR" cargo test -p shared_name >"$D/s24-warm" 2>&1) || { cat "$D/s24-warm"; fail "24: a's test"; }
+[ -z "$(ls -A "$J" 2>/dev/null)" ] || fail "24: a job without steps wrote a file: $(ls "$J")"
+(cd "$D/a" && BUILD_RUNNER_STEPS=0 python3 -I "$BR" cargo test -p shared_name >"$D/s24-off" 2>&1) || { cat "$D/s24-off"; fail "24: a's test, steps off"; }
+(cd "$D/a" && python3 -I "$BR" cargo test -p shared_name >"$D/s24-on" 2>&1) || { cat "$D/s24-on"; fail "24: a's test, steps on"; }
+norm() { sed -E 's/[0-9]+(\.[0-9]+)? ?s\b/N s/g' "$1" | LC_ALL=C sort; }
+diff <(norm "$D/s24-off") <(norm "$D/s24-on") || fail "24: the job's output differs with the steps on"
+! grep -aq "build-runner-step\|Building \[" "$D/s24-on" || fail "24: a step line or cargo's bar is in the output"
+! grep -aq $'\r' "$D/s24-on" || fail "24: a carriage return is in the output"
+grep -q "test result: ok. 1 passed" "$D/s24-on" || fail "24: no test result in the output"
+endline a | grep -q "(store [1-9][0-9]* hit 0 miss)" || { endline a; fail "24: the job with steps missed in the store (its keys changed)"; }
+echo "output: the same $(wc -l <"$D/s24-on") lines with and without; $(endline a | grep -o "(store [^)]*)")"
+python3 -I - "$J" "$D/a" <<'EOF' || fail "24: the caller's file"
+import json, pathlib, sys
+fs = sorted(pathlib.Path(sys.argv[1]).glob("*.json"))
+assert len(fs) == 1 and not list(pathlib.Path(sys.argv[1]).glob("*.tmp")), fs
+d = json.loads(fs[0].read_text())
+want = {"wt": sys.argv[2], "verb": "test", "packages": ["shared_name"], "step": "ended", "rc": 0, "passed": 1, "failed": 0, "machine": None}
+got = {k: d.get(k) for k in want}
+assert got == want, got
+assert "args" not in d and not any(k in d for k in ("what", "done", "of", "ahead")), d
+assert fs[0].name.split("-")[0] == str(d["pid"]) and d["commit"] and d["since"] <= d["step_since"] <= d["at"], d
+print("file:", {k: d[k] for k in ("verb", "packages", "branch", "step", "rc", "passed", "failed")})
+EOF
+# under -q cargo draws its bar with no `Building` before it (a2h-speed N-1334 p10: the bar was not known, the
+# compiler's messages after it went on as text, and no built file came back): a's build -q, without and with the
+# steps, has the same output, and its binary comes back each time
+for m in 0 1; do
+  rm -f "$D/a/target/debug/app"
+  (cd "$D/a" && BUILD_RUNNER_STEPS=$m python3 -I "$BR" cargo build -q >"$D/s24-q$m" 2>&1) || { cat "$D/s24-q$m"; fail "24: a's build -q, steps $m"; }
+  [ "$("$D/a/target/debug/app")" = "from-a made" ] || { cat "$D/s24-q$m"; fail "24: a's build -q, steps $m: its binary did not come back"; }
+done
+diff <(norm "$D/s24-q0") <(norm "$D/s24-q1") || fail "24: build -q's output differs with the steps on"
+! grep -aq "build-runner-step\|\] *[0-9][0-9]*/[0-9][0-9]*" "$D/s24-q1" || fail "24: a step line or cargo's bar is in build -q's output"
+! grep -aq $'\r' "$D/s24-q1" || fail "24: a carriage return is in build -q's output"
+echo "build -q: its binary came back with and without the steps; the output the same $(wc -l <"$D/s24-q1") lines"
+# and a test -q, where cargo names no binary: its tests are counted from the harness's own lines, into the file
+(cd "$D/a" && python3 -I "$BR" cargo test -q -p shared_name >"$D/s24-qt" 2>&1) || { cat "$D/s24-qt"; fail "24: a's test -q"; }
+python3 -I - "$J" <<'EOF' || fail "24: test -q's file"
+import json, pathlib, sys
+d = json.loads(max(pathlib.Path(sys.argv[1]).glob("*.json"), key=lambda p: p.stat().st_mtime_ns).read_text())
+got = {k: d.get(k) for k in ("verb", "step", "rc", "passed", "failed")}
+assert got == {"verb": "test", "step": "ended", "rc": 0, "passed": 1, "failed": 0}, d
+print("test -q's file:", got)
+EOF
+# the stream itself, read as the caller's side reads it: queued behind c's job (its build script sleeps 4 s) while one
+# job at a time runs; then compiling with cargo's own count, testing with the binary's, and the last line's totals
+echo 1 >"$D/home/parallel"
+mk s24 from-s24 4
+(cd "$D/s24" && python3 -I "$BR" cargo build -q >"$D/err-s24" 2>&1) & p24=$!
+for _ in $(seq 200); do grep -aq "start in place p0 .*$D/s24 " "$L" && break; sleep 0.05; done
+python3 -I - "$D/home/sock" "$D/b" <<'EOF' || fail "24: the stream's steps"
+import json, os, socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); f = s.makefile("rwb", buffering=0)
+f.write(json.dumps({"cwd": sys.argv[2], "args": ["test", "-p", "shared_name"], "env": {"": []}, "who": "s24", "steps": True,
+                    "agent": os.environ.get("BUILD_RUNNER_AGENT")}).encode() + b"\n")
+steps, last = [], None
+for line in f:
+    if line.startswith(b'{"exit"'):
+        last = json.loads(line); break
+    if line.startswith(b'{"build-runner-step"'):
+        steps.append(json.loads(line)["build-runner-step"])
+names = [x["step"] for x in steps]
+print("steps:", " ".join(dict.fromkeys(names)), "|", len(steps), "lines | last:", {k: last.get(k) for k in ("exit", "passed", "failed")})
+assert names[0] == "queued" and steps[0]["ahead"] == 0, steps[:2]
+assert [n for n in dict.fromkeys(names)] == ["queued", "compiling", "testing"], names
+c = [x for x in steps if x["step"] == "compiling" and "of" in x]
+assert c and all(0 <= x["done"] <= x["of"] for x in c) and c[-1]["of"] >= 1, [x for x in steps if x["step"] == "compiling"]
+t = [x for x in steps if x["step"] == "testing"]
+assert t[0] == {"step": "testing", "what": "shared_name"} and {"step": "testing", "what": "shared_name", "done": 0, "of": 1} in t, t
+# the doc-tests come last, named from cargo's `Doc-tests NAME`: no step of a binary with no name
+assert all("what" in x for x in t) and t[-1] == {"step": "testing", "what": "shared_name", "done": 0, "of": 0}, t
+assert last["exit"] == 0 and last["passed"] == 1 and last["failed"] == 0, last
+print("compiling:", c[0], "...", c[-1], "| testing:", t[-1])
+EOF
+wait $p24 || { cat "$D/err-s24"; fail "24: s24's build"; }
+rm -f "$D/home/parallel"
+echo "== 25. by content: nothing into the tree, each file named by its blob, a handed folder of links (N-1446 p2726)"
+mk h from-h
+byc() {  # byc: h's build asked by content, raw on the socket; prints the end line
+  python3 -I - "$D/home/sock" "$D/h" <<'EOF'
+import json, os, socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); f = s.makefile("rwb", buffering=0)
+f.write(json.dumps({"cwd": sys.argv[2], "args": ["build", "-q"], "env": {"": []}, "who": "h", "by_content": True,
+                    "agent": os.environ.get("BUILD_RUNNER_AGENT")}).encode() + b"\n")
+for line in f:
+    if line.startswith(b'{"exit"'):
+        print(line.decode().strip()); break
+EOF
+}
+byc >"$D/e25" || fail "25: the job"
+python3 -I - "$D/e25" "$D/h" "$S" <<'EOF' || { cat "$D/e25"; fail "25: the end line"; }
+import hashlib, json, os, pathlib, sys
+end, wt, S = json.loads(open(sys.argv[1]).read()), sys.argv[2], pathlib.Path(sys.argv[3])
+assert end["exit"] == 0 and [d for d, _ in end["blobs"]] == [wt + "/target/debug/app"], end
+assert not os.path.exists(wt + "/target"), "a target folder was made in the tree"
+h = pathlib.Path(end["store"]); assert h.parent == S / "handed", end
+for _, n in end["blobs"]:
+    b = S / "blobs" / n[:2] / n
+    assert os.path.samefile(h / n, b) and hashlib.sha256(b.read_bytes()).hexdigest() == n.split(".")[0], n
+    assert n.endswith(".x") and oct(b.stat().st_mode & 0o777) == "0o555", (n, oct(b.stat().st_mode))
+print("blobs:", [n[:12] + "…" for _, n in end["blobs"]], "| handed:", h.name, "| no target/ in the tree")
+EOF
+h25=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["store"])' "$D/e25")
+n25=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["blobs"][0][1])' "$D/e25")
+BUILD_RUNNER_STORE_CAP_GB=0 python3 -I "$BR" gc
+[ ! -e "$S/blobs/${n25:0:2}/$n25" ] && [ "$("$h25/$n25")" = "from-h made" ] || fail "25: after the gc at cap 0 the handed file is not there to fetch"
+echo "the gc at cap 0 took the blob's name; the handed link still runs: $("$h25/$n25")"
+touch -d '2 hours ago' "$h25"
+byc >"$D/e25b" || fail "25: the second job"
+[ ! -e "$h25" ] || fail "25: a handed folder two hours old stayed after the next job by content"
+echo "a handed folder two hours old went at the next job by content"
+echo "PASS"

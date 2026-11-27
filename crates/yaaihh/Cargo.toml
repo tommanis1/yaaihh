@@ -1,0 +1,87 @@
+[package]
+name = "yaaihh"
+version = "0.4.0"
+edition.workspace = true
+license.workspace = true
+
+# No doc-tests (its doc blocks are text): a doc-test needs the library built a second time, without cfg(test), on
+# every test run (N-467).
+[lib]
+doctest = false
+
+# main.rs is a call of the library and has no tests; its test target alone made every test run build the whole
+# library a second time, without cfg(test): 204 s of a 217 s run (N-467)
+[[bin]]
+name = "yaaihh"
+path = "src/main.rs"
+test = false
+
+# Speech's engine (N-554): transcribe.cpp, C++ built through cmake, so off unless asked for; without it a take says the
+# engine is not in this build. Its Windows build needs ops/windows/speech/build.sh.
+[features]
+speech-engine = ["dep:transcribe-cpp"]
+
+[dependencies]
+# pinned (N-554.p1); no Metal (Apple only), CPU only
+transcribe-cpp = { version = "=0.4.2", default-features = false, optional = true }
+coord-types = { path = "../coord-types" }
+coordd-v2-link = { path = "../coordd-v2-link" }
+# the engine's texts read: its threads file checked against them (v2/map.rs), the Policy page's rows (policy_v2)
+docket-v2 = { path = "../docket/v2" }
+# the stratification check of the Docket's programs (programs/check.rs)
+eflint = { package = "eflint-rs", path = "../docket/eflint" }
+proxylog = { path = "../usage/proxylog" }
+# Docket's types (the Tickets page: a step's head type, a ticket's status)
+docket-machine = { path = "../docket/machine" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+# our fork of Rune (its yaaihh branch); a local checkout replaces it through a cargo [patch] in .cargo/config.toml
+rune = { git = "https://github.com/tommanis1/rune", rev = "1f9f78273fb5601d96f8963ebc523ac8b81dc5e0", features = ["native-file-dialog", "web"] }
+rune-kit = { git = "https://github.com/tommanis1/rune", rev = "1f9f78273fb5601d96f8963ebc523ac8b81dc5e0", features = ["markdown"] }
+# the types of the Markdown events rune-kit draws from (`rune_kit::markdown::events`), walked where the comment box's
+# room splits his words (ask.rs `room_cut`; consult-3 N-1477 p30, p33): the version rune-kit takes, in the lock already
+pulldown-cmark = { version = "0.13.6", default-features = false }
+# the model price catalog, for the agents' cost
+prices = { path = "../usage/prices" }
+chrono = "0.4"
+# the agents' terminals, emulated as in their holders (coord-pty)
+vt100.workspace = true
+# images in chats (base64) and file paths in them (regex)
+base64 = "0.22"
+regex = "1"
+# the speech model's hash, checked after its fetch (speech/model.rs)
+sha2 = "0.10"
+# the PDF view's tokens, from the system's random source (pdf_view.rs)
+getrandom = "0.3"
+# the tray icon: assets/yaaihh.svg drawn at the tray's size (the version Rune uses)
+resvg = { version = "0.45", default-features = false }
+# spelling and grammar marks shown to the owner, the same on both platforms (the owner, N-481 p10: "harper and
+# symspell for user facing suggestion diagnostics"; paper-research N-487.p1): Harper reads the whole message,
+# SymSpell ranks a word's candidates by how common they are
+harper-core = { version = "3.2", default-features = false }
+symspell = "0.5"
+
+# the composer's spelling mode, checked locally: on Linux hunspell's dictionaries read from the machine
+# (/usr/share/hunspell); on Windows, Windows' own checker (ISpellChecker), on the version Rune uses; and Windows'
+# console handles, for the window's stderr into its log folder (log.rs `stderr_to`)
+[target.'cfg(not(windows))'.dependencies]
+spellbook = "0.3"
+[target.'cfg(windows)'.dependencies]
+# the microphone for speech (speech/mic.rs): WASAPI, opened only by a take he starts
+cpal = { version = "0.18", default-features = false }
+windows = { version = "0.62", features = ["Win32_Globalization", "Win32_System_Com", "Win32_System_Console", "Win32_System_Threading", "Win32_Foundation",
+  # the marks over other programs' boxes (desk_marks.rs): UI Automation, its hook, the marks' window and popup
+  "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_Ole", "Win32_System_Variant",
+  "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_System_LibraryLoader", "Win32_System_StationsAndDesktops", "Win32_Security",
+  # the test's still of the marks (PrintWindow)
+  "Win32_Storage_Xps",
+  # Home's Devices: this machine's CPU, memory, disk C: and disks' health (devices.rs `this_pc`, disk_health.rs)
+  "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_System_IO"] }
+
+# the window booted on the real engine (v2/boot.rs), on unix: the engine serves a unix socket
+[target.'cfg(unix)'.dev-dependencies]
+coordd-v2 = { path = "../coordd-v2" }
+# his seat at the real window driver (v2/seated.rs)
+docket-driver-window = { path = "../drivers/window" }
+tokio.workspace = true

@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+# build-runner-test DIR: the build runner's own test, in DIR (made empty first; nothing outside it is touched).
+# Two worktrees of one workspace (crate `shared_name` at the same version, a binary printing its constant) differ only
+# in that constant, as main and the edge worktree differ in docket_machine (N-412 p11). Through one service and one
+# shared folder:
+#   1. plain cargo on one target folder shows the fault the runner exists for (worktree b's build is taken as fresh
+#      after a's, or links a's crate): printed, not required, since it depends on cargo's fingerprints;
+#   2. through the runner, a, then b, then a again each print their own constant;
+#   3. the executable is copied to <worktree>/target/debug/, and the worktree holds no compiled library;
+#   4. a second request while one runs is queued and told behind whom; status names both.
+# (and the later steps, each with its own heading; 21: at most two at once and the train's job, N-808)
+set -euo pipefail
+D=$(realpath -m "${1:?build-runner-test DIR}")
+BR=$(dirname "$(readlink -f "$0")")/build-runner
+rm -rf "$D"; mkdir -p "$D"
+export BUILD_RUNNER_STORE=0 BUILD_RUNNER_RULES=0 BUILD_RUNNER_HOME=$D/home BUILD_RUNNER_JOBS=2 BUILD_RUNNER_UNIT=build-runner-test CARGO_NET_OFFLINE=true BUILD_RUNNER_FILE=$BR
+mk() {  # mk NAME CONST: a git worktree with a workspace: crate shared_name (lib) and app (bin)
+  local w=$D/$1
+  mkdir -p "$w/shared/src" "$w/app/src"
+  printf '[workspace]\nmembers = ["shared", "app"]\nresolver = "2"\n' >"$w/Cargo.toml"
+  printf '[package]\nname = "shared_name"\nversion = "0.1.0"\nedition = "2021"\n' >"$w/shared/Cargo.toml"
+  printf 'pub const WHO: &str = "%s";\n' "$2" >"$w/shared/src/lib.rs"
+  printf '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nshared_name = { path = "../shared" }\n' >"$w/app/Cargo.toml"
+  printf 'fn main() { println!("{}", shared_name::WHO); }\n' >"$w/app/src/main.rs"
+  git -C "$w" init -q && git -C "$w" add -A && git -C "$w" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm "$2"
+  # the same mtimes in both, as two checkouts made in the same second have
+  find "$w" -path "$w/.git" -prune -o -type f -exec touch -d '2026-11-17 12:00:00' {} +
+}
+mk a from-a; mk b from-b
+fail() { echo "FAIL: $*"; exit 1; }
+
+echo "== 1. plain cargo, one target folder for both"
+(cd "$D/a" && cargo build -q --offline --target-dir "$D/plain" 2>&1 && "$D/plain/debug/app")
+(cd "$D/b" && cargo build -q --offline --target-dir "$D/plain" 2>&1 && "$D/plain/debug/app") | sed 's/^/b prints: /'
+
+echo "== 2. through the runner"
+python3 -I "$BR" start
+trap 'systemctl --user stop build-runner-test' EXIT
+for w in a b a; do
+  (cd "$D/$w" && python3 -I "$BR" cargo build -q >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w build"; }
+  got=$("$D/$w/target/debug/app")
+  echo "$w prints: $got"
+  [ "$got" = "from-$w" ] || fail "$w printed $got"
+done
+
+echo "== 2b. the same in release: the clean takes out the release profile's crates"
+for w in a b a; do
+  (cd "$D/$w" && python3 -I "$BR" cargo build --release -q >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w release build"; }
+  got=$("$D/$w/target/release/app"); echo "$w prints: $got"; [ "$got" = "from-$w" ] || fail "$w (release) printed $got"
+done
+
+echo "== 3. what the worktree holds"
+find "$D/a/target" -type f | sed "s|$D/||"
+[ "$(find "$D/a/target" -type f | wc -l)" = 2 ] || fail "a/target holds more than the two executables"
+grep -q "build-runner: $D/a/target/release/app" "$D/err-a" || fail "the copied path was not said"
+(cd "$D/b" && python3 -I "$BR" cargo --out o build -q 2>/dev/null)
+[ "$("$D/b/o/app")" = from-b ] || fail "--out o: b's executable is not in b/o"
+
+echo "== 3b. a --target build (the Windows exe's way, here with the host's triple): a folder of its own, its clean"
+T=$(rustc -vV | sed -n 's/^host: //p')
+for w in a b a; do
+  (cd "$D/$w" && python3 -I "$BR" cargo build --release --target "$T" -q >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w --target build"; }
+  got=$("$D/$w/target/$T/release/app"); echo "$w prints: $got"; [ "$got" = "from-$w" ] || fail "$w (--target) printed $got"
+done
+[ -d "$D/home/target/release-$T/$T/release" ] || fail "no folder release-$T"
+
+echo "== 4. the queue"
+# b's crate gets a build script that takes 3 s, so a's request comes while b's build runs
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(3)); }\n' >"$D/b/shared/build.rs"
+(cd "$D/b" && python3 -I "$BR" cargo build >"$D/q1" 2>&1) &
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q '^running: ' && ! python3 -I "$BR" status | grep -q 'running: nothing' && break; sleep 0.05; done
+(cd "$D/a" && python3 -I "$BR" cargo build >"$D/q2" 2>&1) &
+sleep 0.5; python3 -I "$BR" status
+wait
+head -3 "$D/q2"
+grep -q '^build-runner: queued behind' "$D/q2" || fail "a's request was not queued behind b's"
+"$D/a/target/debug/app" | grep -qx from-a || fail "a after the queue"; "$D/b/target/debug/app" | grep -qx from-b || fail "b after the queue"
+echo "== 5. a test run: its results on stdout, its exit code back"
+printf '#[test] fn who() { assert_eq!(WHO, "from-b"); }\n' >>"$D/a/shared/src/lib.rs"
+if (cd "$D/a" && python3 -I "$BR" cargo test -q -p shared_name >"$D/t-out" 2>"$D/t-err"); then fail "a's failing test passed"; fi
+grep -q 'test result: FAILED' "$D/t-out" || { cat "$D/t-out" "$D/t-err"; fail "no FAILED result on stdout"; }
+(cd "$D/b" && printf '#[test] fn who() { assert_eq!(WHO, "from-b"); }\n' >>shared/src/lib.rs && python3 -I "$BR" cargo test -q -p shared_name >"$D/t-out" 2>/dev/null) || fail "b's test"
+grep -q 'test result: ok. 1 passed' "$D/t-out" || fail "b's result"
+echo "a's test fails and b's passes, each on its own code"
+echo "== 6. raw JSON for rust-analyzer"
+(cd "$D/b" && python3 -I "$BR" cargo check --message-format=json >"$D/j" 2>/dev/null) || fail "b's check"
+grep -q '"reason":"build-finished","success":true' "$D/j" || fail "no raw build-finished line"
+restart() { systemctl --user stop build-runner-test; env "$@" python3 -I "$BR" start; }  # the service with other limits
+
+echo "== 7. --env and REPLAY_* reach a test; --folder takes a folder of its own"
+printf '#[test] fn env() { assert_eq!(std::env::var("REPLAY_X").as_deref(), Ok("1")); assert_eq!(std::env::var("MINE").as_deref(), Ok("2")); }\n' >>"$D/b/shared/src/lib.rs"
+(cd "$D/b" && REPLAY_X=1 MINE=2 python3 -I "$BR" cargo --env MINE test -q -p shared_name >"$D/t-out" 2>&1) || { cat "$D/t-out"; fail "env test"; }
+(cd "$D/b" && REPLAY_X=1 python3 -I "$BR" cargo test -q -p shared_name >"$D/t-out" 2>&1) && fail "MINE reached cargo without --env"
+(cd "$D/b" && python3 -I "$BR" cargo --folder ra check -q 2>/dev/null) || fail "--folder ra"
+[ -d "$D/home/target/ra-debug" ] || fail "no folder ra-debug"
+echo "MINE only with --env; REPLAY_X always; ra-debug made"
+
+echo "== 8. the disk floor"
+restart BUILD_RUNNER_MIN_FREE_GB=100000
+rc=0; (cd "$D/a" && python3 -I "$BR" cargo build -q >"$D/d-out" 2>&1) || rc=$?
+grep '^build-runner: refused' "$D/d-out"; [ $rc = 3 ] || fail "below the floor: rc $rc"
+
+echo "== 9. the cap"
+restart BUILD_RUNNER_CAP_GB=0.000001
+(cd "$D/a" && python3 -I "$BR" cargo build -q >"$D/c-out" 2>&1) || fail "build after the cap"
+grep '^build-runner: the folder debug' "$D/c-out" || fail "the folder over its cap was not emptied"
+[ "$("$D/a/target/debug/app")" = from-a ] || fail "a after the cap"
+
+running() {  # running WHO-DIR: until the service runs a build from that worktree
+  for _ in $(seq 200); do python3 -I "$BR" status | grep -q "^running: .* in $D/$1:" && return; sleep 0.05; done; fail "$1 never ran"
+}
+echo "== 10. no time limit per job (the owner's rule of 14 Nov); a build whose caller is killed is stopped then, while
+#   its build script prints nothing, not at its next line (a2h-speed N-1446 p3251, paper-research p3253)"
+restart
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(30)); }\n' >"$D/a/shared/build.rs"
+(cd "$D/a" && exec python3 -I "$BR" cargo build -q >"$D/m-out" 2>&1) & p1=$!
+running a
+t0=$(date +%s); kill -9 $p1; wait $p1 2>/dev/null
+for _ in $(seq 200); do grep -q "stopped (caller gone: its connection ended) $D/a" "$D/home/build-runner.log" && break; sleep 0.05; done
+grep -q "stopped (caller gone: its connection ended) $D/a" "$D/home/build-runner.log" || fail "the killed caller's build was not stopped"
+echo "stopped $(( $(date +%s) - t0 )) s after its caller was killed"; [ $(( $(date +%s) - t0 )) -lt 10 ] || fail "not stopped at once"
+rm "$D/a/shared/build.rs"
+
+echo "== 11. --front: behind the --front ones waiting, ahead of the rest"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(15)); }\n' >"$D/b/shared/build.rs"
+(cd "$D/b" && python3 -I "$BR" cargo build -q >"$D/f1" 2>&1) & p1=$!
+running b
+(cd "$D/a" && python3 -I "$BR" cargo build -q >"$D/f2" 2>&1) & p2=$!
+for _ in $(seq 400); do python3 -I "$BR" status | grep -q '^waiting: ' && break; sleep 0.05; done
+(cd "$D/a" && python3 -I "$BR" cargo --front check -q >"$D/f3" 2>&1) & p3=$!
+for _ in $(seq 400); do [ "$(python3 -I "$BR" status | grep -c '^waiting')" = 2 ] && break; sleep 0.05; done
+python3 -I "$BR" status | grep '^waiting' | tee "$D/f-status"
+head -1 "$D/f-status" | grep -q '^waiting (front): .*cargo check' || fail "the --front check is not first in the queue"
+wait $p1 $p2 $p3 || fail "a build of step 11"
+
+echo "== 12. restart while one build runs and one waits: neither is stopped, and the service becomes this file in place"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(5)); }\n' >"$D/b/shared/build.rs"
+old=$(systemctl --user show -p MainPID --value build-runner-test)
+(cd "$D/b" && python3 -I "$BR" cargo build -q >"$D/r1" 2>&1) & p1=$!
+running b
+printf 'pub const WHO: &str = "from-a2";\n' >"$D/a/shared/src/lib.rs"
+# the waiting caller runs another copy of the runner, as an agent's worktree has: it must not start one of its own
+mkdir -p "$D/copy" && cp "$BR" "$D/copy/build-runner"
+(cd "$D/a" && python3 -I "$D/copy/build-runner" cargo build -q >"$D/r2" 2>&1) & p2=$!
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q '^waiting: ' && break; sleep 0.05; done
+python3 -I "$BR" restart | tee "$D/r-out"
+wait $p1 || { cat "$D/r1"; fail "the running build was stopped by the restart"; }
+wait $p2 || { cat "$D/r2"; fail "the waiting build failed after the restart"; }
+grep -q 'goes to the new one' "$D/r2" || fail "the waiting request was not sent again"
+[ "$("$D/b/target/debug/app")" = from-b ] && [ "$("$D/a/target/debug/app")" = from-a2 ] || fail "after the restart"
+new=$(systemctl --user show -p MainPID --value build-runner-test)
+echo "service pid $old, then $new: $(tr '\0' ' ' </proc/$new/cmdline)"
+[ "$new" = "$old" ] || fail "the restart did not happen in place"
+tr '\0' ' ' </proc/$new/cmdline | grep -qF -- " -I $BR serve " || fail "the service does not run this file"
+grep -q "this service becomes $BR" "$D/home/build-runner.log" || fail "no exec in the log"
+
+echo "== 13. a worktree switch onto a manifest with a Windows-only dependency never downloaded"
+# as flavor/app's `arbitrary` (docket-core N-412 p142): the Linux build needs no download, cargo's full metadata does,
+# and offline fails; the switch reads only --no-deps metadata. Uses this machine's registry: arbitrary 1.5.0 indexed,
+# not downloaded (when it is downloaded, the step still runs but no longer shows the fault)
+rm "$D/b/shared/build.rs"
+printf "[target.'cfg(windows)'.dependencies]\narbitrary = \"=1.5.0\"\n" >>"$D/b/app/Cargo.toml"
+(cd "$D/b" && cargo metadata --offline --format-version 1 >/dev/null 2>&1) && echo "(arbitrary is downloaded here: the fault is not shown)"
+for w in a b; do
+  (cd "$D/$w" && python3 -I "$BR" cargo build -q >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w build after the switch"; }
+done
+grep -q 'taking out our crates (2) before building' "$D/err-b" || { cat "$D/err-b"; fail "b's switch did not take out our 2 crates"; }
+[ "$("$D/b/target/debug/app")" = from-b ] || fail "b after the switch"
+echo "b built after the switch, its 2 crates taken out"
+
+echo "== 14. two folders side by side; a third request in a busy folder waits, and does not hold up a free one"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(5)); }\n' >"$D/b/shared/build.rs"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(6)); }\n' >"$D/a/shared/build.rs"  # so a's runs are seen
+(cd "$D/b" && python3 -I "$BR" cargo build -q >"$D/p1" 2>&1) & p1=$!
+running b
+(cd "$D/a" && python3 -I "$BR" cargo build -q >"$D/p2" 2>&1) & p2=$!   # debug is busy: waits
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q '^waiting: ' && break; sleep 0.05; done
+(cd "$D/a" && python3 -I "$BR" cargo --folder side check -q >"$D/p3" 2>&1) & p3=$!  # a free folder: starts
+for _ in $(seq 200); do [ "$(python3 -I "$BR" status | grep -c '^running: ')" = 2 ] && break; sleep 0.05; done
+python3 -I "$BR" status | grep -E '^(running|waiting)' | tee "$D/p-status"
+[ "$(grep -c '^running: ' "$D/p-status")" = 2 ] || fail "two folders did not run side by side"
+grep -q '^running: .*folder side-debug' "$D/p-status" || fail "the free folder's check did not start"
+grep -q '^waiting: .*folder debug[,)]' "$D/p-status" || fail "a's build in the busy debug folder did not wait"
+wait $p1 && wait $p2 && wait $p3 || fail "a build of step 14"
+
+echo "== 15. a switch onto a second workspace that reaches the first through a path dependency"
+# as the proxy reaches crates/usage/prices: of the first workspace only shared_name is in its graph, not app, and
+# `cargo clean -p app` would refuse the name
+rm -f "$D/a/shared/build.rs" "$D/b/shared/build.rs"
+for w in a b; do
+  mkdir -p "$D/$w/tool/src"
+  printf '[workspace]\n[package]\nname = "tool"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nshared_name = { path = "../shared" }\n' >"$D/$w/tool/Cargo.toml"
+  printf 'fn main() { println!("tool {}", shared_name::WHO); }\n' >"$D/$w/tool/src/main.rs"
+  sed -i 's/^members = \["shared", "app"\]$/members = ["shared", "app"]\nexclude = ["tool"]/' "$D/$w/Cargo.toml"
+done
+for w in a b; do
+  (cd "$D/$w" && python3 -I "$BR" cargo build -q --manifest-path tool/Cargo.toml >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w's tool build"; }
+done
+grep -q 'taking out our crates (2) before building' "$D/err-b" || { cat "$D/err-b"; fail "b's switch did not take out tool and shared_name only"; }
+[ "$("$D/b/tool/target/debug/tool")" = "tool from-b" ] || fail "b's tool after the switch"
+echo "b's tool built after the switch, 2 crates taken out (tool, shared_name; not app)"
+
+echo "== 16. test --no-run: the test binary is copied out and runs again after another worktree's build"
+(cd "$D/b" && python3 -I "$BR" cargo test --no-run -q -p shared_name >"$D/n-out" 2>"$D/n-err") || { cat "$D/n-err"; fail "b's test --no-run"; }
+tb=$(sed -n "s|^build-runner: \($D/b/target/debug/deps/shared_name-[0-9a-f]*\)$|\1|p" "$D/n-err" | head -1)
+[ -x "$tb" ] || { cat "$D/n-err"; fail "no test binary copied to b/target/debug/deps"; }
+(cd "$D/a" && python3 -I "$BR" cargo build -q 2>/dev/null) || fail "a's build"
+"$tb" who -q 2>&1 | grep -q 'test result: ok. 1 passed' || fail "b's copied test binary after a's build"
+echo "b's test binary ${tb#$D/} ran after a's build"
+
+echo "== 17. a restart keeps the waiting in their order"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(5)); }\n' >"$D/b/shared/build.rs"
+(cd "$D/b" && python3 -I "$BR" cargo build -q >/dev/null 2>&1) & p1=$!
+running b
+printf 'pub const WHO: &str = "from-a3";\n' >"$D/a/shared/src/lib.rs"
+(cd "$D/a" && python3 -I "$BR" cargo build -q >"$D/o1" 2>&1) & p2=$!
+for _ in $(seq 100); do [ "$(python3 -I "$BR" status | grep -c '^waiting')" = 1 ] && break; sleep 0.05; done
+(cd "$D/a" && python3 -I "$BR" cargo check -q >"$D/o2" 2>&1) & p3=$!
+for _ in $(seq 100); do [ "$(python3 -I "$BR" status | grep -c '^waiting')" = 2 ] && break; sleep 0.05; done
+n=$(wc -l <"$D/home/build-runner.log")
+python3 -I "$BR" restart >/dev/null
+wait $p1 && wait $p2 && wait $p3 || fail "a build of step 17"
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -E '^[0-9-]+ [0-9:]+ start ' | grep -oE '(build|check) -q$' | tr '\n' ' ' | tee "$D/o-order"; echo
+[ "$(cat "$D/o-order")" = "build -q check -q " ] || fail "the waiting did not keep their order"
+echo "== 18. a caller from before ed07606 (it sends no first time when it comes again) holds nobody after a restart"
+# the old caller is the runner's client as it was: the line that sends the first time again taken out (N-480)
+grep -v 'req\["came"\] = m.get("came")' "$BR" >"$D/old-runner"
+cmp -s "$BR" "$D/old-runner" && fail "step 18's old caller is the same as the runner"
+(cd "$D/b" && python3 -I "$BR" cargo build -q >/dev/null 2>&1) & p1=$!
+running b
+printf 'pub const WHO: &str = "from-a4";\n' >"$D/a/shared/src/lib.rs"
+(cd "$D/a" && python3 -I "$D/old-runner" cargo build -q >"$D/o1" 2>&1) & p2=$!
+for _ in $(seq 100); do [ "$(python3 -I "$BR" status | grep -c '^waiting')" = 1 ] && break; sleep 0.05; done
+n=$(wc -l <"$D/home/build-runner.log")
+python3 -I "$BR" restart >/dev/null
+(cd "$D/a" && python3 -I "$BR" cargo --folder side check -q >"$D/o2" 2>&1) & p3=$!
+for _ in $(seq 400); do [ "$(tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -cE '^[0-9-]+ [0-9:]+ start ')" = 2 ] && break; sleep 0.1; done
+[ "$(tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -cE '^[0-9-]+ [0-9:]+ start ')" = 2 ] || fail "after the restart the old caller's build and the later one did not both start (held as expected)"
+wait $p1 && wait $p2 && wait $p3 || fail "a build of step 18"
+echo "both started after the restart"
+echo "== 19. a caller that goes while it waits leaves the queue; its build does not run later"
+(cd "$D/b" && python3 -I "$BR" cargo build -q >/dev/null 2>&1) & p1=$!
+running b
+printf 'pub const WHO: &str = "from-a5";\n' >"$D/a/shared/src/lib.rs"
+(cd "$D/a" && exec python3 -I "$BR" cargo build -q >/dev/null 2>&1) & p2=$!
+for _ in $(seq 100); do [ "$(python3 -I "$BR" status | grep -c '^waiting')" = 1 ] && break; sleep 0.05; done
+kill "$p2"; wait "$p2" 2>/dev/null || true
+for _ in $(seq 50); do [ "$(python3 -I "$BR" status | grep -c '^waiting')" = 0 ] && break; sleep 0.1; done
+[ "$(python3 -I "$BR" status | grep -c '^waiting')" = 0 ] || fail "the gone caller's request still waits"
+grep -q 'left the queue, its caller gone' "$D/home/build-runner.log" || fail "no log line for the gone caller"
+wait $p1 || fail "b's build of step 19"
+echo "the gone caller left the queue"
+echo "== 20. a cold build takes at most PARALLEL - 1 places: a second cold one waits, a warm one takes the free place"
+restart BUILD_RUNNER_PARALLEL=2
+n=$(wc -l <"$D/home/build-runner.log")
+(cd "$D/b" && python3 -I "$BR" cargo --folder cold1 build -q >/dev/null 2>&1) & p1=$!
+for _ in $(seq 200); do python3 -I "$BR" status | grep -q "^running: .* in $D/b: .*folder cold1-debug, cold" && break; sleep 0.05; done
+(cd "$D/a" && python3 -I "$BR" cargo --folder cold2 build -q >/dev/null 2>&1) & p2=$!
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q "^waiting: .*folder cold2-debug, cold" && break; sleep 0.05; done
+(cd "$D/b" && python3 -I "$BR" cargo check -q >/dev/null 2>&1) & p3=$!
+wait $p1 && wait $p2 && wait $p3 || fail "a build of step 20"
+# from the log, in order: the cold build in b starts, the warm check in b starts and ends beside it, and only after the
+# cold build in b ends does the cold one in a start
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -E ' (start|end rc) ' | sed -E "s#.*(start|end rc).* $D/(a|b)[ :].*(build -q|check -q).*#\1 \2 \3#" | tr '\n' ';' >"$D/o20"; echo >>"$D/o20"
+cat "$D/o20"
+[ "$(cat "$D/o20")" = "start b build -q;start b check -q;end rc b check -q;end rc b build -q;start a build -q;end rc a build -q;" ] || fail "the warm check did not run beside the cold build, or the second cold one did not wait"
+echo "the warm check ran beside the cold build; the second cold one waited"
+echo "== 21. at most two at once across all folders, read from the file beside the state (it wins over the environment);
+#   a --train job goes to the head, waits for the running ones to end, runs alone, and the rest waits behind it (N-808)"
+restart BUILD_RUNNER_PARALLEL=4
+echo 2 >"$D/home/parallel"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(6)); }\n' >"$D/b/shared/build.rs"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(6)); }\n' >"$D/a/shared/build.rs"
+n=$(wc -l <"$D/home/build-runner.log")
+# three asked at once, each warm in a folder of its own
+(cd "$D/b" && python3 -I "$BR" cargo --folder cold1 build -q >/dev/null 2>&1) & p1=$!
+sleep 0.3
+(cd "$D/a" && python3 -I "$BR" cargo --folder cold2 build -q >/dev/null 2>&1) & p2=$!
+sleep 0.3
+(cd "$D/b" && python3 -I "$BR" cargo check -q >"$D/w3" 2>&1) & p3=$!
+for _ in $(seq 200); do [ "$(python3 -I "$BR" status | grep -c '^running: ')" = 2 ] && [ "$(python3 -I "$BR" status | grep -c '^waiting')" = 1 ] && break; sleep 0.05; done
+python3 -I "$BR" status | grep -E '^(at most|running|waiting)' | tee "$D/s21a"
+[ "$(grep -c '^running: ' "$D/s21a")" = 2 ] || fail "not two running with the file saying 2 (the environment says 4)"
+grep -q '^waiting: .*: 2 are running, at most 2 at once$' "$D/s21a" || fail "the third does not say it waits for the two"
+(cd "$D/a" && python3 -I "$BR" cargo --train --folder side check -q >"$D/w4" 2>&1) & p4=$!
+for _ in $(seq 100); do python3 -I "$BR" status | grep -q '^waiting (train)' && break; sleep 0.05; done
+python3 -I "$BR" status | grep -E '^(running|waiting)' | tee "$D/s21b"
+head -3 "$D/s21b" | tail -1 | grep -q '^waiting (train): .*: a train.s job runs alone: it waits for the 2 running to end$' || fail "the train job is not first, or does not say why"
+grep -q '^waiting: .*: a train.s job waits to run alone: nothing new starts before it$' "$D/s21b" || fail "the third does not say it waits for the train"
+python3 -c "
+import json,sys; q=json.load(open('$D/home/queue.json'))
+assert q['parallel']==2 and len(q['running'])==2 and [w['train'] for w in q['waiting']]==[True,False], q
+assert all(w['why'] for w in q['waiting']) and {'who','folder','verb','since'} <= set(q['running'][0]), q
+print('queue.json: running', [(r['folder'], r['verb']) for r in q['running']], 'waiting', [(w['folder'], w['verb'], w['why']) for w in q['waiting']])
+" || fail "queue.json"
+for _ in $(seq 400); do python3 -I "$BR" status | grep -q '^running (train)' && break; sleep 0.05; done
+python3 -I "$BR" status | grep -E '^(running|waiting)' | tee "$D/s21c"
+grep -q '^waiting: .*: the train.s check runs alone' "$D/s21c" || fail "while the train job runs, the third does not say so"
+wait $p1 && wait $p2 && wait $p3 && wait $p4 || fail "a build of step 21"
+# from the log: the two start, both end before the train job starts, and the third starts only after the train job ends
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -E ' (start|end rc) ' | sed -E "s#.*(start|end rc).* $D/(a|b)[ :].*(build -q|check -q).*#\1 \2 \3#" >"$D/o21"
+cat "$D/o21" | tr '\n' ';'; echo
+python3 - "$D/o21" <<'PY' || fail "the order of step 21"
+import sys
+L = open(sys.argv[1]).read().split("\n")
+i = lambda s: L.index(s)
+assert sorted(L[:2]) == ["start a build -q", "start b build -q"], L
+assert max(i("end rc a build -q"), i("end rc b build -q")) < i("start a check -q") < i("end rc a check -q") < i("start b check -q"), L
+PY
+rm -f "$D/home/parallel" "$D/a/shared/build.rs" "$D/b/shared/build.rs"
+echo "two at once by the file; the train job waited for both, ran alone, and the third waited behind it"
+echo "== 22. each job's start and end lines name its folder and whether it was warm or cold, and why (N-808)"
+n=$(wc -l <"$D/home/build-runner.log")
+(cd "$D/a" && python3 -I "$BR" cargo --folder logs build -q >/dev/null 2>&1) || fail "a in logs"
+(cd "$D/a" && python3 -I "$BR" cargo --folder logs build -q >/dev/null 2>&1) || fail "a again in logs"
+(cd "$D/b" && python3 -I "$BR" cargo --folder logs build -q >/dev/null 2>&1) || fail "b in logs"
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -E ' (start|end rc) ' | sed "s#$D/##g" | tee "$D/o22"
+[ "$(grep -c '^.* start in logs-debug (cold, a new folder) a ' "$D/o22")" = 1 ] || fail "the first build in a new folder is not said cold, a new folder"
+[ "$(grep -c '^.* start in logs-debug (warm) a ' "$D/o22")" = 1 ] || fail "the second build from a is not said warm"
+grep -q '^.* start in logs-debug (cold, last built a: 2 of our crates taken out (.*)) b ' "$D/o22" || fail "b's switch is not said with the crates taken out"
+grep -q '^.* end rc 0 in [0-9]* s, peak [0-9.]* GB, in logs-debug (cold, last built a: 2 of our crates taken out (.*)) b: ' "$D/o22" || fail "b's end line"
+echo "== 23. a switch by content (N-808): two worktrees of one line with the same file times (16 Nov's case), one crate
+#   differing; each build's binary holds its own worktree's crate, and the switch is by content, not by taking our
+#   crates out; a Cargo.toml differing takes them out as before; a file a crate read that the record does not hold
+#   has its time set to now too (runner test 29's fix: no more taking out for it)"
+mk c from-c; mk d from-d
+n=$(wc -l <"$D/home/build-runner.log")
+for w in c d c d; do
+  (cd "$D/$w" && python3 -I "$BR" cargo --folder content build -q >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w build by content"; }
+  got=$("$D/$w/target/debug/app"); echo "$w prints: $got"; [ "$got" = "from-$w" ] || fail "$w printed $got after a switch by content"
+done
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep ' start in content-debug' | sed -E "s#$D/##g; s#^[0-9-]+ [0-9:]+ ##" | tee "$D/o23"
+[ "$(grep -c '(switched by content from [cd]: 1 files differ, their times set to now; our crates kept)' "$D/o23")" = 3 ] || fail "the three switches did not go by content"
+# a Cargo.toml differing: our crates are taken out
+printf '\n[features]\nx = []\n' >>"$D/c/shared/Cargo.toml"
+(cd "$D/c" && python3 -I "$BR" cargo --folder content build -q >"$D/err-c" 2>&1) || { cat "$D/err-c"; fail "c with its Cargo.toml changed"; }
+[ "$("$D/c/target/debug/app")" = from-c ] || fail "c after its Cargo.toml changed"
+tail -1 "$D/home/build-runner.log" | grep -q '(cold, last built .*/d: 2 of our crates taken out (shared/Cargo.toml differs))' || { tail -2 "$D/home/build-runner.log"; fail "a Cargo.toml differing did not take our crates out"; }
+git -C "$D/c" checkout -q shared/Cargo.toml
+# a crate reading a file the record does not hold (untracked, outside the crates' folders): its time set to now
+for w in c d; do
+  echo "note-$w" >"$D/$w/extra.txt"
+  printf 'pub const NOTE: &str = include_str!("../../extra.txt");\n' >>"$D/$w/shared/src/lib.rs"
+  (cd "$D/$w" && python3 -I "$BR" cargo --folder content build -q >"$D/err-$w" 2>&1) || { cat "$D/err-$w"; fail "$w with extra.txt"; }
+done
+tail -1 "$D/home/build-runner.log" | grep -q "(switched by content from .*/c: 2 files differ, their times set to now; our crates kept)" || { tail -2 "$D/home/build-runner.log"; fail "a file outside the record was not set to now"; }
+[ "$(stat -c %Y "$D/d/extra.txt")" -ge "$(($(date +%s) - 60))" ] || fail "d's extra.txt kept its old time"
+[ "$("$D/d/target/debug/app")" = from-d ] || fail "d after extra.txt"
+echo "the switches went by content and each binary held its own crate; a Cargo.toml took them out, a file outside the record was set to now"
+echo "== 24. build-runner hold: one queue entry for a whole check (N-837): its CMD's cargo requests run at once inside it,
+#   a request asked meanwhile from outside runs in the place the hold leaves free (N-412 p820); a hold whose caller
+#   goes away lets go"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(3)); }\n' >"$D/c/shared/build.rs"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(3)); }\n' >"$D/d/shared/build.rs"
+cat >"$D/check.sh" <<SH
+#!/bin/bash
+set -e
+cd "$D/c" && python3 -I "$BR" cargo --train --folder h1 build -q
+sleep 1
+cd "$D/d" && python3 -I "$BR" cargo --train --folder h2 build -q
+echo check-done
+SH
+chmod +x "$D/check.sh"
+n=$(wc -l <"$D/home/build-runner.log")
+(cd "$D" && python3 -I "$BR" hold --train -- "$D/check.sh" >"$D/h-out" 2>&1) & p1=$!
+for _ in $(seq 200); do python3 -I "$BR" status | grep -q '^running (train): .*hold: ' && break; sleep 0.05; done
+(cd "$D/d" && python3 -I "$BR" cargo --folder outside check -q >/dev/null 2>&1) & p2=$!
+wait $p1 || { cat "$D/h-out"; fail "the hold's check"; }
+wait $p2 || fail "the outside request"
+grep -q '^check-done$' "$D/h-out" || { cat "$D/h-out"; fail "the hold's CMD did not finish"; }
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -E ' (start in|end rc|hold start|hold end) ' | sed -E "s#.* (start in|end rc .*, in) ([a-z0-9-]+) .*#\1 \2#; s#.* (hold start|hold end) .*#\1#; s#end rc .*, in#end#" | tr '\n' ';' | tee "$D/o24"; echo
+o=$(cat "$D/o24")
+pos() { local x=${o%%"$1"*}; [ "$x" != "$o" ] || { echo 9999; return; }; echo ${#x}; }
+[ "$(pos 'end h1-debug')" -lt "$(pos 'start in h2-debug')" ] || fail "the hold's steps out of order"
+[ "$(pos 'start in outside-debug')" -lt "$(pos 'hold end')" ] || fail "the outside request did not run in the place the hold leaves"
+# a hold whose caller is killed lets go, and the next request runs
+(cd "$D" && exec python3 -I "$BR" hold -- sleep 30 >/dev/null 2>&1) & p1=$!
+for _ in $(seq 200); do python3 -I "$BR" status | grep -q '^running (train): .*hold: sleep 30' && break; sleep 0.05; done
+kill -9 "$p1"; wait "$p1" 2>/dev/null || true
+t0=$(date +%s)
+(cd "$D/d" && python3 -I "$BR" cargo --folder outside check -q >/dev/null 2>&1) || fail "after the killed hold"
+echo "after the killed hold the next request ran in $(( $(date +%s) - t0 )) s"
+[ $(( $(date +%s) - t0 )) -lt 20 ] || fail "the killed hold was not let go"
+rm -f "$D/c/shared/build.rs" "$D/d/shared/build.rs"
+echo "the hold ran its CMD's requests in order, the outside request ran in the place left; a killed hold let go"
+echo "== 25. inside a hold two run at once, a request from CMD's own process tree without the token is in it too (a
+#   release tree's older client), a --front build runs beside the hold and a plain one in the place left (N-412 p763, p820)"
+echo 3 >"$D/home/parallel"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(4)); }\n' >"$D/c/shared/build.rs"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(4)); }\n' >"$D/d/shared/build.rs"
+cat >"$D/check25.sh" <<SH
+#!/bin/bash
+cd "$D/c" && python3 -I "$BR" cargo --folder m1 build -q & a=\$!
+cd "$D/d" && env -u BUILD_RUNNER_HOLD python3 -I "$BR" cargo --front --folder m2 build -q & b=\$!
+wait \$a && wait \$b && sleep 2 && echo check-done
+SH
+chmod +x "$D/check25.sh"
+n=$(wc -l <"$D/home/build-runner.log")
+(cd "$D" && python3 -I "$BR" hold --train -- "$D/check25.sh" >"$D/h25" 2>&1) & p1=$!
+for _ in $(seq 200); do python3 -I "$BR" status | grep -q '^running (train): .*hold: ' && break; sleep 0.05; done
+(cd "$D/c" && python3 -I "$BR" cargo --front --folder install build -q >/dev/null 2>&1) & p2=$!
+(cd "$D/d" && python3 -I "$BR" cargo --folder plain check -q >/dev/null 2>&1) & p3=$!
+wait $p1 || { cat "$D/h25"; fail "the hold's check (25)"; }
+wait $p2 || fail "the --front request"
+wait $p3 || fail "the plain request"
+grep -q '^check-done$' "$D/h25" || { cat "$D/h25"; fail "the hold's CMD did not finish (25)"; }
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -E ' (start in|end rc|hold start|hold end) ' | sed -E "s#.* (start in|end rc .*, in) ([a-z0-9-]+) .*#\1 \2#; s#.* (hold start|hold end) .*#\1#; s#end rc .*, in#end#" | tr '\n' ';' | tee "$D/o25"; echo
+o=$(cat "$D/o25")
+pos() { local x=${o%%"$1"*}; [ "$x" != "$o" ] || { echo 9999; return; }; echo ${#x}; }
+[ "$(pos 'start in m1-debug')" -lt "$(pos 'end m2-debug')" ] && [ "$(pos 'start in m2-debug')" -lt "$(pos 'end m1-debug')" ] || fail "the hold's two did not run at once"
+[ "$(pos 'start in install-debug')" -lt "$(pos 'hold end')" ] || fail "the --front build waited for the hold"
+[ "$(pos 'start in plain-debug')" -lt "$(pos 'hold end')" ] || fail "the plain request did not run in the place left"
+rm -f "$D/c/shared/build.rs" "$D/d/shared/build.rs"
+echo "the hold's two ran at once (one found by its caller's parents), the --front build beside it, the plain one in the place left"
+echo "== 26. while a hold runs, a folder its requests asked for is its alone: a request from outside for it is refused
+#   with the folder to use instead, and is served again once the hold has ended (N-412 p781)"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(3)); }\n' >"$D/c/shared/build.rs"
+cat >"$D/check26.sh" <<SH
+#!/bin/bash
+cd "$D/c" && python3 -I "$BR" cargo --folder hx build -q && sleep 4 && echo check-done
+SH
+chmod +x "$D/check26.sh"
+(cd "$D" && python3 -I "$BR" hold --train -- "$D/check26.sh" >"$D/h26" 2>&1) & p1=$!
+for _ in $(seq 200); do python3 -I "$BR" status | grep -q '^running: .*folder hx-debug' && break; sleep 0.05; done
+set +e
+(cd "$D/d" && python3 -I "$BR" cargo --front --folder hx build -q) >"$D/r26" 2>&1; rc=$?
+set -e
+cat "$D/r26"
+[ $rc = 3 ] || fail "the outside request for the hold's folder was not refused (rc $rc)"
+grep -q "refused: folder hx-debug is the running train's hold's (.*) until it ends; use another: --folder engine or --folder window" "$D/r26" || fail "the refusal does not say which folder to use"
+wait $p1 || { cat "$D/h26"; fail "the hold's check (26)"; }
+grep -q '^check-done$' "$D/h26" || { cat "$D/h26"; fail "the hold's CMD did not finish (26)"; }
+(cd "$D/d" && python3 -I "$BR" cargo --folder hx build -q >/dev/null 2>&1) || fail "the folder after the hold"
+[ "$("$D/d/target/debug/app")" = from-d ] || fail "d in hx after the hold"
+rm -f "$D/c/shared/build.rs"
+echo "the hold's folder was refused to an outside request while it ran, and served after"
+echo "== 27. a hold does not wait for the running jobs to end: with three places and two outside jobs running it starts
+#   at once, and its first step takes the free place (paper-research N-412 p804)"
+echo 3 >"$D/home/parallel"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(20)); }\n' >"$D/d/shared/build.rs"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(2)); }\n' >"$D/c/shared/build.rs"
+cat >"$D/check27.sh" <<SH
+#!/bin/bash
+cd "$D/c" && python3 -I "$BR" cargo --folder s1 build -q && echo check-done
+SH
+chmod +x "$D/check27.sh"
+n=$(wc -l <"$D/home/build-runner.log")
+(cd "$D/d" && python3 -I "$BR" cargo --folder o1 build -q >/dev/null 2>&1) & q1=$!
+(cd "$D/d" && python3 -I "$BR" cargo --folder o2 build -q >/dev/null 2>&1) & q2=$!
+for _ in $(seq 200); do [ "$(python3 -I "$BR" status | grep -c '^running: .*folder o[12]-debug')" = 2 ] && break; sleep 0.05; done
+(cd "$D" && python3 -I "$BR" hold --train -- "$D/check27.sh" >"$D/h27" 2>&1) & p1=$!
+wait $p1 || { cat "$D/h27"; fail "the hold's check (27)"; }
+wait $q1 && wait $q2 || fail "the outside jobs (27)"
+grep -q '^check-done$' "$D/h27" || { cat "$D/h27"; fail "the hold's CMD did not finish (27)"; }
+tail -n +$((n + 1)) "$D/home/build-runner.log" | grep -E ' (start in|end rc|hold start|hold end) ' | sed -E "s#.* (start in|end rc .*, in) ([a-z0-9-]+) .*#\1 \2#; s#.* (hold start|hold end) .*#\1#; s#end rc .*, in#end#" | tr '\n' ';' | tee "$D/o27"; echo
+o=$(cat "$D/o27")
+[ "$(pos 'hold end')" -lt "$(pos 'end o1-debug')" ] && [ "$(pos 'hold end')" -lt "$(pos 'end o2-debug')" ] || fail "the hold waited for the running jobs"
+rm -f "$D/c/shared/build.rs" "$D/d/shared/build.rs"
+echo "the hold started beside the two running jobs and ended before them"
+echo "== 28. a hold takes at most PARALLEL - 1 places: with three, its third step waits while a request from outside runs
+#   in the place left, oldest first (N-412 p820)"
+echo 3 >"$D/home/parallel"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(12)); }\n' >"$D/c/shared/build.rs"
+printf 'fn main() { std::thread::sleep(std::time::Duration::from_secs(12)); }\n' >"$D/d/shared/build.rs"
+cat >"$D/check28.sh" <<SH
+#!/bin/bash
+cd "$D/c"
+python3 -I "$BR" cargo --folder t1 build -q & a=\$!
+python3 -I "$BR" cargo --folder t2 build -q & b=\$!
+sleep 1
+python3 -I "$BR" cargo --folder t3 build -q & c=\$!
+wait \$a && wait \$b && wait \$c && echo check-done
+SH
+chmod +x "$D/check28.sh"
+n=$(wc -l <"$D/home/build-runner.log")
+(cd "$D" && python3 -I "$BR" hold --train -- "$D/check28.sh" >"$D/h28" 2>&1) & p1=$!
+for _ in $(seq 200); do [ "$(python3 -I "$BR" status | grep -c '^running: .*folder t[12]-debug')" = 2 ] && break; sleep 0.05; done
+(cd "$D/d" && python3 -I "$BR" cargo --folder q1 build -q >/dev/null 2>&1) & q1=$!
+sleep 0.5
+(cd "$D/d" && python3 -I "$BR" cargo --folder q2 build -q >/dev/null 2>&1) & q2=$!
+# the state looked for: two of the hold's running, its third and the second outside request waiting, the first running
+seen=
+for _ in $(seq 200); do
+  python3 -I "$BR" status | grep -E '^(running|waiting)' | sed "s#$D/##g" >"$D/s28"
+  grep -q '^running: .*folder q1-debug' "$D/s28" \
+    && grep -q "^waiting: .*folder t3-debug.*: the hold runs 2, its most (2 of 3: one serves the queue)" "$D/s28" \
+    && grep -q "^waiting: .*folder q2-debug.*: a train's hold runs: 1 place serves the queue, in use" "$D/s28" && { seen=1; break; }
+  sleep 0.05
+done
+cat "$D/s28"
+[ -n "$seen" ] || fail "not seen: two of the hold's running, its third waiting, one outside request in the place left and the next waiting"
+wait $p1 || { cat "$D/h28"; fail "the hold's check (28)"; }
+wait $q1 && wait $q2 || fail "the outside requests (28)"
+rm -f "$D/c/shared/build.rs" "$D/d/shared/build.rs"
+echo "the hold ran two of three, the third waited, and one outside request ran in the place left"
+echo "== 29. a build variant left by an older worktree and not rebuilt by the last one is not taken as fresh: e built
+#   shared's tests from-e, f built only the binary (from-f), g (f's content, older file times) runs shared's tests and
+#   must see from-f"
+mk e from-e; mk f from-f; mk g from-f
+for w in e f g; do
+  printf '#[cfg(test)]\nmod t { #[test] fn who() { println!("WHO={}", super::WHO); } }\n' >>"$D/$w/shared/src/lib.rs"
+  git -C "$D/$w" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qam test
+  find "$D/$w" -path "$D/$w/.git" -prune -o -type f -exec touch -d '2026-11-17 12:00:00' {} +
+done
+(cd "$D/e" && python3 -I "$BR" cargo --folder hole test -q -p shared_name -- --nocapture >"$D/r29e" 2>&1) || { cat "$D/r29e"; fail "e's tests"; }
+grep -q "WHO=from-e" "$D/r29e" || { cat "$D/r29e"; fail "e's test did not print from-e"; }
+(cd "$D/f" && python3 -I "$BR" cargo --folder hole build -q >"$D/r29f" 2>&1) || { cat "$D/r29f"; fail "f's build"; }
+(cd "$D/g" && python3 -I "$BR" cargo --folder hole test -q -p shared_name -- --nocapture >"$D/r29g" 2>&1) || { cat "$D/r29g"; fail "g's tests"; }
+grep "WHO=" "$D/r29g"
+grep -q "WHO=from-f" "$D/r29g" || { tail -3 "$D/home/build-runner.log" | sed "s#$D/##g"; fail "g ran e's test binary (from-e), left in the folder and taken as fresh"; }
+echo "g's tests saw its own content"
+echo "PASS"

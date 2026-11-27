@@ -1,0 +1,53 @@
+module tovrin.project
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.control as Ctrl
+import std.bridges.claude_code
+import std.bridges.codex
+import tovrin.ratchet as Ratchet
+import tovrin.runner as Runner
+import tovrin.cex as Cex
+import tovrin.budgets as Budgets
+
+// The tovrin project, whole: load this module and the project's text is loaded.
+//
+//   1  who there is     roles; the runner and the replay are modules; no agent by name
+//   2  how a builder runs
+
+// ===== 1. Who there is ===========================================================================================
+// No agent is named in this text. The owner is seated by the installation; he seats `orch` (which is also the
+// `lead`), the looker, the clerk and each builder (`C.Seat`), and states each one's family (`R.State-Family`).
+// The runner is the module tovrin.runner; a counterexample is checked by the module tovrin.cex.
+
++R.Family("openai"). +R.Family("anthropic").
++H.Party("tovrin.project").
++Ratchet.Suite("proofs"). +Ratchet.Suite("cases").
+// `Runner.Worker-Mb` is not stated here: the runner states what one Agda worker held when it last measured it.
+
+// ===== 2. How a builder runs =====================================================================================
+// Every builder is railed. The runner's and the ratchet's denials are root arms, so they hold for every agent of
+// the project without being named here; the guards on files are the handlers below.
+Extend Fact R.Railed
+  Holds when H.Running-On(who, h, v) && Not(C.Role(who, "clerk")) && Not(C.Role(who, "looker"))
+
+// What judges, what is a test, and where a new file must be named.
++R.Test("_suite/**"). +R.Test("benchmark/**").
++R.One-Place("src/**").
+
+fn run(agent: H.Party) -> Program<Unit> {
+  if Exists h, v : H.Running-On(agent, h, v) && H.Lets(h, v, "tool_called", "deny") && H.Comes-To(agent, "tool_called") {
+    do R.with_rails(agent, B.with_commit_limit(agent, H.serve(agent)))
+  } else {
+    perform Fault("This agent's harness, as its session was started, cannot refuse a tool call, so the project's guards cannot hold for it.")
+  }
+}
+// What a builder's own connection asks for when its session is up (a run starts only by an Act, spec 8.8).
+Act Serve(agent: H.Party)
+  Conditioned by H.Running-On(agent, h, v)
+  Does {
+    do run(agent)
+  }
++B.Bucket("tovrin-commit"). +B.Commit-Bucket("tovrin-commit").     // its line limit is the owner's to set; none is stated

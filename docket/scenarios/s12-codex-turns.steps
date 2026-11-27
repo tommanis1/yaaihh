@@ -1,0 +1,77 @@
+# Scenario 11: words reach a Codex agent as turns (std.delivery, std.bridges.codex). Idle, what waits starts one
+# turn as one packet (CONTEXT, WRITE, RECONCILE); a burst of words during a turn is one packet at its end, never a
+# turn each; an interrupting word is steered into the running turn, except while Codex stands at its own approval
+# question, where no word goes in and no turn starts. The parties are scenario 11's. The stand-in answers each
+# turn started and each steer; a step with no `stand-in:` line before it shows that nothing went to the session.
+load ../std/hooks.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/delivery.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/agy.docket
+load s11-delivery-world.docket
+carries: Agy-Kick, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Measure, Model, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, TextOf
+# idle: a directive starts one turn, its packet in the three parts
+holds Idle(x1)
+stand-in: Codex-Start-Turn(x1, _) -> ()
+brain: Direct(brain, x1, "fix the parser first", 3) -> performed -> ended ()
+record has CONTEXT\nFirst: fix the parser first\nDirectives: fix the parser first\nWRITE\n(no messages)\nRECONCILE
+holds Directive-Given(x1, "fix the parser first")
+holds Woken(x1)
+# a burst while the turn is coming and while it runs: no turn more, nothing typed
+o1: Post(o1, x1, n1, "the lexer drops tabs", Normal) -> performed -> ended ()
+x1: Reach(x1, turn_begins) -> performed -> ended ()
+o1: Post(o1, x1, n2, "and the tests for it", Normal) -> performed -> ended ()
+o1: Assign(o1, x1, legend) -> performed -> ended ()
+holds Needs-Agent(x1, message)
+holds Needs-Agent(x1, item)
+# its own approval question: an interrupting word is not steered into it
+x1: Reach(x1, permission_asked) -> performed -> ended ()
+holds Asking(x1)
+o1: Post(o1, x1, n3, "do not touch main", Interrupt) -> performed -> ended ()
+holds Needs-Agent(x1, message)
+not In-Flight(x1, n3)
+# past the question, the word held back at it is steered in then, not left for the turn's end (N-1978 p5, point 3)
+stand-in: Codex-Steer(x1, _) -> ()
+x1: Reach(x1, tool_result) -> performed -> ended ()
+not Asking(x1)
+record has interrupting] [n3 from o1] do not touch main
+holds In-Flight(x1, n3)
+# past the question an interrupting word is steered in at once
+stand-in: Codex-Steer(x1, _) -> ()
+o1: Post(o1, x1, n4, "the build is red", Interrupt) -> performed -> ended ()
+record has interrupting] [n4 from o1] the build is red
+holds In-Flight(x1, n4)
+# the turn ends: what it was handed is read, and the whole burst is one packet, one turn
+stand-in: Codex-Start-Turn(x1, _) -> ()
+x1: Reach(x1, turn_end) -> performed -> ended ()
+record has Assigned: legend\nWRITE\n[n1 from o1] the lexer drops tabs\n[n2 from o1] and the tests for it\nRECONCILE
+not Unread(x1, n4, Interrupt)
+holds In-Flight(x1, n1)
+holds In-Flight(x1, n2)
+not Unread(x1, n3, Interrupt)
+holds Briefed(x1, legend)
+not Needs-Agent(x1, message)
+# a question asked in a turn that then fails: the question is over and the packet's words wait again
+x1: Reach(x1, turn_begins) -> performed -> ended ()
+x1: Reach(x1, permission_asked) -> performed -> ended ()
+x1: Reach(x1, overloaded) -> performed -> ended ()
+not Asking(x1)
+not In-Flight(x1, n1)
+holds Unread(x1, n1, Normal)
+holds Idle(x1)
+# the next word starts one turn with all of them
+stand-in: Codex-Start-Turn(x1, _) -> ()
+o1: Post(o1, x1, n5, "one more", Normal) -> performed -> ended ()
+record has [n1 from o1] the lexer drops tabs\n[n2 from o1] and the tests for it\n[n5 from o1] one more
+holds In-Flight(x1, n5)
+# x3 is delivered to and runs no session yet: no steer into nothing, the word waits (N-1978 p5, point 2)
+o1: Post(o1, x3, u2, "the build first", Interrupt) -> performed -> ended ()
+not In-Flight(x3, u2)
+# its session starts: what waited starts one turn
+stand-in: Codex-Start-Turn(x3, _) -> ()
+driver: Session-Started(x3, codex, 0.160.0) -> performed
+record has WRITE\n[u2 from o1] the build first\nRECONCILE
+holds In-Flight(x3, u2)

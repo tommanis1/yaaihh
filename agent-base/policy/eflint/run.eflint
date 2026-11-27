@@ -1,0 +1,257 @@
+// A ticket's run as acts, events and duties (one-interpreter.md section 4.3; N-568 part 5, the joint). Loaded by
+// coordd's joint (coordd src/joint.rs) into eflint-rs, beside the machine: with `run-acts both` the machine decides and
+// this answers the same lines, and a difference is a journal line. The yaaihh library (section 3), in eFLINT whole, not
+// the clingo dialect of policy/ (norms.rs reads only policy/*.eflint, never this folder; part 3's interpreter reads
+// this folder after the dialect's files). A project adds to it in its own policy/eflint/*.eflint with `Extend`, clause
+// by clause; it does not replace this file.
+//
+// What a person (or a model) does is an act with that actor. What the ticket's program or the clock does is an event:
+// nobody is asked, as today, until the owner answers who answers for what a program does (Q-572). What coordd reports
+// (a session took the words) is the driver's event `give`. A fact is here only if a condition reads it (section
+// 4.3: what no condition reads stays the driver's own).
+//
+// Who may: each act's base clause, what must always hold for it (the ticket exists, the halt stands, the ask is open),
+// is under `Conditioned by`, which narrows. Its `Holds when` is today's rule that the machine and coordd's own checks
+// decide who, bound by `acting(agent, ticket)`: the driver states the phrase's actor and ticket just before it and ends
+// the fact after, so eflint-rs derives the one instance asked and never every agent x ticket x number stated (consult-3,
+// N-568 p54, 1; p67; paper-research N-762: the joint must not cost seconds). The library's and a project's `Holds
+// when` clauses add to it, their `Conditioned by` narrow it.
+//
+// So `acting` and `acting-on` are the asker's to state, for a question as for a phrase: whoever asks "what may X do
+// on N-447" of this text (part 3's answers, a window's menu or greyed rows) states `acting(X, N-447)` first, and
+// `acting-on(NUMBER)` for each post or halt number in view, and ends them after. An answer asked without them is
+// empty, not "nobody may" (consult-3, N-580 p11). `acting` says nothing about the world: it stands in for an
+// eflint-rs `enabled` asked for a given actor and thing, and goes out of this text when eflint-rs has it
+// (consult-lead, N-568 p75; one-interpreter.md section 6). The joint sends it to the interpreter only; it is never
+// written to the record.
+//
+// The instances: the driver (the joint) states each agent, ticket, post number and step number before the first
+// phrase that names it, as eFLINT enables an act only for objects that hold; a post's number is the record's, stated
+// ahead of its `post`.
+//
+// `agent` (an agent's name) and `ticket` (a ticket's id, `N-447`) are the prelude's and tickets.eflint's: declared
+// there, not here (part 3 refuses a second declaration). The joint, while it loads this file alone, puts the two
+// declarations in front of it (consult-3, N-580 p6).
+
+// a post's number on its ticket, a step's number on its ticket
+Fact number Identified by Int
+Fact step Identified by Int
+
+Fact open Identified by ticket
+Fact closed Identified by ticket
+// the program reached its hole: someone drives by hand from here
+Fact rests Identified by ticket
+Fact ended Identified by ticket
+// a post nobody was handed yet, by its author: what `take-back` reads. A session taking it (the driver's `give`) or
+// its taking back ends it, so only the posts not yet handed are held
+Fact wrote Identified by ticket * number * agent
+// the phrase being asked: its actor and ticket, and the post or halt number it names, stated by the driver just
+// before it and ended after
+Fact acting Identified by agent * ticket
+Fact acting-on Identified by number
+// slow mode: halt NUMBER of the ticket holds back WHAT (`give`, `take`, `deliver`, `open`, `decide`) until it is let
+// through. `halt` is the machine's reading of the library's `slowed(scope)` and of the ticket's own switch until part
+// 3: the machine decides that a moment halts, and sends it here (consult-lead, N-568 p45, 8)
+Fact halted Identified by ticket * number * string
+
+// `await a c K` (semantics.tex): the step's worker holds the duty to answer it. Expired, lapsed, withdrawn, cancelled
+// or closed: it ends without an answer. Its deadline (`silent-after`, `lapse-after`) is the dialect's and coordd's
+// clock until the clock states how long a step has waited; then `Violated when` reads it here.
+Duty await
+  Holder agent
+  Claimant ticket
+  Related to step
+
+// What post NUMBER of the ticket asks the owner (marked by the watcher, design-two-systems section 16): AGENT1 (the
+// owner) owes AGENT2 (the asker) an answer. The asker withdraws it, the owner answers it or says it asks nothing.
+Duty asked
+  Holder agent1
+  Claimant agent2
+  Related to ticket, number
+
+// ---- the program's events ----
+
+Event owe
+  Related to agent, ticket, step
+  Creates await(agent, ticket, step)
+
+Event begin
+  Related to ticket
+  Creates open(ticket)
+
+Event rest
+  Related to ticket
+  Creates rests(ticket)
+
+// the step's duty ends with no answer: the program moved past it, or an edit withdrew it
+Event release
+  Related to agent, ticket, step
+  Terminates await(agent, ticket, step)
+
+// the step waited too long (`expired`): it is withdrawn and fails as Silent
+Event expire
+  Related to agent, ticket, step
+  Terminates await(agent, ticket, step)
+
+// the owner's step went on by its call's `default` (`lapse-after`); the answer that stands for his follows as `answer`
+Event lapse
+  Related to agent, ticket, step
+
+// the program goes on from its hole: the minder's answer there carried out. It stands in for an act of the minder's
+// (section 4.3, the hole) until the `shaped` line carries who gave it
+Event drive
+  Related to ticket
+  Terminates rests(ticket)
+
+// the ticket closes: every duty under it ends with it, and what was open of it (p9's table: `closed` ends every duty)
+Event close
+  Related to ticket
+  Creates closed(ticket)
+  Terminates open(ticket), rests(ticket)
+  Terminates (Foreach await : await When await.ticket == ticket)
+  Terminates (Foreach asked : asked When asked.ticket == ticket)
+  Terminates (Foreach halted : halted When halted.ticket == ticket)
+
+Event mark
+  Related to agent1, agent2, ticket, number
+  Creates asked(agent1, agent2, ticket, number)
+
+Event halt
+  Related to ticket, number, string
+  Creates halted(ticket, number, string)
+
+// ---- the driver's reports ----
+
+// a session took post NUMBER of the ticket (coordd's `given`). Section 5.1 makes it a `Physical` act of the driver; it
+// is an event here because eflint-rs gives a `Physical` `Holds when True`, which derives it for every agent x ticket x
+// number stated at every phrase
+Event give
+  Related to agent, ticket, number
+  Terminates (Foreach wrote : wrote When wrote.ticket == ticket && wrote.number == number)
+
+// a post told to the asker (post NUMBER wakes AGENT) answers what it asked before
+Event wake
+  Related to agent, ticket, number
+  Terminates (Foreach asked : asked When asked.ticket == ticket && asked.agent2 == agent && asked.number < number)
+
+// a step of the ticket given to the asker, its delivery showing the posts up to NUMBER: its asks up to there close
+Event step-given
+  Related to agent, ticket, number
+  Terminates (Foreach asked : asked When asked.ticket == ticket && asked.agent2 == agent && asked.number <= number)
+
+// a thread tied at post NUMBER of the ticket, typed to its writer AGENT or first waking it: an answer given in a
+// subthread, which closes what that post asked (the machine's `Subthread` closer). Whether it is typed to the writer is
+// the machine's reading of the tied thread, reported by the driver as `give` is
+Event subthread
+  Related to agent, ticket, number
+  Terminates (Foreach asked : asked When asked.ticket == ticket && asked.agent2 == agent && asked.number == number)
+
+// ---- the acts ----
+
+Act open-ticket
+  Actor agent
+  Related to ticket
+  Holds when acting(agent, ticket)
+  Conditioned by Not(open(ticket)) && Not(closed(ticket))
+  Creates open(ticket)
+
+// the post the record numbers next on a ticket, stated by the driver ahead of its `post` (the number is the record's)
+Fact next-post Identified by ticket * number
+
+// a later post by an ask's author closes what it asked (design-two-systems section 16, 4; the machine's closers)
+Act post
+  Actor agent
+  Related to ticket, number
+  Holds when acting(agent, ticket) && next-post(ticket, number)
+  Conditioned by open(ticket) || closed(ticket)
+  Creates wrote(ticket, number, agent)
+  Terminates next-post(ticket, number)
+  Terminates (Foreach asked : asked When asked.ticket == ticket && asked.agent2 == agent)
+
+// the answer taken for the step: only its worker gives it
+Act answer
+  Actor agent
+  Related to ticket, step
+  Holds when acting(agent, ticket) && await(agent, ticket, step)
+  Terminates await(agent, ticket, step)
+
+// a held step (section 4.3): the duty holds, and its answer waits for the owner's `approve` of the take it halted at
+Extend Act answer
+  Conditioned by Not(Exists halted : halted.ticket == ticket && halted.string == "take")
+
+// cancel, withdraw, edit, repair, rekind: who may is the dialect's `edit` (tickets.eflint, asked by coordd until part
+// 3). Kept as an act of its own only while the joint loads this file alone; with the dialect's file loaded first it is
+// `Extend Act edit` (consult-3, N-568 p54, 2)
+Act change
+  Actor agent
+  Related to ticket
+  Holds when acting(agent, ticket)
+  Conditioned by open(ticket) || closed(ticket)
+  Terminates rests(ticket)
+
+// the minder's answer at a hole undone: a ticket it closed rests again, open; an item reopened likewise
+Act undo
+  Actor agent
+  Related to ticket
+  Holds when acting(agent, ticket)
+  Conditioned by open(ticket) || closed(ticket)
+  Terminates closed(ticket), ended(ticket)
+  Creates open(ticket), rests(ticket)
+
+// `coord end`: a thread resting at its hole, not ended yet. Its asks of the owner end with it: an agent's end
+// withdraws its own, the owner's closes them (the machine refuses an agent's end while another agent's are open)
+Act end-thread
+  Actor agent
+  Related to ticket
+  Holds when acting(agent, ticket)
+  Conditioned by rests(ticket) && Not(ended(ticket))
+  Creates ended(ticket)
+  Terminates (Foreach asked : asked When asked.ticket == ticket)
+
+Act take-back
+  Actor agent
+  Related to ticket, number
+  Holds when acting(agent, ticket) && acting-on(number)
+  Conditioned by wrote(ticket, number, agent)
+  Terminates wrote(ticket, number, agent)
+
+// the asker withdraws its asks (or an agent above it: coordd's check)
+Act withdraw-asks
+  Actor agent
+  Related to ticket, number
+  Holds when acting(agent, ticket) && acting-on(number)
+  Conditioned by (Exists asked : asked.ticket == ticket && asked.number == number)
+  Terminates (Foreach asked : asked When asked.ticket == ticket && asked.number == number)
+
+// the owner's post that answers them (the card filled in), or his word that they ask nothing of him. A post may
+// answer a post whose asks have ended already (answered before, or withdrawn): the machine takes it as a post, and
+// it ends nothing then (research's record: 659 such posts)
+Act answer-asks
+  Actor agent
+  Related to ticket, number
+  Holds when acting(agent, ticket) && acting-on(number)
+  Conditioned by open(ticket) || closed(ticket)
+  Terminates (Foreach asked : asked When asked.ticket == ticket && asked.number == number)
+
+Act nothing-to-answer
+  Actor agent
+  Related to ticket, number
+  Holds when acting(agent, ticket) && acting-on(number)
+  Conditioned by (Exists asked : asked.ticket == ticket && asked.number == number)
+  Terminates (Foreach asked : asked When asked.ticket == ticket && asked.number == number)
+
+// letting a halt through, and changing what it will let through: who may is the library's (a role, as yaaihh.eflint's
+// `set-slow` has it), added as a `Holds when` or narrowed by a `Conditioned by`
+Act approve
+  Actor agent
+  Related to ticket, number
+  Holds when acting(agent, ticket) && acting-on(number)
+  Conditioned by (Exists halted : halted.ticket == ticket && halted.number == number)
+  Terminates (Foreach halted : halted When halted.ticket == ticket && halted.number == number)
+
+Act halt-edit
+  Actor agent
+  Related to ticket, number
+  Holds when acting(agent, ticket) && acting-on(number)
+  Conditioned by (Exists halted : halted.ticket == ticket && halted.number == number)
+.

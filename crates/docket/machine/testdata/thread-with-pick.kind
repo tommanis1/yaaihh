@@ -1,0 +1,74 @@
+// The owner's message (plan/design-two-systems.md, sections 3 and 16). Every message opens or joins a thread; there is
+// no one-off (§16, 3). TO is the agent written to; with none picked, whoever policy says fills lead (coordd fills it).
+// TYPED is whom the owner typed it to: [TO], or none when he picked nobody. NAMES are the @NAMEs in the words,
+// ADDRESSED whether there were any. FOLLOWS: the closed thread the words were written on (§16, item 10): closed stays
+// closed, and its words open this one, which follows it. A message naming others is a thread for sure; otherwise the
+// watcher's one call (intake) says whether the words belong on an open ticket or are a thread of their own. If that
+// call fails, coordd answers Thread.
+//
+// - Place(t): the words are posted on t as the owner's, typed to whom he typed them (base.kind's owner_post handler
+//   then says whom they wake).
+// - Thread: the words are this ticket's first post, naming TO and every @NAME; then it rests at the hole, a place for
+//   posts that nothing runs. An Edit fills the hole: `return Kept` ends it, its posts as they are.
+// - Unsure(ts): the owner picks among the tickets, or a thread of its own.
+//
+// agent_post: an agent's words landed on the thread (its turn's reply, its `coord post`) where the owner takes part
+// (the post is told to him, or he is on the thread: design part 9b; an agents' thread makes no model call). The
+// watcher's call `asks`
+// (asks.call) finds what they ask the owner, as passages of the words; `mark` puts them on the post, its text as
+// written. The thread is not quiet while this runs, so the minder is asked after, and is shown what the post asks.
+//
+// An agent's message (`coord msg NAME[,NAME] TEXT`, design part 9b): ADDRESSED is Sent(by), the sender; TO the first
+// it names, TYPED and NAMES all it names. Its words are this ticket's first post, by the sender, naming them (the
+// open's own post, as a note's was, with whom policy tells); it ends at once as Between: a place for posts that nothing runs, no hole, no minder, no intake. Whom a later post reaches is
+// the one rule for posts (machine.rs `unnamed_reach`, notify.eflint); the owner's words on it open a thread of his own
+// that follows it, as on any closed thread.
+//
+// result Kept: the thread is over (what was asked on it is done, or the owner let it go); its posts stay as they are.
+// result Moved(to): the owner's words belonged on ticket TO and were posted there; this thread holds nothing.
+// result OneOff: old threads only (a one-off, before §16); nothing returns it now.
+// result Between: an agents' thread (above); `coord show` says what it waits on, or quiet.
+/// the owner's message, or an agents' thread: its posts, and what they open
+kind thread from base
+  letter N
+  form to: Agent, typed: [Agent], names: [Agent], text: Text, addressed: Named | Unnamed | Sent(by: Agent), follows: Ticket?
+  result
+    Kept                  /// the thread is over; its posts stay as they are
+    | Moved(to: Ticket)   /// the owner's words belonged on ticket to and were posted there
+    | OneOff              /// old threads only: nothing returns it now
+    | Between             /// an agents' thread
+  pattern
+    match addressed {
+      Sent(by) => return Between
+      _ =>
+        v <- match addressed {
+          Named => return Thread
+          _ => step watcher intake(text, to)
+        };
+        match v {
+          Place(t) =>
+            _ <- post text on t as owner naming typed;
+            return Moved(t)
+          Thread =>
+            _ <- post text as owner naming to, names;
+            ...
+          Unsure(ts) =>
+            w <- step owner pick(text, ts);
+            match w {
+              Place(t) =>
+                _ <- post text on t as owner naming typed;
+                return Moved(t)
+              Thread =>
+                _ <- post text as owner naming to, names;
+                ...
+            }
+        }
+    }
+  when agent_post(p) where p.owner_on do
+    q <- step watcher asks(p.text, p.by);
+    match q {
+      Nothing => return none
+      Asks(marks) => mark p marks
+    }
+
+on owner_message(m) open thread(m.to, m.typed, m.names, m.text, m.addressed, m.follows)

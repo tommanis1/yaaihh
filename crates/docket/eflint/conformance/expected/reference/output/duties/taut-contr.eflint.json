@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "+string(\"Amy\")\nNew type tautology\n+tautology(string(\"Amy\"),string(\"Amy\"))\nviolations:\n  violated duty!: contradiction(string(\"Amy\"),string(\"Amy\"))\nNew type contradiction\n+contradiction(string(\"Amy\"),string(\"Amy\"))\n#4 > "
+ }
+}

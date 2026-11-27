@@ -1,0 +1,8 @@
+// Who holds the role `text-reader`, the read of a text change that is read first (kinds/text-change.kind's step,
+// which the decision `fills` gives to a running holder, given the change's writer and names; tickets.eflint): the
+// lead, as before the role (paper-research N-1446 p2888, p2894). A project's policy may give it to more agents and
+// rule on `fills` for it (`call.by`, among(N, I)). In a file of its own: a project's text-change.eflint in place of
+// agent-base's keeps it, and part 3's eFLINT text leaves it out by name (policy/eflint/text-reader.eflint's first
+// line), since no act reads it and that text does not write out `Extend Fact` (coordd policy/interp.rs).
+Extend Fact role
+  Derived from role(agent, "text-reader") When role(agent, "lead")

@@ -1,0 +1,10 @@
+Act foo
+    Actor string
+    Holds when True
+    Creates string(Foo)
+    Syncs with bar
+
+Act bar
+    Actor string
+    Holds when True
+    Creates string(Bar).

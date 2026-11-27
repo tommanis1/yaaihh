@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# codex-pin COORD: the pinned Codex for the coord whose folder is COORD, so its New agent lists Codex's models and its
+# agents run on Codex in every project, a new one too (the owner, N-2002: new projects showed no gpt- models).
+#
+# The coord's place for it is COORD/opt/codex: the one Codex bin/codex runs, and with it coordd's model list
+# (accounts/codex.rs) and codex-rpc. Here that place becomes a link to the machine's one copy, ~/agent-coord/opt/codex/
+# 0.160.0, fetched once as opencode-pin fetches opencode: Codex's own release package for linux x64 (the layout
+# Codex's standalone install keeps: bin/codex, codex-path, codex-resources) into a new empty folder beside it, the
+# archive checked against GitHub's digest for it and both binaries against the pinned sha256, nothing run, read-only,
+# SOURCE kept beside it. A coord whose place is there already is left as it is (the links older projects have).
+#
+# host-coordd start runs it for its coord, in the background (its log: COORD/codex-pin.log). The last line says what
+# was done; a failure, why, on stderr, and its exit code is not 0. CODEX_PIN_HOME (tests) is where the machine's copy
+# is kept instead of ~/agent-coord/opt.
+# Way back: rm COORD/opt/codex (a link) and, once no coord links to it, ~/agent-coord/opt/codex.
+set -euo pipefail
+# the pin: the Codex every project ran on 27 Nov (tovrin-dev's opt/codex-0.160.0, the same two binaries as this package)
+VERSION=0.160.0
+SHA256=12eb3e81114588aca3b7998f4f19e8997b056aca08e57a7ca7c8a3ec8c652aad
+HOST_SHA256=37cab1584302611e9936902219640ab5e7a79fcfccd2504c6e85ea8cb97d0e10
+ARCHIVE=codex-package-x86_64-unknown-linux-musl.tar.gz
+URL=https://github.com/openai/codex/releases/download/rust-v$VERSION/$ARCHIVE
+ARCHIVE_SHA256=4fcc47ab57f52ff75363951a8761146cd10c8288bd86fed45487dbb204a16b71
+
+fail() { echo "codex-pin: $*" >&2; exit 1; }
+[ $# = 1 ] || { echo "usage: codex-pin COORD" >&2; exit 2; }
+coord=$1
+[ -d "$coord" ] || fail "no coord folder $coord"
+place=$coord/opt/codex
+if [ -e "$place/bin/codex" ]; then
+  echo "codex-pin: $place is there already"
+  exit 0
+fi
+[ ! -e "$place" ] && [ ! -L "$place" ] || fail "$place is there but holds no bin/codex; it is left as it is"
+# the pinned package is linux x64's: on another machine it would link a Codex that cannot run
+arch=$(uname -m)
+[ "$arch" = x86_64 ] || fail "this machine is $arch, and the pinned Codex is for x86_64 only; nothing is fetched or linked"
+machine=${CODEX_PIN_HOME:-$HOME/agent-coord/opt}/codex/$VERSION
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+if [ ! -e "$machine/bin/codex" ]; then
+  parent=$(dirname "$machine")
+  mkdir -p "$parent"
+  new=$(mktemp -d "$parent/.fetch-$VERSION.XXXXXX")
+  trap 'chmod -R u+w "$new" 2>/dev/null || true; rm -rf "$new"' EXIT
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --output "$new/$ARCHIVE" "$URL" \
+    || fail "the fetch of $URL failed; nothing is kept"
+  got=$(sha "$new/$ARCHIVE")
+  [ "$got" = "$ARCHIVE_SHA256" ] || fail "$URL is not the release's asset (its sha256 is $got, not GitHub's digest $ARCHIVE_SHA256); nothing is kept"
+  tar -xzf "$new/$ARCHIVE" -C "$new" --no-same-owner || fail "$ARCHIVE does not unpack; nothing is kept"
+  rm "$new/$ARCHIVE"
+  for b in "codex $SHA256" "codex-code-mode-host $HOST_SHA256"; do
+    got=$(sha "$new/bin/${b% *}" 2>/dev/null || echo none)
+    [ "$got" = "${b#* }" ] || fail "the ${b% *} in $ARCHIVE is not the pinned one (its sha256 is $got, not ${b#* }); nothing is kept"
+  done
+  printf '%s  %s\n%s  %s\n' "$SHA256" bin/codex "$HOST_SHA256" bin/codex-code-mode-host >"$new/bin/codex.sha256"
+  printf 'codex v%s linux x64 (musl)\nfrom %s\nrelease digest sha256:%s (GitHub asset digest)\nfetched %s by codex-pin for %s; not run\n' \
+    "$VERSION" "$URL" "$ARCHIVE_SHA256" "$(date -u +%FT%TZ)" "$coord" >"$new/SOURCE"
+  chmod 0755 "$new"
+  chmod -R a-w "$new"
+  # another coord's start may have put it there meanwhile: then that one is taken, and this fetch dropped
+  if mv -T "$new" "$machine" 2>/dev/null; then
+    trap - EXIT
+  else
+    [ -e "$machine/bin/codex" ] || fail "cannot put the fetched codex at $machine"
+  fi
+fi
+
+got=$(sha "$machine/bin/codex")
+[ "$got" = "$SHA256" ] || fail "$machine/bin/codex is not the pinned codex (its sha256 is $got, not $SHA256); $place is not linked to it"
+mkdir -p "$coord/opt"
+ln -sT "$machine" "$place" || fail "cannot link $place to $machine"
+echo "codex-pin: $place is $machine"

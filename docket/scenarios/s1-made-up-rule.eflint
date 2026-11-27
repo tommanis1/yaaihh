@@ -1,0 +1,143 @@
+// Scenario 1. A casual remark of the owner's is turned into a rule by a Claude agent. The Codex looker catches it;
+// the writer is owed a scolding; the rule does not reach the other agent; the writer owes a retraction, and cannot
+// end that by its own word.
+// The rules of std.comms 2-3 and std.rails 2, by hand in the reference eFLINT that eflint-rs reads. Every query
+// must succeed.
+Fact party Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact family Identified by String
+Fact of-family Identified by party * family
+Fact other-family Identified by party * party'
+  Holds when (Exists family, family' : of-family(party, family) && of-family(party', family') && family != family')
+Fact railed Identified by party
+Fact verifier-module Identified by party
+Fact key Identified by String
+Fact node Identified by String
+Fact relation Identified by String
+Fact fault Identified by String
+Fact remedy Identified by String
+Fact seen Identified by party * key
+Fact spoken Identified by node * party
+Fact owner-said Identified by node * party
+Fact gone-over Identified by node
+Fact marked Identified by node * relation * key * party
+Fact key-of Identified by party * key
+Fact for-owner-inbox Identified by node
+Fact traced Identified by node
+Fact caught Identified by node * fault
+Fact owner-approved-rule Identified by node
+Fact taken-back Identified by node
+Fact retracted Identified by node
+Fact scold-owed Identified by party * node * remedy
+Fact lays-down Identified by node * party
+  Holds when spoken(node, party) && (Exists key, party' : marked(node, "lays down", key, party'))
+Fact made-up Identified by node * party
+  Holds when lays-down(node, party) && (Exists fault : caught(node, fault)) && Not(owner-approved-rule(node)) && Not(retracted(node))
+Fact for-agent-pull Identified by node * party
+  Holds when (Exists key, party' : marked(node, "for", key, party') && key-of(party, key)) && Not(for-owner-inbox(node))
+  Conditioned by Not(Exists party' : made-up(node, party'))
+  Conditioned by Not(Exists party' : lays-down(node, party') && railed(party') && Not(traced(node)))
+Fact may-trace Identified by party * party' * node
+  Holds when verifier-module(party) && role(party', "looker") && (Exists party'' : lays-down(node, party''))
+             && Not(Exists party'' : lays-down(node, party'') && Not(other-family(party', party'')))
+
+Duty owes-retraction
+  Holder party
+  Claimant party'
+  Related to node
+  Holds when made-up(node, party) && role(party', "owner")
+  Violated when (Exists node' : made-up(node', party) && node' != node)
+
+Event owner-says
+  Related to node, party
+  Creates owner-said(node, party)
+Act mark-passage                                        // the module records the clerk's mark
+  Actor party
+  Related to party', node, relation, key
+  Holds when party == party("std.comms") && role(party', "clerk") && Not(gone-over(node))
+             && (Exists party'' : spoken(node, party'') && seen(party'', key) && party'' != party')
+  Creates marked(node, relation, key, party')
+Act record-fault                                        // the module records the looker's finding
+  Actor party
+  Related to party', node, fault
+  Holds when may-trace(party, party', node)
+  Creates traced(node), caught(node, fault)
+Event scold-due
+  Related to party, node, remedy
+  Creates scold-owed(party, node, remedy)
+Act take-scolding
+  Actor party
+  Related to node
+  Holds when (Exists remedy : scold-owed(party, node, remedy))
+  Terminates scold-owed(party, node, remedy) When scold-owed(party, node, remedy)
+Act take-back-rule
+  Actor party
+  Related to node
+  Holds when made-up(node, party)
+  Creates taken-back(node)
+Act confirm-retraction
+  Actor party
+  Related to party', node
+  Holds when may-trace(party, party', node) && taken-back(node)
+  Creates retracted(node)
+Act approve-rule
+  Actor party
+  Related to node
+  Holds when role(party, "owner") && (Exists party' : lays-down(node, party'))
+  Creates owner-approved-rule(node), traced(node)
+.
++party("o1"). +party("w1"). +party("w2"). +party("cl1"). +party("lk1"). +party("lk2").
++party("std.comms"). +party("std.rails").
++role-name("owner"). +role-name("clerk"). +role-name("looker").
++role("o1", "owner"). +role("cl1", "clerk"). +role("lk1", "looker"). +role("lk2", "looker").
++family("anthropic"). +family("openai").
++of-family("w1", "anthropic"). +of-family("lk2", "anthropic"). +of-family("lk1", "openai").
++railed("w1"). +verifier-module("std.rails").
++key("k-worker"). +key("k-outline"). +key-of("w2", "k-worker").
++relation("for"). +relation("lays down").
++fault("more"). +remedy("He did not say that much. Take it back.").
++node("h1"). +node("n1"). +node("n2").
+
+// 1. He says something in passing; the agent writes a rule and passes it to the worker.
+owner-says("h1", "w1").                                      // "maybe keep the outline small for now"
++spoken("n1", "w1").                                         // "From now on no thread may have more than two levels."
++seen("w1", "k-worker"). +seen("w1", "k-outline").
+mark-passage("std.comms", "cl1", "n1", "for", "k-worker").
+mark-passage("std.comms", "cl1", "n1", "lays down", "k-outline").
+?lays-down("n1", "w1").
+?!for-agent-pull("n1", "w2").                               // not traced yet: it is nobody's rule
+
+// 2. Who may judge it.
+?!Enabled(record-fault("std.rails", "lk2", "n1", "more")).   // not a looker of the writer's own family
+?!Enabled(record-fault("lk1", "lk1", "n1", "more")). // a looker performs nothing itself
+?!Enabled(record-fault("w1", "lk1", "n1", "more")).        // nor can the writer record a finding
+
+// 3. Caught.
+record-fault("std.rails", "lk1", "n1", "more").
+scold-due("w1", "n1", "He did not say that much. Take it back.").
+?made-up("n1", "w1").
+?scold-owed("w1", "n1", "He did not say that much. Take it back.").
+?!for-agent-pull("n1", "w2").                               // blocked: it does not travel
+?owes-retraction("w1", "o1", "n1").
+?!Violated(owes-retraction("w1", "o1", "n1")).
+
+// 4. A second one while the first stands.
++spoken("n2", "w1").
+mark-passage("std.comms", "cl1", "n2", "lays down", "k-outline").
+record-fault("std.rails", "lk1", "n2", "more").
+?Violated(owes-retraction("w1", "o1", "n1")).
+
+// 5. The way out is not the writer's alone.
+take-scolding("w1", "n1").
+take-back-rule("w1", "n1").
+?made-up("n1", "w1").                                        // its own word does not end it
+?!Enabled(confirm-retraction("w1", "lk1", "n1")).
+confirm-retraction("std.rails", "lk1", "n1").
+?!made-up("n1", "w1").
+?!owes-retraction("w1", "o1", "n1").
+?for-agent-pull("n1", "w2").                                // an ordinary passage again
+
+// 6. Or the owner makes it his.
+approve-rule("o1", "n2").
+?!made-up("n2", "w1").

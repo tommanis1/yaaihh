@@ -1,0 +1,39 @@
+// A piece of the project's work (today's items, ids kept, three digits at least: I-001, I-143). TITLE as opened; NOTE its note in the vault. Who
+// works on it is said by `coord item start` (the `started` line); checks are opened under it (`coord ready --item`).
+// Its close is held by the lead (a `hold`: owed, never delivered, never Silent), and answered when the work is done.
+// An agent that starts it is asked first, before it changes anything, for what already does part of it (seek.call's
+// `seek`, the note as where; paper-research N-1396.p79, consult-3 p189): in the turn it starts it in, answered there
+// with `coord answer`, or, when that turn ends without its answer, once more after it, alone (delivery.kind's
+// `arrived` and `free`; consult-3 p280). Its answer stands on the item as its post, which the lead reads at the close.
+// His goal (N-1511 p47; paper-research N-1446 p2139, 3, p2255): an item a project's binding opens from his ask (ASK,
+// his post, at the ASKED ledger's first entry for it: research's kinds/goals.kind) is closed by its duties, never by
+// anyone's word: Done once the project's policy (policy/duties.eflint) owes none, BY the lines that met them; Broken
+// at the first one broken, with its line. Only Dropped is its lead's (`coord item drop`): what an `on` gives is its
+// event's alone (docket-machine syntax.rs `On`). An item opened by hand has no ASK and closes as before.
+/// a piece of the project's work, closed by its lead when the work is done, or his goal, closed by its duties
+kind item
+  letter I 3
+  drawn line   // a line of the outline where it split off (the kind says so, not a list of names: N-1446 p17)
+  form title: Text, note: Ref?, ask: Ref?
+  result Done(why: Text?, by: [Ref]?) | Broken(duty: Text?, line: Ref?) | Dropped(why: Text)
+  pattern
+    match ask {
+      none =>
+        // by hand, as before its goals: `close` as it was, so an item's program from before still checks
+        c <- hold role lead close(title, note);
+        match c {
+          Done(why) => return Done(why, none)
+          Dropped(why) => return Dropped(why)
+        }
+      p =>
+        hold role lead goal(title, p)
+          on duties(e) where e.goal == this and e.owed == [] => Done(none, e.by)
+          on duties(e) where e.goal == this and e.broken != none => Broken(e.broken.duty, e.broken.line)
+    }
+  when act(a) where a.is == "start" do
+    found <- step a.by seek(title, note);
+    w <- return a.by;
+    match found {
+      Extends(pieces) => post "Already does part of it, to extend: {{ pieces }}" on this as w
+      Nothing(searched) => post "Nothing does part of it yet. Searched: {{ searched }}" on this as w
+    }

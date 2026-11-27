@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type derived-type\nNew type enumerated-type\nNew type open-type\nNew type values\n+values(\"A\")\n+derived-type(values(\"A\"))\n+open-type(values(\"A\"))\nquery successful\n+enumerated-type(\"A\")\nquery successful\nquery successful\nquery successful\n#7 > "
+ }
+}

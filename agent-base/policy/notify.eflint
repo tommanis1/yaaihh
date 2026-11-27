@@ -1,0 +1,37 @@
+// Who hears of a post on a thread beside whom it names with @ (paper-research m1237, after N-6 and N-7 ran on as
+// two agents answered each other post after post). An agent's post informs everyone else on the thread, the owner
+// among them: it is there at their next turn, or when he opens the thread, and starts nothing and rings nothing, so the
+// thread falls quiet once each has answered. Naming with @ still wakes whom it names.
+// The owner is told only of a post that names him, or of a nameless one that answers a post of his its writer had not
+// answered (the owner, 16 Nov on N-101.p1260: "like why is this in my with you ... ah polcy problem yes susgest
+// sometingg better pelase"; paper-research N-101.p1285). Before, a post on any thread he took part in told him, and
+// team talk reached him.
+// A project says otherwise with its own policy/notify.eflint, which replaces this file.
+// The owner's post is not here: it is the event owner_post, and base.kind's handler says whom it wakes, by its @names,
+// by the watcher's route when several agents are on the ticket, or by the owner when route cannot tell (design §13).
+// Waking every agent on the thread, as a line here did, woke the ones the words were not for.
+// One rule for a post that names nobody (design part 9b), on the owner's threads, the agents' threads and the old
+// notes alike: the engine names the authors of the posts told to its writer there that the writer has not answered
+// (machine.rs `unanswered`: it needs the posts' history, which policy is not given), the owner among them; this file
+// informs everyone else on it.
+// An agent's post on an item informs whoever takes part in it, its workers among them (`coord item start`: coordd
+// supplies them as taking part), so it is in their digest at their next turn's start and wakes nobody (I-1480: "on
+// the structure" is having posted on that thread or owning that item; paper-research N-1481 p15).
+// When the owner archives a ticket (event "archived", tickets.eflint), whoever holds work at or under it is told once,
+// quietly: at its next turn, starting none. What they hold is not handed meanwhile, and comes again at Unarchive.
+// A ticket with no parent waiting that closes failed is told to the lead, whoever's ticket it is (paper-research N-101
+// p939): the engine asks `notify` with event "closed" only for such a ticket, and coordd gives `closed-failed` then.
+Act notify
+  Actor agent
+  Recipient agent
+  Related to ticket, event
+  Holds when event == "closed" and closed-failed(ticket) and role(recipient, "lead")
+
+Act inform
+  Actor agent
+  Recipient agent
+  Related to ticket, event
+  Holds when event == "post" and ticket-kind(ticket, "thread") and takes-part(recipient, ticket) and actor != "owner"
+  Holds when event == "post" and ticket-kind(ticket, "note") and takes-part(recipient, ticket) and actor != "owner"
+  Holds when event == "post" and ticket-kind(ticket, "item") and takes-part(recipient, ticket) and actor != "owner"
+  Holds when event == "archived" and works-under(recipient, ticket)

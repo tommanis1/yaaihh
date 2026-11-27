@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type letter\n+letter(\"A\")\n+letter(\"B\")\n+letter(\"C\")\nquery successful\nquery successful\nquery successful\n#6 > "
+ }
+}

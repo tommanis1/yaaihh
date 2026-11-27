@@ -1,0 +1,132 @@
+module yaaihh.project
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.control as Ctrl
+import std.adapt as A
+import std.bridges.claude_code
+import std.bridges.codex
+import std.bridges.opencode
+import std.bridges.agy
+import yaaihh.audit as Audit
+import yaaihh.train as Train
+import yaaihh.hygiene as Hygiene
+import yaaihh.brain as Brain
+import yaaihh.desk as Desk
+
+// The yaaihh project, whole: load this module and the project's text is loaded. It names who there is, how each
+// runs, and how words move.
+//
+//   1  who there is       roles and accounts; no agent by name
+//   2  manual mode        the default: one agent, turn by turn, nothing reaches it that he has not passed
+//   3  how words move     his words to an agent; an agent's words to another
+
+// ===== 1. Who there is ===========================================================================================
+// No agent is named in this text. The owner is seated by the installation; he seats every agent with a role
+// (`C.Seat`), states its family (`R.State-Family`) and puts it on an account (`Desk.Put-On-Account`). A profile is
+// his act too (`Brain.Unshackle`). The roles this project knows:
+//   assistant   writes his findings down (yaaihh.desk 4)
+//   front       the one agent that speaks to him; `lead` is whoever owes a finding its owner
+//   keeper      sizes, storage, the capture of proofs
+//   clerk, looker   the two readers (yaaihh.audit)
+
++H.Party("yaaihh.project").
++R.Reassigner("std.adapt").   // work refuted at its model's top effort goes to another family (std.adapt 4)
+Extend Fact C.May-Speak
+  Holds when C.Role(who, "front")
+
++Desk.Account("claude-code"). +Desk.Account("codex"). +Desk.Account("opencode-go"). +Desk.Account("agy").
++Desk.Offers("codex", "gpt-6.2-sol").                        +Desk.Project-Model("codex", "gpt-6.2-sol").
++Desk.Offers("opencode-go", "opencode-go/hy4-flash-free").   +Desk.Project-Model("opencode-go", "opencode-go/hy4-flash-free").
++Desk.Offers("agy", "gemini-3.8-flash").                     +Desk.Project-Model("agy", "gemini-3.8-flash").
++Desk.Repository("yaaihh"). +Desk.Repository("flavor"). +Desk.Repository("rune").
++B.Bucket("yaaihh-front").
+Extend Fact B.Bucket-Of
+  Holds when C.Role(agent, "front") && B.Bucket(bucket) && bucket == "yaaihh-front"
+
+// ===== 2. Manual mode ============================================================================================
+// The default. He works with one agent, turn by turn: a turn begins only by words handed to the agent, and in
+// manual mode no words from anybody but him are handed over until he has seen them. He may pass them as they are,
+// change them, or reject them. A rejection is real: nothing is delivered, the sender is told why, and the sender's
+// program stops there (`Ctrl.with_slow_mode`, `Stopped`).
+// It is a stored switch and not a line of this text, so that he can leave it and come back without a reload.
+
+Fact Auto()                                         // he switched manual mode off
+Act Go-Auto(owner: H.Party)
+  Conditioned by C.Role(owner, "owner")
+  Creates        Auto()
+Act Go-Manual(owner: H.Party)
+  Conditioned by C.Role(owner, "owner")
+  Terminates     Auto()
+
+Extend Fact Ctrl.Slow-Mode
+  Holds when H.Running-On(who, h, v) && Not(Auto()) && Not(Brain.Unshackled(who))
+
+// One agent at a time: in manual mode a second agent is not started while one runs. He starts as many as he
+// likes once he has gone auto.
+Fact Running(agent: H.Party)
+  Holds when H.Running-On(agent, h, v) && Not(C.Role(agent, "clerk")) && Not(C.Role(agent, "looker"))
+             && Not(Brain.Unshackled(agent))
+Act Start-Agent(owner: H.Party, agent: H.Party)
+  Conditioned by C.Role(owner, "owner") && (Auto() || Not(Exists a : Running(a) && a != agent))
+  Does {
+    models <- return (Foreach m : m When B.On-Model(agent, m));
+    match first(models) {
+      | Some(m) => {
+          at <- do A.session_model(agent, m);   // MODEL:EFFORT where std.adapt sets an effort the model takes
+          perform H.Start-Session(agent, Holds(H.Boxed(agent)), Holds(H.Runs-Unasked(agent)), Holds(H.Safety-Check-On(agent)), at)
+        }
+      | None    => perform H.Start-Session(agent, Holds(H.Boxed(agent)), Holds(H.Runs-Unasked(agent)), Holds(H.Safety-Check-On(agent)), "")
+    }
+  }
+// What the agent's own connection asks for when its session is up: its run, as itself, under the handlers the
+// project puts around it (yaaihh.brain 1). A run starts only by an Act (spec 8.8).
+Act Serve(agent: H.Party)
+  Conditioned by H.Running-On(agent, h, v)
+  Does {
+    do Brain.run(agent)
+  }
+
+// ===== 3. How words move =========================================================================================
+// One function hands words to a party, and the three handlers of std.control are around it:
+//   with_replay          a session made again under a new attempt reuses the readers' answers as a prefix
+//   with_slow_mode       in manual mode, what is not his own waits for him: pass, change, or reject
+//   with_fork_on_busy    his words to an agent that is in a turn, where he asked for copies, go to a copy of it
+fn hand(from: H.Party, to: H.Party, text: String, attempt: String) -> Program<Ctrl.Outcome<String>> {
+  do Ctrl.with_replay("yaaihh-desk", attempt,
+    Ctrl.with_slow_mode(
+      Ctrl.with_fork_on_busy(to, {
+        perform Ctrl.Deliver(from, to, text)
+      })))
+}
+
+
+// An agent's passage marked as for another agent. In manual mode it is put to him first; in auto it waits for the
+// other agent's pull (std.comms 4), and nothing is pushed.
+on C.Mark-Passage(_, _, node, "for", key) where C.Key-Of(to, key) && C.Spoken(node, from) && Not(Auto())
+                                                && C.For-Agent-Pull(node, to) do {
+  text <- perform C.TextOf("{{ node }}");
+  do hand(from, to, text, "{{ node }}")
+}
+
+// ===== 4. The walk ===============================================================================================
+// He walks through his window and says what is wrong. Each finding is written down by his assistant, in his words,
+// and is a piece of work like any other: assigned, with conditions written before the work, claimed, looked at.
+// Two things are particular to it. A finding is owed an owner at once. And it is UI work, so it is verified only
+// by a screenshot and the wire, taken on the release he runs (yaaihh.train).
+
+Fact Walk-Item(item: R.Artifact)
+Fact Found-In(item: R.Artifact, his: C.Node)        // his words it was written down from
+
+Act Note-Finding(by: H.Party, item: R.Artifact, his: C.Node)
+  Conditioned by C.Role(by, "assistant") && C.Owner-Said(his, to)
+  Creates        Walk-Item(item), Found-In(item, his), R.Given-By(item, by)
+
+Extend Fact Train.UI-Work
+  Holds when Walk-Item(target)
+
+Duty Owes-Walk-Owner(holder: H.Party, claimant: H.Party, item: R.Artifact)
+  Holds when Walk-Item(item) && C.Role(holder, "lead") && C.Role(claimant, "owner")
+             && Not(Exists w : R.Assigned(w, item))

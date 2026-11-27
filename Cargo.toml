@@ -1,0 +1,74 @@
+[workspace]
+resolver = "3"
+members = ["crates/cold-store", "crates/compute", "crates/coord-pty", "crates/coord-types", "crates/coordd", "crates/coordd-v2", "crates/coordd-v2-link", "crates/coordd-v2-wire", "crates/docket/eflint", "crates/docket/eval", "crates/docket/ls", "crates/docket/machine", "crates/docket/v2", "crates/drivers/agy", "crates/drivers/claude", "crates/drivers/clerk", "crates/drivers/codex", "crates/drivers/compute", "crates/drivers/hook-ir", "crates/drivers/host", "crates/drivers/opencode", "crates/drivers/session", "crates/drivers/turns", "crates/drivers/verify", "crates/drivers/window", "crates/machine-state", "crates/record-place", "crates/symbols", "crates/usage-rollup", "crates/usage/prices", "crates/usage/proxylog", "crates/yaaihh", "crates/yaaihh-e2e"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["full"] }
+toml = "1.1.3"
+libc = "0.2"
+base64 = "0.22"
+# the terminal emulator of an agent's terminal, in its holder (coord-pty) and in yaaihh
+vt100 = "0.18.1"
+
+# keep builds small: line tables only, no incremental cache for dependencies (disk ran full 7 Nov)
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+# The tests' profile (N-467, the owner: "10 minutes of tests is too much"): `cargo test --profile quick`. The libraries
+# at release's opt-level 3, compiled once in the runner's folder; our own crates, which every test run compiles again,
+# unoptimised. Measured warm through the runner (18 Nov): 63 s of compiling against release's 264 s (opt-level 1:
+# 255 s), the tests themselves 4.6 s for coordd's against 3.7 s. Releases still build with `--release`.
+[profile.quick]
+inherits = "release"
+opt-level = 0
+codegen-units = 256
+debug = false
+
+[profile.quick.package."*"]
+opt-level = 3
+codegen-units = 16
+
+# The usage rollup is measured as it ships: its queries' under-5-ms bar is a test of the optimised merge loop.
+[profile.quick.package.usage-rollup]
+opt-level = 3
+
+# The replay binaries' profile (paper-research N-1396 p533): only the `--no-run` coordd test binary that runs
+# `ticket::tests::a_coords_record_replays` on a copy of research's record:
+#   build-runner cargo --folder engine test --no-run --profile replay -p coordd   (binary: target/replay/deps/coordd-*)
+# As quick, with the engine's own crates (coordd, docket-machine, coord-types) at opt-level 3 too, since a replay's time
+# is spent in them. Measured 22 Nov on 886cebf7 (docket-core, N-1396): a head's compile 126 s on the tower against
+# quick's 43 s; the first 30,000 lines of research's record replayed in 4.4 s against release's 4.3 s and quick's 21.8 s.
+# Pieces' test lines stay on quick.
+# The window's timing profile (N-1793): as quick, with the window crate at opt-level 3 too, as a release builds it, so
+# a frame's time in a test is the time his window takes, not that of unoptimised view code:
+#   build-runner cargo --folder window test --profile perf -p yaaihh --lib with_you_typing -- --ignored --nocapture
+[profile.perf]
+inherits = "quick"
+
+[profile.perf.package.yaaihh]
+opt-level = 3
+
+[profile.replay]
+inherits = "quick"
+
+[profile.replay.package.coordd]
+opt-level = 3
+
+[profile.replay.package.docket-machine]
+opt-level = 3
+
+[profile.replay.package.coord-types]
+opt-level = 3
+
+# eFLINT's reader (crates/eflint, the incremental one): every line of a record goes through it, and its tests time it
+# and run the reference's files, so it is optimised as the libraries are. coordd's eflint-rs 0.1.0 is a library already.
+[profile.quick.package."eflint-rs@0.2.0"]
+opt-level = 3
+codegen-units = 16

@@ -1,0 +1,40 @@
+// The owner's typed words (kinds/words.kind, N-487): his three numbers (N-481 p43: "sure", "yes just suggest if its off
+// you will heasr from me", "good lets do it"). The `//` line above each rule is the why its decision gives.
+
+// How long `look` waits for him before his words go on with the certain fixes.
++lapse-after("look", 30).
+
+// His posts are held together for 15 s from his first, then go as one burst to the thread's holder, which may split
+// them; "Send now" lets them go at once. His words: "would be better if i hold them for 15s by default and ask a
+// docket program to split them" (N-1445 p9). No lapse-at-most: his typing does not extend it (he did not ask for that).
++lapse-after("gather", 15).
+
+Fact worth-cleaning-option Identified by String
++worth-cleaning-option("Clean").
++worth-cleaning-option("Send").
+
+Decision worth-cleaning
+  Options worth-cleaning-option
+
+// Below 12 of Harper's marks per 100 words, the words go with the certain fixes only.
+Prefer for worth-cleaning:
+  option == "Send" > option == "Clean"
+
+// 12 or more of Harper's marks per 100 words: worth one cleaning call.
+Only for worth-cleaning When call.per100 >= 12:
+  option == "Clean"
+
+Fact how-many-option Identified by String
++how-many-option("Some").
++how-many-option("TooMany").
+
+Decision how-many
+  Options how-many-option
+
+// One doubt, or fewer than 15 in 100 words: shown to him under the box.
+Prefer for how-many:
+  option == "Some" > option == "TooMany"
+
+// Too many to show him, "depens out of total too eh" (the owner, N-481 p45): 2 or more doubts and 15 or more per 100 words.
+Only for how-many When call.doubts-count >= 2 and call.per100 >= 15:
+  option == "TooMany"

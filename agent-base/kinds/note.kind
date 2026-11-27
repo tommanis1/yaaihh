@@ -1,0 +1,16 @@
+// An item's note put onto the line (N-101 post 406; the joint proposal's J, N-101 post 357). Where a project's notes lie
+// in one of its repositories and it has a line, `coord item open` makes the note a commit on the line's head (branch
+// note/ID, items.rs `item_opened`) and opens this under the item: the runner takes it as any hand-in, so the runner stays
+// the one way onto the line. While the runner is down the step waits for it. Red (it could not go onto the line): raised,
+// and the note stays on its branch.
+/// an item's note put onto the line by the runner
+kind note
+  form commit: Ref
+  result Ref
+  raises NotOnLine
+  pattern
+    v <- step runner hand_in(commit);
+    match v {
+      OnLine(top) => return top
+      Red(errors) => raise NotOnLine(errors)
+    }

@@ -1,0 +1,253 @@
+module std.budgets
+
+import std.hooks as H
+import std.comms as C
+
+// First-class multi-dimensional budgets & incentives:
+// (tokens, usd_cents, wall_ms, ram_mb, repo_mb, commit_lines, owner_clicks)
+//
+//   1  the ledger       buckets, limits, what was spent; Spend, the agent's act; Charge and with_budget
+//   2  metering         passive: tokens and money for each harness from its own usage lines; the burn rate
+//   3  gauges           megabytes of a tree, lines of a commit, files of a kind: measured by a command
+//   4  memory           one ledger for the machine: a heavy job reserves before it starts
+//   5  storage          where a thing is kept, how long, and what takes the space
+//
+// Nothing here is capped at "N times". A limit bounds cost, and past it the thing waits on the owner.
+
+// ===== 1. The ledger =============================================================================================
+
+Fact Bucket    Identified by String
+Fact Dimension Identified by String
+
+// A limit a text states is a default: a line of a text is not stored, and no act ends it (spec 5.5). A limit set
+// by an act stands before it, so the owner can raise one a project stated. `Cap` is the limit in force.
+Fact Limit(bucket: Bucket, dim: Dimension, max_val: Int)
+Fact Limit-Set(bucket: Bucket, dim: Dimension, max_val: Int)
+Fact Cap(bucket: Bucket, dim: Dimension, max_val: Int)
+  Holds when Limit-Set(bucket, dim, max_val)
+  Holds when Limit(bucket, dim, max_val) && Not(Exists s : Limit-Set(bucket, dim, s))
+Fact Carte-Blanche(bucket: Bucket)
+
+Fact Spent(bucket: Bucket, dim: Dimension, entry: Int, delta: Int)
+Fact Total(bucket: Bucket, dim: Dimension, sum: Int)
+  Holds when Bucket(bucket) && Dimension(dim)
+             && sum == Sum(Foreach e, d : d When Spent(bucket, dim, e, d))
+Fact Entries(bucket: Bucket, dim: Dimension, n: Int)
+  Holds when Bucket(bucket) && Dimension(dim) && n == Count(Foreach e, d : e When Spent(bucket, dim, e, d))
+
+Fact Over-Budget(bucket: Bucket, dim: Dimension)
+  Holds when Cap(bucket, dim, m) && Total(bucket, dim, s) && s > m && Not(Carte-Blanche(bucket))
+// Would this spend take it over? Asked before the spend, so the last spend under the limit is not the one that
+// silently passes it.
+Fact Room(bucket: Bucket, dim: Dimension, left: Int)
+  Holds when Cap(bucket, dim, m) && Total(bucket, dim, s) && left == m - s
+
+type BudgetDecision = Granted(new_limit: Int) | Denied(reason: String)
+type Result<T>      = Ok(value: T) | Err(reason: String)
+
+// `Charge(dim: String, n: Int)` is the engine's (spec 10): it performs it after each answer a driver gives, once
+// for each dimension that driver measures, in the run that asked. No program performs it, and a driver knows no
+// bucket: the bucket is the argument of `with_budget`.
+Effect Request-Budget(bucket: Bucket, dim: Dimension, needed: Int) -> BudgetDecision
+
+// What was charged is recorded whatever the limit says: the cost has already been paid. The limit decides whether
+// the run goes on, not whether the ledger is true. A cost is never negative, and the party whose costs a bucket holds
+// records none into it: it may not write its own ledger down.
+Fact Metered(bucket: Bucket, party: H.Party)
+Act Record-Spend(actor: H.Party, bucket: Bucket, dim: Dimension, delta: Int)
+  Conditioned by Holds(bucket) && Holds(dim) && delta >= 0 && Not(Metered(bucket, actor))
+  Creates        Spent(bucket, dim, n + 1, delta) When Entries(bucket, dim, n)
+
+// Explicit Act #2 of std.comms' three: an agent says what it is about to spend, before it spends it, for a cost
+// no driver measures (a job's memory, a tree's megabytes, a click of his). It is refused when it would pass the
+// limit, so a refused Spend is a refused cost and not a note about one.
+Act Spend(actor: H.Party, bucket: Bucket, dim: Dimension, delta: Int)
+  Conditioned by delta >= 0 && (Carte-Blanche(bucket) || Not(Exists left : Room(bucket, dim, left) && delta > left))
+  Creates        Spent(bucket, dim, n + 1, delta) When Entries(bucket, dim, n)
+
+Act Raise-Limit(owner: H.Party, bucket: Bucket, dim: Dimension, new_max: Int)
+  Conditioned by C.Role(owner, "owner")
+  Terminates     Limit-Set(bucket, dim, m) When Limit-Set(bucket, dim, m)
+  Creates        Limit-Set(bucket, dim, new_max)
+Act Grant-Carte-Blanche(owner: H.Party, bucket: Bucket)
+  Conditioned by C.Role(owner, "owner")
+  Creates        Carte-Blanche(bucket)
+
+// Composable budget enforcement handler: zero scattered `if tokens > max` checks in engine.
+// Every cost measured inside `p` is recorded against the bucket; over the limit, the owner is asked, and the rest
+// of `p` runs only if he gives it room.
+fn with_budget<T>(bucket: Bucket, p: Program<T>) -> Program<Result<T>> {
+  handle do p with {
+    return x => return Ok(x)
+    | Charge(dim, n), k => {
+        Record-Spend(self, bucket, Dimension(dim), n);
+        if Over-Budget(bucket, Dimension(dim)) {
+          Record-Spend(self, bucket, "owner_clicks", 1);
+          ans <- perform Request-Budget(bucket, Dimension(dim), n);
+          match ans {
+            | Granted(new_lim) => resume k(())
+            | Denied(why)      => return Err(why) // drops k cleanly
+          }
+        } else {
+          resume k(())
+        }
+      }
+  }
+}
+
++Dimension("tokens"). +Dimension("usd_cents"). +Dimension("wall_ms").
++Dimension("ram_mb"). +Dimension("repo_mb"). +Dimension("commit_lines").
++Dimension("storage_gb"). +Dimension("md_files"). +Dimension("owner_clicks").
+
+// ===== 2. Metering ===============================================================================================
+// Passive: it reads what a bridge writes anyway. It asks nothing of an agent, delays nothing and refuses nothing.
+// A harness says what a turn used, in its own kinds; a kind it does not report is not written, because "none
+// reported" is not zero.
+
+Fact Kind Identified by String
++Kind("input"). +Kind("cached_read"). +Kind("cache_write"). +Kind("output"). +Kind("reasoning").
+Fact Reports-Kind(harness: H.Harness, version: H.Version, kind: Kind)     // a bridge's text
+Fact Used(turn: C.Node, agent: H.Party, kind: Kind, tokens: Int, minute: Int)
+
+// What a token costs is the owner's text: for a model and a kind, hundredths of a cent for each thousand tokens.
+// A model with no rate is not free: it is `Unpriced`, and shows as such.
+Fact On-Model(agent: H.Party, model: String)
+Fact Rate(model: String, kind: Kind, per_thousand: Int)
+Fact Unpriced(agent: H.Party)
+  Holds when On-Model(agent, m) && Not(Exists k, r : Rate(m, k, r))
+Fact Bucket-Of(agent: H.Party, bucket: Bucket)      // where an agent's own use is charged
+
+Event Usage(agent: H.Party, turn: C.Node, kind: Kind, tokens: Int, minute: Int)   // a bridge's line, for each kind reported
+  Creates Used(turn, agent, kind, tokens, minute)
+
+// Tokens reach the ledger as the engine's `Charge("tokens", n)`, through `with_budget`. Money is a cost no driver
+// measures: it is worked out here from the kinds and the rates, and recorded by this module's own act (spec 10).
++H.Party("std.budgets").
+on Usage(agent, _, kind, tokens, _) where Bucket-Of(agent, b) && On-Model(agent, m) && Rate(m, kind, r) && r > 0 do {
+  Record-Spend(self, b, "usd_cents", tokens * r / 100000)
+}
+
+// The burn rate: tokens a minute, over the last minutes the project names.
+Fact Now(minute: Int)
+Fact Burn-Window(minutes: Int)
+Event Tick(minute: Int)                             // the clock driver's line, once a minute
+  Terminates Now(m) When Now(m)
+  Creates    Now(minute)
+Fact Burn-Limit(agent: H.Party, per_minute: Int)
+// Over its burn limit now; std.control's slow mode reads this. Written as a product, with no division: a rule's
+// head is worked out before its condition, so a rate divided by the window would divide by every number there is.
+Fact Burning(agent: H.Party)
+  Holds when Now(now) && Burn-Window(w) && Burn-Limit(agent, l)
+             && Sum(Foreach t, k, n, m : n When Used(t, agent, k, n, m) && m > now - w) > l * w
+
+// ===== 3. Gauges =================================================================================================
+// A megabyte, a line and a file are measured by a command, which prints one number. Which command is the
+// project's text. A measurement sets what the bucket has spent in that dimension; it does not add to it.
+
+Fact Gauge(dim: Dimension, command: String)         // the project's
+Fact Measures(bucket: Bucket, what: String)         // the project's: the tree, as a glob, that a bucket is about
+Fact Measured(bucket: Bucket, dim: Dimension, value: Int)
+
+Effect Command(line: String) -> String              // a driver's
+Effect Measure(line: String) -> Int                 // a driver's: a command that prints one number
+Event Measurement(bucket: Bucket, dim: Dimension, value: Int)
+  Terminates Measured(bucket, dim, v) When Measured(bucket, dim, v)
+           , Spent(bucket, dim, e, d) When Spent(bucket, dim, e, d)
+  Creates    Measured(bucket, dim, value)
+           , Spent(bucket, dim, 1, value)
+
+// `Measurement` is this module's Event, so a project measures by calling this function (spec 8.2).
+fn measure(bucket: Bucket, dim: Dimension) -> Program<Unit> {
+  par c in (Foreach c : c When Gauge(dim, c)) {
+    par w in (Foreach w : w When Measures(bucket, w)) {
+      value <- perform Measure("{{ c }} {{ w }}");
+      Measurement(bucket, dim, value)
+    }
+  };
+  return ()
+}
+
+// The commit guard: a commit over the line limit, or made while a measured tree is over its limit, is denied with
+// what to do. It sees what a command wrote, which the file guards of std.rails do not.
+Fact Commit-Bucket(bucket: Bucket)                  // the project's: the bucket whose commit_lines limit is the rule
+fn with_commit_limit<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, "tool_called", payload), k where who == agent => {
+        use <- perform H.Tool-Use(who, payload);
+        if use.tool == "command" && matches_glob(use.command, "git commit*") {
+          lines <- perform Measure("git diff --cached --numstat | awk '{ s += $1 + $2 } END { print s + 0 }'");
+          if Exists b, m : Commit-Bucket(b) && Cap(b, "commit_lines", m) && lines > m {
+            resume k(H.Deny("This commit is over the line limit. Split it into commits that each do one thing."))
+          } else { if Exists b : Over-Budget(b, "repo_mb") || Over-Budget(b, "md_files") {
+            resume k(H.Deny("A tree of files is over its size limit. Say what can go, or ask him for room."))
+          } else {
+            answer <- perform H.Hook(who, "tool_called", payload);
+            resume k(answer)
+          } }
+        } else {
+          answer <- perform H.Hook(who, "tool_called", payload);
+          resume k(answer)
+        }
+      }
+  }
+}
+
+// ===== 4. Memory =================================================================================================
+// One ledger for the machine, read by every project on it. A job that holds much memory reserves it first with
+// `Reserve`; the reservation is given back by `Job-Ended`. A reservation
+// that would pass the machine's limit is refused, so the job waits its turn. Nothing is killed to make room.
+
+Fact Machine(bucket: Bucket)
+Fact Reserved(job: String, bucket: Bucket, mb: Int)
+Act Reserve(actor: H.Party, job: String, bucket: Bucket, mb: Int)
+  Conditioned by Machine(bucket) && Not(Exists m2 : Reserved(job, bucket, m2))
+                 && Cap(bucket, "ram_mb", max)
+                 && Sum(Foreach j, m : m When Reserved(j, bucket, m)) + mb <= max
+  Creates        Reserved(job, bucket, mb)
+Event Job-Ended(job: String)
+  Terminates Reserved(job, b, m) When Reserved(job, b, m)
+// An Event is performed only by text of the module that declares it, or by a driver (spec 8.2). A module that
+// runs jobs gives its reservation back through this function.
+fn job_ended(job: String) -> Program<Unit> {
+  Job-Ended(job)
+}
+
+// ===== 5. Storage ================================================================================================
+// One thing for where what agents make is kept: a session's files, a worktree, a build folder, a record. Each is
+// a key, in one store, with a size and an age. The project says how long each sort stays where. What is due moves
+// by itself to the next colder store. Nothing is deleted except by the owner. `Takes` is what his window shows
+// first: the keys by size, so he sees what holds the space before he decides anything.
+
+Fact Store Identified by String                     // hot, and the colder ones the project names: a disk, a tape, a drive
+Fact Sort  Identified by String                     // session, worktree, build, record
+Fact Kept(key: C.Key, sort: Sort, store: Store)
+Fact Takes(key: C.Key, mb: Int)                     // the storage driver's measurement
+Fact Aged(key: C.Key, days: Int)                    // since it was last used
+Fact Stays(sort: Sort, store: Store, days: Int)     // the project's: how long a sort stays in a store
+Fact Colder(store: Store, next: Store)              // the project's: where it goes next
+Fact Mover(store: Store, next: Store, command: String)
+
+Fact Due(key: C.Key, next: Store)
+  Holds when Kept(key, s, st) && Aged(key, d) && Stays(s, st, max) && d > max && Colder(st, next)
+
+Event Stored(key: C.Key, sort: Sort, store: Store)
+  Terminates Kept(key, sort, st) When Kept(key, sort, st)
+  Creates    Kept(key, sort, store)
+Event Sized(key: C.Key, mb: Int, days: Int)         // the storage driver's line, once a day for each key
+  Terminates Takes(key, m) When Takes(key, m)
+           , Aged(key, d) When Aged(key, d)
+  Creates    Takes(key, mb), Aged(key, days)
+
+on Sized(key, _, _) where Exists next : Due(key, next) do {
+  moves <- return (Foreach s, st, next, c : Mover(st, next, c) When Kept(key, s, st) && Due(key, next) && Mover(st, next, c));
+  par m in moves {
+    perform Command("{{ m.command }} {{ key }}");
+    par s in (Foreach s : s When Kept(key, s, m.store)) { Stored(key, s, m.next) }
+  }
+}
+
+Act Delete-Stored(owner: H.Party, key: C.Key)       // only he deletes
+  Conditioned by C.Role(owner, "owner") && Kept(key, s, st)
+  Terminates     Kept(key, s, st) When Kept(key, s, st)
+               , Takes(key, m) When Takes(key, m)

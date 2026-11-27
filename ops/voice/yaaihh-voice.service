@@ -1,0 +1,19 @@
+[Unit]
+Description=yaaihh-voice: speech on the GPU for yaaihh, on the tailnet only (ops/voice/worker.py)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+# install.sh writes the checkout's ops/voice, the venv and the config folder in place of @HERE@, @VENV@ and @CONF@
+WorkingDirectory=@HERE@
+ExecStart=@VENV@/bin/python worker.py @CONF@/config.toml
+Environment=HF_HOME=%h/.cache/yaaihh-voice
+Restart=on-failure
+RestartSec=5
+# its sound stays in memory: no core files, nothing written but the model cache
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

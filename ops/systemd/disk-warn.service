@@ -1,0 +1,6 @@
+[Unit]
+Description=disk-warn: mail the owner (and orch) when free space on / runs low
+
+[Service]
+Type=oneshot
+ExecStart=%h/Documents/papers/soft-swarm/ops/systemd/disk-warn

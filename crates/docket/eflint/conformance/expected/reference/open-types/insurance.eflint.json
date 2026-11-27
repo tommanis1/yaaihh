@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type duty-to-reimburse\nNew type insurer\nNew type medicine\nNew type patient\nNew type pharmacy\nNew type receipt\nNew type reimburse\nNew type request-reimbursement\n#2 > "
+ }
+}

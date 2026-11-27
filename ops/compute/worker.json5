@@ -1,0 +1,62 @@
+// A stateless NativeLink worker that dials out to the scheduler and runs each action through sandbox.sh; rendered by nl.sh.
+{
+  stores: [
+    {
+      name: "SERVER_CAS",
+      grpc: {
+        instance_name: "main",
+        endpoints: [{ address: "${COMPUTE_SERVER}" }], // unless COMPUTE_TLS_DIR
+        endpoints: [{ address: "${COMPUTE_SERVER}", tls_config: { ca_file: "${COMPUTE_TLS_DIR}/ca.pem", cert_file: "${COMPUTE_TLS_DIR}/cert.pem", key_file: "${COMPUTE_TLS_DIR}/key.pem" } }], // when COMPUTE_TLS_DIR
+        store_type: "cas",
+      },
+    },
+    {
+      name: "SERVER_AC",
+      grpc: {
+        instance_name: "main",
+        endpoints: [{ address: "${COMPUTE_SERVER}" }], // unless COMPUTE_TLS_DIR
+        endpoints: [{ address: "${COMPUTE_SERVER}", tls_config: { ca_file: "${COMPUTE_TLS_DIR}/ca.pem", cert_file: "${COMPUTE_TLS_DIR}/cert.pem", key_file: "${COMPUTE_TLS_DIR}/key.pem" } }], // when COMPUTE_TLS_DIR
+        store_type: "ac",
+      },
+    },
+    {
+      name: "WORKER_CAS",
+      fast_slow: {
+        fast: {
+          filesystem: {
+            content_path: "${COMPUTE_STATE}/worker-cas",
+            temp_path: "${COMPUTE_STATE}/tmp-worker-cas",
+            eviction_policy: { max_bytes: ${COMPUTE_WORKER_CAS_BYTES} },
+          },
+        },
+        slow: { ref_store: { name: "SERVER_CAS" } },
+      },
+    },
+  ],
+  workers: [
+    {
+      local: {
+        name: "${COMPUTE_WORKER_NAME}",
+        worker_api_endpoint: { uri: "${COMPUTE_SCHEDULER}" }, // unless COMPUTE_TLS_DIR
+        worker_api_endpoint: { uri: "${COMPUTE_SCHEDULER}", tls_config: { ca_file: "${COMPUTE_TLS_DIR}/ca.pem", cert_file: "${COMPUTE_TLS_DIR}/cert.pem", key_file: "${COMPUTE_TLS_DIR}/key.pem" } }, // when COMPUTE_TLS_DIR
+        cas_fast_slow_store: "WORKER_CAS",
+        upload_action_result: { ac_store: "SERVER_AC" },
+        work_directory: "${COMPUTE_STATE}/work",
+        entrypoint: "${COMPUTE_DIR}/sandbox.sh",
+        additional_environment: {
+          COMPUTE_SANDBOX: { value: "${COMPUTE_SANDBOX}" },
+          COMPUTE_IMAGE: { property: "container-image" },
+          COMPUTE_NETWORK: { property: "network" },
+        },
+        platform_properties: {
+          sandbox: { values: ["${COMPUTE_SANDBOX}"] },
+          network: { values: ["off", "on"] }, // a property the scheduler places by is one the worker must name
+          "container-image": { values: [""] },
+          cpu_count: { values: ["${COMPUTE_CPUS}"] },
+          memory_kb: { values: ["${COMPUTE_MEMORY_KB}"] },
+        },
+      },
+    },
+  ],
+  servers: [],
+}

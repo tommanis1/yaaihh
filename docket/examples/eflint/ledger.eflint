@@ -1,0 +1,88 @@
+// std.budgets 1, by hand in the reference eFLINT that eflint-rs reads. A name ending in -f is the rule as the
+// foundation (4b219c61b) has it. Every query below must succeed.
+Fact party Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact bucket Identified by String
+Fact dimension Identified by String
+Fact amount Identified by Int
+Fact entry Identified by Int
+Fact limit Identified by bucket * dimension * amount
+Fact carte-blanche Identified by bucket
+
+// The foundation: one fact for each spend, holding the spend's own size.
+Fact spent-f Identified by bucket * dimension * amount
+Fact over-budget-f Identified by bucket * dimension
+  Holds when (Exists amount, amount' : limit(bucket, dimension, amount) && spent-f(bucket, dimension, amount') && amount' > amount)
+             && Not(carte-blanche(bucket))
+Act record-spend-f
+  Actor party
+  Related to bucket, dimension, amount
+  Holds when Not(over-budget-f(bucket, dimension))
+  Creates spent-f(bucket, dimension, amount)
+Act raise-limit-f
+  Actor party
+  Related to bucket, dimension, amount
+  Holds when role(party, "owner")
+  Creates limit(bucket, dimension, amount)
+
+// Now: a spend is an entry with its own number, and what counts is the sum.
+Fact spent Identified by bucket * dimension * entry * amount
+Fact over-budget Identified by bucket * dimension
+  Holds when (Exists amount : limit(bucket, dimension, amount)
+              && Sum(Foreach spent : spent.amount When spent.bucket == bucket && spent.dimension == dimension) > amount)
+             && Not(carte-blanche(bucket))
+Act record-spend                                        // what the engine charged: recorded whatever the limit says
+  Actor party
+  Related to bucket, dimension, entry, amount
+  Holds when True
+  Creates spent(bucket, dimension, entry, amount)
+Act spend                                               // what a party is about to spend: refused when it would pass the limit
+  Actor party
+  Related to bucket, dimension, entry, amount
+  Holds when carte-blanche(bucket)
+             || Not(Exists amount' : limit(bucket, dimension, amount')
+                    && Sum(Foreach spent : spent.amount When spent.bucket == bucket && spent.dimension == dimension) + amount > amount')
+  Creates spent(bucket, dimension, entry, amount)
+Act raise-limit
+  Actor party
+  Related to bucket, dimension, amount
+  Holds when role(party, "owner")
+  Terminates limit(bucket, dimension, amount') When limit(bucket, dimension, amount')
+  Creates limit(bucket, dimension, amount)
+.
++party("t"). +party("a"). +role-name("owner"). +role("t", "owner").
++bucket("f"). +bucket("n"). +dimension("tokens").
++amount(1). +amount(40). +amount(100). +amount(150). +amount(200). +entry(1). +entry(2). +entry(3). +entry(4).
+
+// 1. The foundation: 4 x 40 against a limit of 100.
++limit("f", "tokens", 100).
+record-spend-f("a", "f", "tokens", 40).
+record-spend-f("a", "f", "tokens", 40).
+record-spend-f("a", "f", "tokens", 40).
+record-spend-f("a", "f", "tokens", 40).
+?!over-budget-f("f", "tokens").                                 // 160 spent, and it is not over: only one fact of 40 exists
+?Enabled(record-spend-f("a", "f", "tokens", 40)).               // and it can go on for ever
+
+// 2. Now: the third 40 is refused before it is spent; a cost already paid is recorded and shows as over.
++limit("n", "tokens", 100).
+spend("a", "n", "tokens", 1, 40).
+spend("a", "n", "tokens", 2, 40).
+?!over-budget("n", "tokens").
+?!Enabled(spend("a", "n", "tokens", 3, 40)).                    // 120 would pass 100
+?Enabled(spend("a", "n", "tokens", 3, 1)).                      // 81 does not
+record-spend("a", "n", "tokens", 3, 40).                        // the engine's charge for a call already answered
+?over-budget("n", "tokens").                                    // 120 of 100: the handler now asks him before going on
+
+// 3. Raising a limit.
+raise-limit-f("t", "f", "tokens", 200).
+?limit("f", "tokens", 100).                                     // the foundation: the old limit still stands beside the new
+?limit("f", "tokens", 200).
+raise-limit("t", "n", "tokens", 200).
+?!limit("n", "tokens", 100).                                    // now: one limit
+?!over-budget("n", "tokens").
+?Enabled(spend("a", "n", "tokens", 4, 40)).
+
+// 4. Carte blanche.
++carte-blanche("n").
+?Enabled(spend("a", "n", "tokens", 4, 150)).

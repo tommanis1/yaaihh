@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\nNew type count\n+count(0)\n#3 > count(0) = True\n\n#3 > ~count(0)\n+count(1)\n+x(1)\n#4 > count(1) = True\nx(1) = True\n\n#4 > ~count(1)\n+count(2)\n+x(2)\n#5 > x(1) = True\ncount(2) = True\nx(2) = True\n\n#5 > "
+ }
+}

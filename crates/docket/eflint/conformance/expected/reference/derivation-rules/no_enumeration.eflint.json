@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type assignment\nNew type duedate\nNew type valid-assignment\n+duedate(1)\n+duedate(2)\n+duedate(3)\nquery successful\n#5 > "
+ }
+}

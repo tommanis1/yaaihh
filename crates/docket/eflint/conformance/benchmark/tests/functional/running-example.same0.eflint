@@ -1,0 +1,4 @@
++user("Amy").
++instant(9).
++controls(user("Amy"),dataset("X-Rays")).
++access(user("Amy"),dataset("X-Rays"),9).

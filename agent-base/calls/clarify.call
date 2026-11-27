@@ -1,0 +1,23 @@
+// base.kind's `when owner_post` handler, when the watcher's route answers Unclear (design-two-systems §13): the
+// owner's words are given to no agent until the owner says whom they are for, drops them, or says them again. The
+// surfaces show it at the chat's foot: "not given to anyone: WHY", a button per agent of AGENTS (every agent on the
+// ticket, those the post names first), "everyone", "drop it"; the click is this step's answer, the owner's, logged and
+// replayed like any answer. Typed words are not formed against it (paper-research N-807.p78; consult-3 p80, 2: a
+// model's reading of "drop the wsl thing" withdrew posts of his): they are a post of their own, and the post waiting
+// here is handed to every agent on the ticket. Again is kept for records from before, whose handlers run it; it hands
+// the post to them all, and no longer drops it.
+call clarify(text: Text, why: Text, agents: [Agent]) -> Send(to: [Agent]) | Drop | Again(text: Text)
+  task clarify
+  template
+    Your message was not given to anyone: {{ why }}
+    <<<
+    {{ text }}
+    >>>
+    The agents on the ticket:{{ for a in agents }}
+    - {{ a }}{{ end }}
+    Answer one of:
+    - Send(to): the message goes as it is to those agents. Only for a reply that says whom it is for and nothing
+      more ("for fixer", "both of them").
+    - Drop: forget the message: a reply that says to forget it, and nothing else ("never mind", "drop it", "forget it").
+    - Again(text): the reply is the message said again, more clearly or changed. It replaces the message and is
+      given to whom it is for. Any reply that says more than whom it is for is this.

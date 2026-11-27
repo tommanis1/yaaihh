@@ -1,0 +1,6 @@
+{"timestamp":"2026-11-27T13:48:21.393Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-11-27T13:48:21.400Z","type":"turn_context","payload":{"model":"gemini-3.8-flash-high"}}
+{"timestamp":"2026-11-27T13:48:21.400Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"say hello there"}]}}
+{"timestamp":"2026-11-27T13:48:21.400Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello there"}]}}
+{"timestamp":"2026-11-27T13:48:21.400Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":140,"cached_input_tokens":40,"cache_write_input_tokens":10,"output_tokens":25,"reasoning_output_tokens":5,"total_tokens":165},"last_token_usage":{"input_tokens":140,"cached_input_tokens":40,"cache_write_input_tokens":10,"output_tokens":25,"reasoning_output_tokens":5,"total_tokens":165},"request":"3ecc6c46-19c6-496c-b880-3dc81d845c82","model_context_window":1048576,"context_used":140}}}
+{"timestamp":"2026-11-27T13:48:21.400Z","type":"event_msg","payload":{"type":"task_complete"}}

@@ -1,0 +1,114 @@
+// An agent's brain (0.3; the owner, N-1104 p606-p628, N-1445 p9-p11; fundamentals structure.md §5 and §9; the plan,
+// research N-1444 p16 and N-1446 p12, p35). A brain is what an agent puts on its harness to steer itself: it does not do
+// the work, it watches whether the work serves the owner, and it mostly says no. It is many parts, each a program with
+// its own persona (his N-1445 p11: "brain is many different parts / programs"), and a selector that ranks what they
+// propose, "nothing" always among them (p10: "rank the actions"). Each pass is a ticket of this kind, opened by a
+// binding in the agent's own program (`kinds/agents/NAME.kind`), which is where an agent's brain is switched on:
+//
+//   on owner_to(m) where m.agent == "paper-research" open brain(m.agent, Attend(m.posts))
+//   every e.every of turn_end(e) where e.agent == "paper-research" open brain(e.agent, Ahead(e.every))
+//   on compacting(e) where e.agent == "paper-research" open brain(e.agent, Compacting)
+//
+// Its steps, owed by the watcher, coordd answers itself from one call each (brain.call) on a small report built from
+// the record alone, never the agent's transcript, tool calls or files (the owner, p612: "maybe not the toolcalls ...
+// lets think economics"). Each step's answer is on the record, and so is the pass's result: every intervention, and
+// every pass that found none, with how each candidate was weighed. A replay reads them and calls nothing.
+//
+// - Attend(posts): a burst of the owner's posts to the agent (POSTS, their ids), as the holder handed them when his
+//   hold ended (coordd's `owner_to`). The owner model reads him (`attend`): his topic, whether the agent is on it, his
+//   error signals, its proposals, and EARLIER, the ids of his earlier posts whose words on the topic the agent must have
+//   before it answers. On his topic with no signal, nothing proposed and none of his earlier words, the pass ends Quiet
+//   with no second call. Otherwise the selector (`elect`) weighs the proposals, `unanswered by it` (his posts the agent
+//   has not answered, by the ledger's rule), `his earlier words`, and nothing: Nothing ends it Quiet (and so does a
+//   pick on his post the agent answered while the selector ran, which coordd makes Nothing); Pick posts its
+//   THOUGHT here, in the agent's own voice, then HIS, his earlier words as coordd took them from the record (none when
+//   EARLIER named none), informing the agent and asking to go into its turn (`post … informing`, `Post.into_turn`).
+//   The ticket stands at his post (`tied_at`; `drawn note`, below: the binding's open ties only a kind that is drawn).
+//   The line never goes into a running turn: delivery.kind's `free` gives it whole with the agent's next message
+//   (`told`), after his posts when they go with it, and an idle agent is given it at once; `fold` never orders it
+//   (fresh-lead-3 N-1540 p5, p18; on the text before 76, `arrived` put it into the turn his posts went into). It asks
+//   the agent for nothing.
+// - Ahead(turns): the base step (the owner, N-1104 p606: "you are a neuro symbolci brian for an llm here is its conect
+//   . waht do oyu think as a brain you would od nest if you could"), at every Nth turn end of the agent (p610: "this is
+//   polcy when lets satrt a eveyr n tur o"). N is the policy's `check-in-every` for the agent, which coordd puts in
+//   each `turn_end` (TURNS); an agent with none has no pass. One call (`ahead`) holds the four perspectives, goal,
+//   critic, memory and attention, rather than a call each (paper-research p613). It reads a report coordd builds from
+//   the record: the agent's role, its own posts since its last pass, what it was asked and has not answered (the
+//   ledger), what waits for it, its turn, the owner model, and the last pass's NOTES. The notes are the brain's own
+//   memory, which the agent never carries (p613, 5). Same ends the pass with nothing said. Next posts THOUGHT here,
+//   one line in the agent's own voice, naming the agent: a post that asks it to act (I-1480 rule 1, `push`), so it
+//   goes through delivery.kind as such a post goes. An idle agent is given it at once, with no call (`free`'s
+//   `worked` false); a busy one has it at its turn's end, never in the running turn (p607: "it writes into the
+//   agent's next turn, not over it"; `arrived` keeps a push for the turn's end). A pulled line would wait for a
+//   message an idle agent may never get, and stay open for days (fresh-lead-3 N-1511 p57; his N-1002 p2).
+//   Inhibition (paper-research N-1104 p622, 3: "as important as `next`. The typical failure is doing too much:
+//   over-reporting, starting new threads, mixing build news into your topic. A brain mostly says no"; N-1446 p2925):
+//   either answer may carry STOP, one line in the agent's voice on what it should stop doing or not start, naming the
+//   post it rests on. With Next, it follows the thought in the same post. With Same, the pass ends Stop and posts it
+//   here alone, informing the agent, as Attend's line goes: given whole at its next quiet point, asking for nothing,
+//   as a no asks for no act. An answer with none (every one from before the field) goes as it did.
+// - Compacting: consolidation (paper-research N-1104 p622, 5: "Consolidation happens at sleep, which here is
+//   compaction ... The brain would write "what to keep" just before each compaction: open commitments, the current
+//   topic, today's lessons"; his p624: "yes yes"), at each compaction of the agent, as its hook begins it (coordd's
+//   `compacting`). One call (`consolidate`) reads the base step's report, since the last Ahead look, and writes what
+//   the agent keeps: what it is on, what it owes and to whom, what it said it would do, what the notes say it
+//   learned, each line naming the id it rests on. Kept posts it here, informing the agent, as Attend's line goes: it
+//   goes into no turn, and is given whole at the agent's next quiet point after the compaction, asking it for nothing.
+//   It writes no notes: the next Ahead look reads the last Ahead look's.
+// - Failed(why): a call failed, or answered out of shape: nothing is said; why is in coordd's journal.
+/// one pass of an agent's brain: its parts read, its selector picks one act or none, and the agent is told its thought
+kind brain
+  drawn note   // at his post, drawn once it has spoken: a pass at work shows nothing there (N-1446 p17, p890, p901)
+  form agent: Agent, pass: Attend(posts: [Text]) | Ahead(turns: Int) | Compacting
+  result
+    Said(topic: Text, on_topic: Bool, signals: [Signal], act: Text, rests_on: Text, thought: Text, scores: [Score])  /// it steered: the act picked, and the thought the agent was told
+    | Quiet(topic: Text, on_topic: Bool, signals: [Signal], scores: [Score])  /// nothing was said: on his topic, or nothing ranked first
+    | Next(goal: Text, critic: Text, memory: Text, attention: Text, act: Text, rests_on: Text, thought: Text, notes: Text, stop: Text?)  /// at a turn end: what it would have the agent do next, told as its thought, and what to stop, if any, after it
+    | Same(goal: Text, critic: Text, memory: Text, attention: Text, notes: Text)  /// at a turn end: it goes on as it is, nothing said
+    | Stop(goal: Text, critic: Text, memory: Text, attention: Text, notes: Text, stop: Text)  /// at a turn end: it goes on, told only what to stop
+    | Kept(text: Text)  /// at its compaction: what it keeps, told to it after
+    | Failed(why: Text)  /// a call failed: nothing was said
+  pattern
+    match pass {
+      Attend(posts) =>
+        r <- step watcher attend(agent, posts);
+        match r {
+          Failed(why) => return Failed(why)
+          Read(topic, on_topic, signals, proposals, earlier) where on_topic and signals == [] and proposals == [] and earlier == [] => return Quiet(topic, on_topic, signals, [])
+          Read(topic, on_topic, signals, proposals, earlier) =>
+            e <- step watcher elect(agent, posts, topic, on_topic, proposals, earlier);
+            match e {
+              Failed(why) => return Failed(why)
+              Nothing(scores) => return Quiet(topic, on_topic, signals, scores)
+              Pick(act, rests_on, against, thought, his, scores) =>
+                _ <- post "{{ thought }}{{ his }}" informing agent;
+                return Said(topic, on_topic, signals, act, rests_on, thought, scores)
+            }
+        }
+      Ahead(turns) =>
+        a <- step watcher ahead(agent, turns);
+        match a {
+          Failed(why) => return Failed(why)
+          Same(goal, critic, memory, attention, notes, no) =>
+            match no {
+              none => return Same(goal, critic, memory, attention, notes)
+              line =>
+                _ <- post "{{ line }}" informing agent;
+                return Stop(goal, critic, memory, attention, notes, line)
+            }
+          Next(goal, critic, memory, attention, act, rests_on, thought, notes, no) =>
+            _ <- match no {
+              none => post "{{ thought }}" naming agent
+              line => post "{{ thought }}\n{{ line }}" naming agent
+            };
+            return Next(goal, critic, memory, attention, act, rests_on, thought, notes, no)
+        }
+      Compacting =>
+        k <- step watcher consolidate(agent);
+        match k {
+          Failed(why) => return Failed(why)
+          Kept(text) =>
+            _ <- post "{{ text }}" informing agent;
+            return Kept(text)
+        }
+    }

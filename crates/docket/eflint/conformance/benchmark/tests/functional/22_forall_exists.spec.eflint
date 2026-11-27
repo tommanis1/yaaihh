@@ -1,0 +1,7 @@
+Fact x Identified by Int
+Fact no_dubs Identified by String
+	Derived from no_dubs("") Where (Forall x1, x2: x1 == x2)
+Fact some Identified by String
+	Derived from some("") Where (Exists x: True)
+Fact meta Identified by String
+	Derived from meta("") Where (Forall some: some != some(""))

@@ -1,0 +1,2 @@
+Fact p Identified by String
+	Derived from p("") Where Not(Holds(p("")))

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\n#2 > \n#2 > executed transition: \nx(string(\"wah\")) \n+string(\"wah\")\n#3 > string(\"wah\") = True\n\n#3 > "
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\n#2 > \n#2 > executed transition: \nx(int(0)) (DISABLED)\nviolations:\n  disabled action: x(int(0))\n+x(int(0))\n#3 > x(int(0)) = True\n\n#3 > executed transition: \nx(int(0)) (ENABLED)\n#4 > x(int(0)) = True\n\n#4 > +x(int(2))\n#5 > x(int(0)) = True\nx(int(2)) = True\n\n#5 > executed transition: \nx(int(2)) (ENABLED)\n#6 > x(int(0)) = True\nx(int(2)) = True\n\n#6 > -x(int(2))\n#7 > x(int(0)) = True\nx(int(2)) = False\n\n#7 > executed transition: \nx(int(2)) (DISABLED)\nviolations:\n  disabled action: x(int(2))\n+x(int(2))\n#8 > x(int(0)) = True\nx(int(2)) = True\n\n#8 > "
+ }
+}

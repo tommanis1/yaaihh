@@ -1,0 +1,10 @@
+// An order about the runner's bounds, as a typed line (N-101 post 27, H): opened by the owner or a lead (`may open
+// order`) and closed at once with the order as its result; like any ticket that closes at once it names who reads it:
+// `coord open order --order 'SetBound(runtime, run-seconds, 12)' '@runner'`. The type is agent-base/calls/order.call's.
+/// an order about the runner's bounds, closed at once with the order as its result
+kind order
+  letter O
+  form order: Order
+  result Order
+  pattern
+    return order

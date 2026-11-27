@@ -1,0 +1,84 @@
+// Whom the owner's post is for, when several agents take part in its ticket and the words name nobody (design §13):
+// base.kind's owner_post handler makes the step, owed by the watcher, which coordd answers itself as it does intake.
+// It runs `whom` below once, statelessly, with the model policy names for the task `route`, and answers `route` with
+// its verdict (design §13, second words: ordered rules, the agent typed to is the default). whom's TO is route's,
+// written out by coordd ("lead"), or "nobody (it was posted on the ticket itself)"; AGENTS is every agent on the
+// ticket, TO and OTHERS in one list; RECENT is coordd's: the ticket's last three posts before this one, each cut
+// short, with whom each went to. A call that fails, answers out of shape, gives nobody, or names an agent not on the
+// ticket is answered To(to) when the words were typed to someone; typed to nobody (the owner's own post on the
+// ticket), To the agent the ticket is for (its form's `to`), when it is on the ticket, else where his last post on it
+// went (those of them still on it; else an earlier post's: consult-3 N-1446 p110), so his post goes and no press comes
+// back to him (proto-lead N-1446 p57.2); Unclear("the call that says whom it is for failed") only when
+// there is neither, so the owner, who has just posted, picks and nothing sits unheard (paper-research m1341).
+//
+// The thread's holder (the owner's fundamentals, N-1104 p593-p606; consult-3 N-1443 p2, 3: `route` is where the
+// holder for his posts starts): one fresh call that is given the thread's report and answers one form. Besides RECENT,
+// coordd writes THREAD, what the thread is and whom it was opened for, with what each agent on it has been given
+// there and not yet answered, and YOURS, his posts on it since an agent last posted there, each with where it went
+// (not the words an agent opened the ticket with, which thread.kind posts again as his: N-1445 #2, which RECENT lists
+// under that agent; the machine's `his_words`, proto-lead N-1446 p83, p105); all of it is the
+// record's (its posts, `told` and `given` lines), so a replay reads the same. Rule 5's "the post that opened the
+// ticket" is proto-reader's (N-1446 p71): N-1445 #3 answers paper-research's opener and is for paper-research-brain. JOINS in the answer:
+// the earlier post of his this one continues (the same thought sent in two goes; his p586 and p587 on 20 Nov, 22 s
+// apart), one of YOURS; coordd leaves it out when it is none of them. It is on the `answer` line, so the record and
+// the window show what the holder decided. A call or answer from before JOINS reads as it did: a pattern names the
+// first fields only, and a trailing optional field may be left out.
+//
+// His burst (E1b; the owner, N-1445 p9: "hold them for 15s by default and ask a docket program to split them"):
+// base.kind's `gather` holds his typed posts together, so TEXT may be several posts, which coordd writes each with its
+// number ("#590: …"). SPLIT: its posts are for different agents (paper-research N-1446 p40: one about the build, one
+// about the brain), each part whole posts and whom they go to (proto-lead p61.5: a part never cuts a post; cutting
+// one into passages is N-696's `split`, split.rs). coordd takes a Split only when every post of the burst is in
+// exactly one part and each part goes to agents on the ticket; of one post, a Split is its one part's To. A post of
+// the burst that carries his own choice (its @NAMEs, the post it answers, `@all`), when they do not all carry one same,
+// is written "#591 (his own choice: it goes to docket-core and no one else): …", and coordd takes an answer, To or
+// Split, only when the part holding it goes to exactly those agents (E1b hold 1: proto-reader N-1446 p307, proto-lead
+// p325); else, or when the call fails, each such post goes where he chose and the others as above. An Unclear is
+// taken: base.kind sends each such post where he chose and asks him about the others only; when every post carries a
+// choice, no call is made (proto-reader p445, consult-3 p446).
+
+/// whole posts of his burst, and whom they go to
+type Part {
+  posts: [Int]
+  to: [Agent]
+}
+
+call route(text: Text, to: [Agent], others: [Agent]) -> To(agents: [Agent], joins: Int?) | Split(parts: [Part]) | Unclear(why: Text)
+  task route
+
+call whom(text: Text, to: Text, agents: Text, recent: Text, thread: Text, yours: Text) -> To(agents: [Agent], joins: Int?) | Split(parts: [Part]) | Unclear(why: Text)
+  task route
+  template
+    The owner of a software team wrote the message below on a ticket that several agents take part in. You hold this
+    ticket for him: say which of them is handed it now; the others see it at their next turn and are not woken. You do
+    not decide who does the work, and you do not judge the message: an agent handed a vague message asks the owner
+    about it itself.
+    It was typed to: {{ to }}
+    The ticket: {{ thread }}
+    His posts on it just before this one, since an agent last posted there, with where each went:
+    {{ yours }}
+    Take the first rule that fits:
+    1. The words begin with the name of an agent on the ticket, or speak to one of them ("fixer, please also ..."):
+       To that agent.
+    2. The words ask every agent ("what do you all think", "everyone stop"): To all of them.
+    3. It was typed to an agent: To that agent. A short answer ("yes", "go ahead", "no, keep it") typed to an agent is
+       for that agent.
+    4. It was typed to nobody and goes on from a post of his just before it (the same thought, sent a moment later):
+       To the agent that post went to.
+    5. It was typed to nobody: To the agent whose last post it answers; when it answers the post that opened the
+       ticket, or no agent's post: the agent the ticket was opened for. Only if you cannot tell which agent that is:
+       Unclear(why), with one sentence saying what is missing; the owner reads it.
+    Whichever rule gives whom: when the message goes on from one of his posts just before it, give that post's number
+    as joins.
+    His message may be several posts sent close together, each with its number ("#590: ..."). Read them as one
+    message. Only when its posts are for different agents (one about one piece of work, another about another): Split,
+    each part the numbers of its posts and the agents it goes to, every post in exactly one part, by the rules above
+    for each part. A post marked "his own choice" goes to exactly the agents he chose: its part goes to them and no one
+    else, and a post he chose other agents for is in another part.
+    The message:
+    <<<
+    {{ text }}
+    >>>
+    The agents on the ticket: {{ agents }}
+    The ticket's last posts, oldest first:
+    {{ recent }}

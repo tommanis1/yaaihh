@@ -1,0 +1,78 @@
+module tovrin.cex
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+
+// P4-Input Counterexample Discipline.
+// Rejects raw internal Haskell AST dumps (MkForest, %MkAddress); requires runnable Tovrin P4 syntax.
+//
+// A counterexample is a result somebody has to be able to run. When the checker says a property is violated, what
+// it hands over is a P4 program in Tovrin's own P4 syntax and the packets that break it. A printout of the
+// checker's inner Haskell values is not a result: nobody can run it.
+
++R.Condition("valid_tovrin_p4_syntax").
++R.Condition("no_raw_haskell_ast_dump").
++R.Condition("distinct_from_p4tv_syntax").
+
+Fact Counterexample-Artifact(target: R.Artifact)
+
+Extend Fact R.Required
+  Holds when Counterexample-Artifact(target) && R.Condition(cond) && (cond == "valid_tovrin_p4_syntax"
+                                              || cond == "no_raw_haskell_ast_dump"
+                                              || cond == "distinct_from_p4tv_syntax")
+
+// ===== Who verifies ==============================================================================================
+// A program checks each condition: this module runs the project's own replay tool and finds in its own name. It
+// is never assigned the work and it is no model, so it has a family of its own.
+
++C.Role("tovrin.cex", "looker").
++R.Family("machine"). +R.Of-Family("tovrin.cex", "machine").
+// Its findings are recorded by this module, in the reaction below (spec 8.8).
++R.Checked-Elsewhere("valid_tovrin_p4_syntax"). +R.Checked-Elsewhere("no_raw_haskell_ast_dump").
++R.Checked-Elsewhere("distinct_from_p4tv_syntax").
++H.Party("tovrin.cex"). +R.Verifier-Module("tovrin.cex").
+
+Fact Dump-Mark(glob: String)                        // what a printed Haskell value looks like, as text: the project's list
++Dump-Mark("*MkForest*"). +Dump-Mark("*%MkAddress*"). +Dump-Mark("*fromList [*").
+Fact P4tv-Mark(glob: String)                        // what P4TV's own property syntax looks like
++P4tv-Mark("*//#LTLProperty*"). +P4tv-Mark("*AP(*").
+
+Fact Replay-Command(line: String)                   // the project's: parse as Tovrin P4, run, say what was seen
++Replay-Command("p4check replay").                  // the shape of the line; the tool's own line goes here
+
+// Edge: what "runnable" is. Not "it parses". The replay runs the program on the packets and must itself see the
+// property break; a counterexample that parses and runs without breaking the property is refuted, with what the
+// replay said. Edge: a text with a dump mark is refuted before anything is run, with a reason the writer can act
+// on. Edge: an empty counterexample is refuted, not skipped.
+on R.Claim-Done(who, target) where Counterexample-Artifact(target) do {
+  text <- perform C.TextOf(target);
+  if str_len(text) == 0 {
+    R.Refute-Condition(self, self, target, "valid_tovrin_p4_syntax", "There is nothing to run. A violated property is handed over with the program and the packets that break it.")
+  } else {
+    if Exists g : Dump-Mark(g) && matches_glob(text, g) {
+      R.Refute-Condition(self, self, target, "no_raw_haskell_ast_dump", "This is a printout of the checker's inner values, not a counterexample. Hand over the P4 program in Tovrin's P4 syntax and the packets that break it, so that it can be run.")
+    } else {
+      R.Verify-Condition(self, self, target, "no_raw_haskell_ast_dump")
+    };
+    if Exists g : P4tv-Mark(g) && matches_glob(text, g) {
+      R.Refute-Condition(self, self, target, "distinct_from_p4tv_syntax", "This uses P4TV's property syntax. Tovrin's own is asked for.")
+    } else {
+      R.Verify-Condition(self, self, target, "distinct_from_p4tv_syntax")
+    };
+    par how in (Foreach c : c When Replay-Command(c)) {
+      said <- perform B.Command("{{ how }} {{ target }}");
+      if said == "violated" {
+        R.Verify-Condition(self, self, target, "valid_tovrin_p4_syntax")
+      } else {
+        R.Refute-Condition(self, self, target, "valid_tovrin_p4_syntax", "Your counterexample was run and did not show the violation. The replay said: {{ said }}")
+      }
+    };
+    return ()
+  }
+}
+
+// A violation counts, for the ratchet and for him, only when its counterexample is wholly verified.
+Fact Shown-Violated(target: R.Artifact)
+  Holds when Counterexample-Artifact(target) && R.All-Verified(target)

@@ -1,0 +1,40 @@
+// The thread kind's step (thread.kind): owed by the watcher, which coordd answers itself, as it does the clerk's. It
+// runs `sort` below once, statelessly, with the model policy names, and answers `intake` with its verdict; a call
+// that fails, or answers out of shape, is answered Thread. There is no one-off (design-two-systems §16, 3): words
+// that go on no open ticket are a thread of their own. OPEN is coordd's: the open tickets TO takes part in, one a
+// line, with its kind and title; for words typed to nobody (TO is then whoever fills lead), the open tickets the
+// owner takes part in. Unsure(tickets) (paper-research m1249) is for words that could go on more than one of them:
+// two or more tickets, each open, or coordd answers Thread. coordd answers it Place on the first and posts the same
+// words as the owner's on the second, each post naming the other; further tickets get no post and are named to him;
+// the owner picks nothing (the owner on N-354/N-355, paper-research N-586.p10). When two or more of the tickets
+// given wait on the owner's own answer, nothing is posted on them: the thread kind makes the words a thread of their
+// own, given at once to TO, with the tickets beside it (paper-research N-581.p57).
+
+call intake(text: Text, to: Agent) -> Thread | Place(ticket: Ticket) | Unsure(tickets: [Ticket])
+  task intake
+
+call sort(text: Text, to: Agent, open: Text) -> Thread | Place(ticket: Ticket) | Unsure(tickets: [Ticket])
+  task intake
+  template
+    The owner of a software team wrote the message below to {{ to }}, one of the team's agents. Say where it goes:
+
+    - Place(ticket): it continues the subject of one of the open tickets listed after it: it answers or follows up
+      what was said there, or is about the same piece of work. Sharing a file, a module or the agent is not enough; a
+      different question about the same code is a Thread. A short answer ("yes", "go ahead", "looks good",
+      "no, keep it") belongs on the ticket whose last post waits on the owner's answer, when exactly one does. Give the
+      ticket's id as listed. A reply to a ticket that asks the owner whom a post is for belongs on that ticket:
+      words that say whom ("for lead", "fixer should"), or the same message said again more clearly.
+    - Unsure(tickets): it continues the subject of more than one of the open tickets, and the words do not say
+      which. Give those tickets, the likeliest first. The message is then posted as the owner's on the first two
+      tickets given, in the order given, each post naming the other; any further ones are only named to him. When
+      two or more of the tickets given wait on the owner's answer, it is posted on none of them and becomes a thread
+      of its own, with those tickets shown beside it.
+    - Thread: anything else: a question, a remark, or a piece of work that none of the open tickets is about.
+
+    The message:
+    <<<
+    {{ text }}
+    >>>
+
+    The open tickets:
+    {{ open }}

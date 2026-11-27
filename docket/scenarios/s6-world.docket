@@ -1,0 +1,9 @@
+module scenario.s6
+
+import std.hooks as H
+import std.comms as C
+
+// Scenario 6's parties: the owner, one agent that wrote in v1, and the importer.
++H.Party("o1").  +C.Role("o1", "owner").
++H.Party("w1").
++H.Party("im1").

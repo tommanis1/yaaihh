@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type a\nNew type b\nNew type comp\nNew type wrap\nNew type wrapped\nexecuted transition: \nwrap(comp(a(\"A1\"),b(\"B2\"))) \n+wrapped(comp(a(\"A1\"),b(\"B2\")))\nquery successful\nquery successful\nNew type wrapper\nexecuted transition: \nwrapper(a(\"A1\"),b(\"B2\"),comp(a(\"A2\"),b(\"B1\"))) (DISABLED)\nviolations:\n  disabled action: wrapper(a(\"A1\"),b(\"B2\"),comp(a(\"A2\"),b(\"B1\")))\n+wrapped(comp(a(\"A2\"),b(\"B1\")))\nquery successful\nquery successful\nquery successful\nquery successful\nNew type wrap_me\nexecuted transition: \nwrap_me(a(\"A1\"),b(\"B1\")) (DISABLED)\nviolations:\n  disabled action: wrap_me(a(\"A1\"),b(\"B1\"))\n+wrapped(comp(a(\"A1\"),b(\"B1\")))\nquery successful\nquery successful\n#15 > "
+ }
+}

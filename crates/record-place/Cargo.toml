@@ -1,0 +1,9 @@
+[package]
+name = "record-place"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ring = "0.17.14"
+libc.workspace = true

@@ -1,0 +1,11 @@
+Fact x Identified by Int
+	Derived from (Foreach y: y.x1)
+	Derived from (Foreach y: y.x2)
+	Derived from (Foreach y: y.x3)
+    Derived from (Foreach x: x(x-1) Where 0 < x)
+Fact y Identified by x1 * x2 * x3
+	Derived from (Foreach x: y(x,x,x))
+	Derived from (Foreach x1, x2, x3:
+		y(x1, x2, x3) Where (x1 == x2 || x2 != x3)
+        && (Exists y: x2 < y.x1)
+	)

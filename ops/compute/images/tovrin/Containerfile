@@ -1,0 +1,109 @@
+# Tovrin's toolchain as one pinned image (versions read from Tovrin on the machine, 26 Nov 2026); build: ./sources.sh && podman build -f Containerfile context
+# Every download is checked against its sha256; Ubuntu's packages come from the snapshot of the day; not for publishing (nuXmv's licence).
+
+# --- base: Ubuntu 24.04 (glibc 2.39, the machine's), packages as of the snapshot
+FROM docker.io/library/ubuntu:24.04@sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b AS base
+ARG SNAPSHOT=20261126T000000Z
+ENV LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq --snapshot "$SNAPSHOT" && apt-get install -y -qq --no-install-recommends --snapshot "$SNAPSHOT" \
+      ca-certificates curl git xz-utils unzip bzip2 file jq ripgrep python3 python3-pip python3-venv \
+      build-essential pkg-config autoconf gperf cmake ninja-build bison flex meson \
+      libgmp-dev libffi-dev zlib1g-dev libncurses-dev libtinfo-dev libmpfr-dev \
+      z3 openjdk-21-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+# fetch URL SHA256 FILE: one checked download
+RUN printf '#!/bin/sh\nset -eu\ncurl -fsSL -o "$3" "$1"\necho "$2  $3" | sha256sum -c --quiet -\n' > /usr/local/bin/fetch && chmod +x /usr/local/bin/fetch
+
+# --- haskell: ghcup 0.2.6.2, GHC 9.10.3 (Agda, agda2hs) and 9.12.4 (Tovrin's checker), cabal 3.14.2.0
+FROM base AS haskell
+ENV GHCUP_INSTALL_BASE_PREFIX=/opt PATH=/opt/.ghcup/bin:$PATH CABAL_DIR=/opt/cabal
+RUN fetch https://downloads.haskell.org/~ghcup/0.2.6.2/x86_64-linux-ghcup-0.2.6.2 \
+      9ed5da5449b48043a0d17e767c05d2ef585e25a639bb934329496c6d2fad9cf8 /usr/local/bin/ghcup && chmod +x /usr/local/bin/ghcup \
+    && ghcup install ghc 9.12.4 && ghcup install ghc 9.10.3 --set && ghcup install cabal 3.14.2.0 --set \
+    && ghcup gc --profiling-libs --share-dir --cache --tmpdirs \
+    && cabal update hackage.haskell.org,2026-11-16T00:00:00Z
+
+# --- agda: the fork 8fef585b04 (Agda 2.9.0), agda2hs dcafcf331d and agda-quote b5b87431bd, with the machine's exact Hackage versions
+FROM haskell AS agda
+COPY agda-quote.tar cabal.project /src/
+RUN cd /src && echo "52b8d5ec123cfe0f1777195e4f154162b857ed1e8519cd5bc4cc0b4e7309ea9a  agda-quote.tar" | sha256sum -c --quiet - \
+    && echo "3b05852042dd4fdff56c4da92c1ac49c775f9691d5c2e711ca42a83753a0a78d  cabal.project" | sha256sum -c --quiet - \
+    && tar -xf agda-quote.tar \
+    && fetch https://github.com/tommanis1/agda/archive/8fef585b04886470f3a6e54d67bd6463ac6b7231.tar.gz \
+         5d952e3895c9b6fdcd07962c8a8bb918fe361f94b9931b3b2d63fc63ead94eed agda.tgz \
+    && fetch https://github.com/tommanis1/agda2hs/archive/dcafcf331d069b0efd2d2326e3b0cbc52da39601.tar.gz \
+         c14a64f6399d7049df31d2ce0cfb124c0f2e085df2f50ecde5a25e35cd0cd472 agda2hs.tgz \
+    && mkdir agda agda2hs && tar -xzf agda.tgz -C agda --strip-components=1 && tar -xzf agda2hs.tgz -C agda2hs --strip-components=1 \
+    && cabal build -j --index-state=2026-11-16T00:00:00Z --project-file=/src/cabal.project exe:agda exe:agda2hs exe:agda-quote \
+    && mkdir -p /opt/tovrin/libexec /opt/tovrin/share/agda2hs \
+    && for x in agda agda2hs agda-quote; do cp "$(cabal list-bin -v0 --project-file=/src/cabal.project exe:$x)" /opt/tovrin/libexec/; done \
+    && cp -r agda/src/data /opt/tovrin/share/agda && cp -r agda2hs/lib agda2hs/test /opt/tovrin/share/agda2hs/ \
+    && cabal install -j --installdir=/opt/tovrin/libexec --install-method=copy hpack-0.39.6
+COPY agda-stdlib.tar /src/
+RUN cd /src && echo "65ece8008448ec9fd14be8bf04dc3b2d6bc52898c51a8b6dce4f18931fd67823  agda-stdlib.tar" | sha256sum -c --quiet - \
+    && tar -xf agda-stdlib.tar -C /opt/tovrin/share \
+    && mkdir -p /opt/tovrin/bin && for x in agda agda2hs agda-quote hpack; do \
+         printf '#!/bin/sh\nAgda_datadir=/opt/tovrin/share/agda agda2hs_datadir=/opt/tovrin/share/agda2hs exec /opt/tovrin/libexec/%s "$@"\n' $x > /opt/tovrin/bin/$x; \
+         chmod +x /opt/tovrin/bin/$x; done
+
+# --- solvers: z3 4.16.0, cvc5 1.4.2, Eldarica 2.3, Golem 0.9.0, Ethos 0.2.5, nuXmv 2.1.0, yices 2.7.0, Pono 2.0.0; and Go 1.27.3
+FROM base AS solvers
+COPY nuXmv-2.1.0-linux64.tar.xz yices-2.7.0-tovrin.patch yices-2.7.0-x86_64-pc-linux-gnu-static-gmp.tar.gz /dl/
+WORKDIR /dl
+RUN printf '%s\n' \
+      "c7dfec43749bcb230c857efe81099b95d868b94efd9f81bccebe542a306a7c83  nuXmv-2.1.0-linux64.tar.xz" \
+      "b8387fcd5aa0f2d11b08311d69f6ed52c48ef4fcb0a3d28d25b65ffd4595f3f9  yices-2.7.0-tovrin.patch" \
+      "49566b6f817692820538df78fe406878400d79810631c9372b2495bc81d3e00a  yices-2.7.0-x86_64-pc-linux-gnu-static-gmp.tar.gz" \
+    | sha256sum -c --quiet - \
+    && mkdir -p /opt/solvers \
+    && fetch https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-x64-glibc-2.39.zip \
+         7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e z3.zip \
+    && fetch https://github.com/cvc5/cvc5/releases/download/cvc5-1.4.2/cvc5-Linux-x86_64-static.zip \
+         7eb18f8c814c36a46c5a7d003983e9cfbc4b0a9828d6dd596239291bd4cc61d8 cvc5.zip \
+    && fetch https://github.com/uuverifiers/eldarica/releases/download/v2.3/eldarica-bin-2.3.zip \
+         60887e6a44d8e8c89e393b837b04cb130c601d8ce5e5c829349e6f34aba0be6d eldarica.zip \
+    && fetch https://github.com/usi-verification-and-security/golem/releases/download/v0.9.0/golem-x64-linux.tar.bz2 \
+         8209e804c6d4870e52d8d53b605a19145309445bffbd7e89f3ab4db31afdc490 golem.tar.bz2 \
+    && fetch https://github.com/cvc5/ethos/releases/download/ethos-0.2.5/ethos-linux-x86_64.zip \
+         5d9c41e53d97d918ccd682b0012032ba26994d964309328cddb4a20df116e296 ethos.zip \
+    && fetch https://dl.google.com/go/go1.27.3.linux-amd64.tar.gz \
+         65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40 go.tgz \
+    && unzip -q z3.zip -d /opt/solvers && mv /opt/solvers/z3-4.16.0-x64-glibc-2.39 /opt/solvers/z3-4.16.0 \
+    && unzip -q cvc5.zip -d /opt/solvers && mv /opt/solvers/cvc5-Linux-x86_64-static /opt/solvers/cvc5-1.4.2 \
+    && unzip -q eldarica.zip -d /opt/solvers \
+    && mkdir /opt/solvers/golem-0.9.0 && tar -xjf golem.tar.bz2 -C /opt/solvers/golem-0.9.0 \
+    && mkdir /opt/solvers/ethos-0.2.5 && unzip -q ethos.zip -d /opt/solvers/ethos-0.2.5 \
+    && tar -xJf nuXmv-2.1.0-linux64.tar.xz -C /opt/solvers \
+    && tar -xzf yices-2.7.0-x86_64-pc-linux-gnu-static-gmp.tar.gz -C /opt/solvers \
+    && tar -xzf go.tgz -C /opt && mv /opt/go /opt/go-1.27.3
+# libyices 2.7.0 as Tovrin's checker links it: static, thread-safe, no MCSAT, with Tovrin's patch (lanes' yices-2.7.0-build.sh)
+RUN fetch https://github.com/SRI-CSL/yices2/archive/refs/tags/yices-2.7.0.tar.gz \
+      584db72abf6643927b2c3ba98ff793f602216b452b8ff2f34a8851d35904804a yices-src.tgz \
+    && tar -xzf yices-src.tgz && cd yices2-yices-2.7.0 && patch -p1 < /dl/yices-2.7.0-tovrin.patch \
+    && autoconf && ./configure --disable-mcsat --enable-thread-safety >/dev/null && make -j"$(nproc)" MODE=release lib >/dev/null \
+    && mkdir -p /opt/solvers/yices-2.7.0-lib/lib /opt/solvers/yices-2.7.0-lib/include \
+    && cp build/x86_64-pc-linux-gnu-release/lib/libyices.a /opt/solvers/yices-2.7.0-lib/lib/ \
+    && cp src/include/yices.h src/include/yices_types.h src/include/yices_limits.h src/include/yices_exit_codes.h /opt/solvers/yices-2.7.0-lib/include/
+# Pono 2.0.0 as on the machine: the release, its own pinned smt-switch and btor2tools, no patch
+RUN fetch https://github.com/stanford-centaur/pono/archive/refs/tags/v2.0.0.tar.gz \
+      a30ecc44acc0cd410cf989a6b5108e8eaf8c869e201a1b5c7643861bf9ec3b8e pono.tgz \
+    && mkdir -p /opt/src/pono-2.0.0 && tar -xzf pono.tgz -C /opt/src/pono-2.0.0 --strip-components=1 && cd /opt/src/pono-2.0.0 \
+    && ./contrib/setup-bison.sh && ./contrib/setup-smt-switch.sh && ./contrib/setup-btor2tools.sh \
+    && ./configure.sh && make -C build -j"$(nproc)" pono
+
+# --- the image: toolchain only; the repositories come in as the action's inputs, never bound from a host
+FROM base
+COPY --from=haskell /opt/.ghcup /opt/.ghcup
+COPY --from=agda /opt/tovrin /opt/tovrin
+COPY --from=solvers /opt/solvers /opt/solvers
+COPY --from=solvers /opt/go-1.27.3 /opt/go-1.27.3
+COPY --from=solvers /opt/src/pono-2.0.0/build/pono /opt/solvers/bin/pono
+RUN mkdir -p /opt/solvers/bin && cd /opt/solvers/bin \
+    && ln -s ../z3-4.16.0/bin/z3 z3-4.16.0 && ln -s ../cvc5-1.4.2/bin/cvc5 cvc5 && ln -s ../eldarica-bin-2.3/eld eld \
+    && ln -s ../golem-0.9.0/golem golem && ln -s ../ethos-0.2.5/ethos ethos && ln -s ../nuXmv-2.1.0-linux64/bin/nuXmv nuXmv \
+    && ln -s ../yices-2.7.0/bin/yices-smt2 yices-smt2 && ln -s ../yices-2.7.0/bin/yices yices \
+    && mkdir -p /etc/agda && printf '/opt/tovrin/share/agda-stdlib/standard-library.agda-lib\n' > /etc/agda/libraries
+# PATH as Tovrin's project.toml orders it: GHC and cabal, then agda2hs and Agda, then the solvers, then Go
+ENV PATH=/opt/.ghcup/bin:/opt/tovrin/bin:/opt/solvers/bin:/opt/go-1.27.3/bin:$PATH \
+    GOTOOLCHAIN=local AGDA_DIR=/etc/agda
+WORKDIR /work

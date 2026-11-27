@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# work-hold: keep Ubuntu (WSL) running with no console open, for the Windows window (docket-core7, N-433 post 32;
+# the owner, N-284 p19: the WSL window put out to pasture).
+#
+#   work-hold        wait for the user manager, make sure the units the machine needs run, then hold: sleep as
+#                    `yaaihh-holder` until Windows, `wsl --shutdown` or a kill ends it. Exits at once when a holder
+#                    runs already.
+#
+# Why: WSL stops the distro a few seconds after the last process started from Windows ends, and every coordd and agent
+# with it (17 Nov: the WSL window's yaaihh died with it). The WSL window's start file (C:\WSL\start-work.sh) holds it
+# with `exec -a yaaihh-holder bash -l`; the Windows exe's bridges hold it only while the exe runs. The exe starts this,
+# detached and windowless (`wsl.exe -d DISTRO -e .../work-hold`), so the hold outlives its window. The name is the one
+# start-work.sh looks for, so a later double-click on the old start file sees a holder.
+#
+# One holder at a time: an flock on $XDG_RUNTIME_DIR/work-hold.lock, kept open by the sleep it becomes. A bash holder
+# of start-work.sh takes no lock; both holding is harmless, and neither's end drops the other's hold.
+#
+# The units: those the WSL window's start file started or checked (cpa-core, the account proxy, is enabled in
+# default.target already; a start of a running unit does nothing), and cpa-usage, the usage recording and the core's
+# recovery the WSL window held until it went (proxy/ops/usage-live.sh enables it; docket-edge7, N-1396 p202). What it
+# did is a line each in ~/.cache/work-hold.log.
+#
+# Way back: the exe stops starting it; `pkill -f '^yaaihh-holder'` ends a running one (and start-work.sh's console
+# holder, if one is open: close that window instead).
+#
+# For its test (agent-base/tests/work-hold-test.sh): WORK_HOLD_LOCK, WORK_HOLD_UNITS (space-separated; empty: none),
+# WORK_HOLD_NAME (the holder's name) and WORK_HOLD_LOG replace their defaults.
+set -uo pipefail
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+lock=${WORK_HOLD_LOCK:-$XDG_RUNTIME_DIR/work-hold.lock}
+units=${WORK_HOLD_UNITS-cpa-core.service cpa-usage.service}
+name=${WORK_HOLD_NAME:-yaaihh-holder}
+log=${WORK_HOLD_LOG:-$HOME/.cache/work-hold.log}
+mkdir -p "$(dirname "$log")"
+say() { echo "$(date '+%F %T') work-hold[$$]: $*" >>"$log"; echo "work-hold: $*"; }
+
+exec 9>>"$lock" || { say "cannot open $lock"; exit 1; }
+if ! flock -n 9; then
+  say "a holder runs already ($lock): nothing to do"
+  exit 0
+fi
+
+# the user manager starts with the distro (t lingers); at a cold start it can take a while: waited for, without limit
+waited=0
+until systemctl --user show-environment >/dev/null 2>&1; do
+  [ "$waited" = 1 ] || say "waiting for the user manager"
+  waited=1
+  sleep 1
+done
+for u in $units; do
+  if systemctl --user start "$u" >/dev/null 2>&1; then say "$u: $(systemctl --user is-active "$u" 2>/dev/null)"; else say "$u: did not start ($(systemctl --user is-active "$u" 2>/dev/null))"; fi
+done
+systemctl is-active --quiet docker 2>/dev/null && say "docker: active" || say "docker: not active (the boxes will not start)"
+say "holding as $name (pid $$)"
+# stdio off whatever started it: the wsl.exe that started this may end; the lock stays on fd 9
+exec -a "$name" sleep infinity </dev/null >/dev/null 2>&1

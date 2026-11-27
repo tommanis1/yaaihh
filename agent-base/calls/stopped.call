@@ -1,0 +1,13 @@
+/// a ticket stopped at a failure that nothing above it handles: whether it runs again or ends
+call stopped(
+    place: Text,     /// the ticket, by label and id, and where in it it stopped
+    failure: Text,   /// what failed there, in the failure's words
+    from: Text       /// the tickets above it, nearest first, each by label and id
+  ) -> Again         /// the cause is fixed; it runs again from where it stopped
+     | Ended(           /// given up: this ticket ends failed, and so do those above it that do not handle it
+         why: Text)     /// one sentence on why it is given up, which the owner reads
+  template
+    {{ place }}:
+      {{ failure }}
+    {{ from }}
+    Nothing above it handles this, so it waits here.

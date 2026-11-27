@@ -1,0 +1,5 @@
+Fact x Identified by Int
+Fact y Identified by x1 * x2 * x3
+  Derived from (Foreach x1, x2, x3:
+    y(x1,x2,x3) Where x1 < x2 || x2 < x3
+        && Holds(y(x1,x2,x2)))

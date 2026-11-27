@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""yaaihh-web: the web MCP server every agent shares (Claude, Codex, opencode, Agy): web_search, web_fetch,
+web_open, web_act, web_pdf. Installed as $COORD/mcp/web (ops/web/install-mcp.sh); settings in
+~/.config/yaaihh-web/config.json (README.md). `yaaihh-web human FILE`: the owner's side of a handoff."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from yaaihh_web import browser, config, fetch, search  # noqa: E402
+from yaaihh_web.mcp import Server  # noqa: E402
+
+VERSION = "0.1.0"
+
+
+def tools(cfg):
+    out = [{**search.TOOL, "run": lambda a: search.search(cfg, a)}, {**fetch.TOOL, "run": lambda a: fetch.fetch(cfg, a)}]
+    if browser.available(cfg):  # offered only where they can work
+        b = browser.Browser(cfg)
+        out += [{**browser.OPEN, "run": b.open}, {**browser.ACT, "run": b.act}, {**browser.PDF_TOOL, "run": b.pdf}]
+    return out
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["human"] and len(sys.argv) == 3:
+        browser.human(config.load(), sys.argv[2])
+    else:
+        Server("yaaihh-web", VERSION, tools(config.load())).serve()

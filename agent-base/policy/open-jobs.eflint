@@ -1,0 +1,25 @@
+// The runner's jobs open now: facts that the record's own job lines make and end (docket-edge5 N-1446 p3123, H-1651;
+// the store of H-1640, ticket/effects.rs). build-runner says each job in its coord's record as `act` lines with
+// `is` "job": `start` as it is sent (it waits in the runner's queue), `runs` as it leaves the queue, `end` with its
+// seconds. A job is open from its start to its end: waiting and running are that one notion at two lines. What runs
+// next is a project's own decision on these (research's policy/jobs.eflint); nothing here orders them.
+// JOB-OPEN(ID, PHASE): job ID has not ended; PHASE `start` (waiting) or `runs` (running). JOB-BY(ID, AGENT): the
+// agent that sent it. JOB-KIND(ID, VERB, PACKAGES): its verb and packages (the line's list as JSON text, `["coordd"]`).
+// JOB-LAST(VERB, PACKAGES, SECONDS): how long the last ended job of that verb and packages took.
+Fact job-open Identified by String * String
+Fact job-by Identified by String * String
+Fact job-kind Identified by String * String * String
+Fact job-last Identified by String * String * Int
+
+Event act
+  Related to is, phase, id, agent, verb, packages, secs
+  Creates job-open(id, "start") When is == "job" and phase == "start"
+  Creates job-by(id, agent) When is == "job" and phase == "start"
+  Creates job-kind(id, verb, packages) When is == "job" and phase == "start"
+  Terminates job-open(id, "start") When is == "job" and phase == "runs"
+  Creates job-open(id, "runs") When is == "job" and phase == "runs"
+  Terminates (Foreach string: job-open(id, string)) When is == "job" and phase == "end"
+  Terminates (Foreach string: job-by(id, string)) When is == "job" and phase == "end"
+  Terminates (Foreach string1, string2: job-kind(id, string1, string2)) When is == "job" and phase == "end"
+  Terminates (Foreach int: job-last(verb, packages, int)) When is == "job" and phase == "end"
+  Creates job-last(verb, packages, secs) When is == "job" and phase == "end"

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type number\nNew type even\n+even(number(2))\n+even(number(4))\n+even(number(6))\n+even(number(8))\n+even(number(10))\n+even(number(12))\n+even(number(14))\n+even(number(16))\n+even(number(18))\n+even(number(20))\nquery successful\nquery successful\n#5 > "
+ }
+}

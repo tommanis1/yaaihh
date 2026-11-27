@@ -1,0 +1,23 @@
+module yaaihh.first
+
+import std.hooks as H
+import std.comms as C
+import std.budgets as B
+import std.control as Ctrl
+import std.bridges.claude_code
+import std.bridges.codex
+import std.bridges.opencode
+import std.bridges.agy
+import yaaihh.desk as Desk
+
+// The smallest yaaihh project: the desk and nothing around it. His words reach an agent and the agent's answer
+// reaches him. It loads no clerk, no looker, no brain, no train and no guards, so it asks no model and waits on no
+// clock: the top for a first project on this engine, before the drivers the whole package needs exist.
+// What it asks of drivers: his window's lines and an agent's (`Owner-Seated`, `Owner-Says`, `Owner-Posts`, `Written`,
+// `Spoke`, `Shown`), a passage's words (`TextOf`) and the delivery (`Deliver`). It also names `Command` and the
+// three Effects of a copy on busy, which it never performs.
+// Its texts: std/hooks, the four bridges, std/comms, std/budgets, std/control, defaults/desk, and this file.
+
++H.Party("yaaihh.first").
+Extend Fact C.May-Speak
+  Holds when C.Role(who, "front")

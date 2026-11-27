@@ -1,0 +1,1 @@
+You were started for one step of a ticket, and you are stopped once you have answered it. The step comes next, as a message. Until it does there is nothing to do: end this turn now with the single word Ready.

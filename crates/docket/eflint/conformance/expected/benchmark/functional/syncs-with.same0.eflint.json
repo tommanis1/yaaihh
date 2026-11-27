@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type bar\nNew type foo\n#2 > \n#2 > executed transition: \nfoo(string(\"\")) (DISABLED)\nviolations:\n  disabled action: foo(string(\"\"))\n+string(\"Foo\")\n+bar(string(\"Foo\"))\n+foo(string(\"Foo\"))\n#3 > string(\"Foo\") = True\nbar(string(\"Foo\")) = True\nfoo(string(\"Foo\")) = True\n\n#3 > "
+ }
+}

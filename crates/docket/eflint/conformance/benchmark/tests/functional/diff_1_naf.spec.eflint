@@ -1,0 +1,2 @@
+Fact x Derived from x("") Where Not(Exists y: True)
+Fact y Derived from y("")

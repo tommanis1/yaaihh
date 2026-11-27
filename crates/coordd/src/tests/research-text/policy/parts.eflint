@@ -1,0 +1,59 @@
+// The sidebar's parts (N-412 ask 2, N-473): which part each agent is in, "/" nesting a part under another. An agent
+// with no part stands above them (paper-research) or, leading nobody, in Pool. coordd reads these lines as written
+// (coordd policy/parts.rs): an agent's first `part` line counts, a part's first `part-place` line. The way back is
+// removing this file.
+// Since 18 Nov 13:55 the parts under "yaaihh project" are cut by what a team owns from engine to window, not by
+// layer (owner, N-481 p17: "a few more teams of 2-3 specialts"); the two who merge and release stand apart.
+Fact part Identified by agent * String
+Fact part-place Identified by String * Int
+
++part("docket-core", "yaaihh project/Merge and release").
++part("docket-edge", "yaaihh project/Merge and release").
++part("docket-core3", "yaaihh project/Merge and release").
++part("docket-core6", "yaaihh project/Merge and release").
++part("docket-core4", "yaaihh project/Threads").
++part("docket-core2", "yaaihh project/Threads").
++part("docket-core5", "yaaihh project/Threads").
++part("docket-edge4", "yaaihh project/Threads").
++part("docket-edge2", "yaaihh project/Owner's messages").
++part("docket-core8", "yaaihh project/Owner's messages").
++part("docket-edge8", "yaaihh project/Owner's messages").
++part("docket-edge6", "yaaihh project/Agents and context").
++part("docket-edge5", "yaaihh project/Windows feel").
++part("a2h-speed", "yaaihh project/Windows feel").
++part("docket-edge3", "yaaihh project/Leaving the WSL window").
++part("docket-edge7", "yaaihh project/Leaving the WSL window").
++part("docket-core7", "yaaihh project/Leaving the WSL window").
++part("accounts-lead", "yaaihh project/Accounts").
++part("accounts-2", "yaaihh project/Accounts").
++part("accounts-3", "yaaihh project/Accounts").
++part("yaaihh", "yaaihh project/Production").
++part("yaaihh-fork", "yaaihh project/Production").
++part("yaaihh-fork2", "yaaihh project/Production").
++part("consult-lead", "Consultants").
++part("consult-2", "Consultants").
++part("consult-3", "Consultants").
++part("consult-4", "Consultants").
++part("tool-scan", "Fast tools").
++part("hs-ls", "Fast tools").
++part("paper-research2", "Papers").
++part("tovrin-writer", "Papers").
++part("tovrin-lead", "Tovrin team").
++part("tovrin-watch", "Tovrin team").
++part("tovrin-junior", "Tovrin team").
+
+// The order: the top parts 1 to 5, Consultants first (owner 15:35, N-528 p1); the parts under "yaaihh project" after them, in their own order (the window
+// orders the parts under a top part as their places go, and the top parts by where each first comes).
++part-place("Consultants", 1).
++part-place("yaaihh project", 2).
++part-place("Fast tools", 3).
++part-place("Papers", 4).
++part-place("Tovrin team", 5).
++part-place("yaaihh project/Threads", 11).
++part-place("yaaihh project/Owner's messages", 12).
++part-place("yaaihh project/Windows feel", 13).
++part-place("yaaihh project/Leaving the WSL window", 14).
++part-place("yaaihh project/Agents and context", 15).
++part-place("yaaihh project/Accounts", 16).
++part-place("yaaihh project/Merge and release", 17).
++part-place("yaaihh project/Production", 18).

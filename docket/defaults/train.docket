@@ -1,0 +1,234 @@
+module yaaihh.train
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.control as Ctrl
+
+// Walk-List & Visual-Proof Release Train.
+// No UI or wire-control item can transition from `Claimed-Done` to `Verified`
+// without BOTH a live screenshot artifact and a wire/protocol check.
+//
+//   1  what is required     for every piece; more for UI work
+//   2  the proofs           a screenshot and the wire, of the release he really runs, shown by somebody else
+//   3  the cut              when a train leaves
+//   4  the warm build       every compile through the one shared cache, on the build machine
+//   5  the check            one at a time; the flavor is frozen while it runs
+//   6  the train            merge, build, check, install, switch
+
+// ===== 1. What is required =======================================================================================
+
++R.Condition("cargo_tests_green").
++R.Condition("live_screenshot_verified").
++R.Condition("wire_bytes_verified").
++R.Condition("zero_ui_clones").
++R.Condition("zero_engine_hardcoding").
+
+Fact UI-Work(target: R.Artifact)
+Fact Piece(target: R.Artifact)                      // a commit handed in for the train
+
+// Automatically require visual + zero-clone proof for every UI artifact: the screenshot and the wire, both.
+// Every piece, UI or not, owes green tests and no engine hardcoding.
+Extend Fact R.Required
+  Holds when UI-Work(target) && R.Condition(cond) && (cond == "cargo_tests_green"
+                             || cond == "live_screenshot_verified"
+                             || cond == "wire_bytes_verified"
+                             || cond == "zero_ui_clones")
+  Holds when Piece(target) && R.Condition(cond) && (cond == "cargo_tests_green" || cond == "zero_engine_hardcoding")
+
+// ===== 2. The proofs =============================================================================================
+// Edge: a screenshot of what? A still of a stand-in window, or of a build that is not installed, has been called
+// proof before. A proof names the release it was taken on, and counts only if that release is the installed one
+// and carries the piece. Only then can the two conditions be verified, and the verifier is still std.rails'
+// independent one, who looks at the proof and says whether it shows the piece.
+
+Fact Release Identified by String
+Fact Installed(release: Release)
+Fact Carries(release: Release, target: R.Artifact)
+Fact Proof(target: R.Artifact, cond: R.Condition, file: C.Key, release: Release)
+
+// A proof is not anybody's word. It is the capture driver's line: the driver that took the picture of his window,
+// or recorded the bytes on the engine's connection, says for which piece, of which release, into which file. No
+// party can perform an Event (spec 8.2), so no builder and no looker can say a proof exists.
+Event Proof-Captured(target: R.Artifact, cond: R.Condition, file: C.Key, release: Release)
+  Conditioned by (cond == "live_screenshot_verified" || cond == "wire_bytes_verified")
+                 && Installed(release) && Carries(release, target)
+  Creates        Proof(target, cond, file, release)
+
+Extend Act R.Verify-Condition
+  Conditioned by (cond != "live_screenshot_verified" && cond != "wire_bytes_verified")
+                 || (Exists f, rel : Proof(target, cond, f, rel) && Installed(rel))
+
+// The two visual conditions are looked at when their proof arrives, not when the piece is claimed: before that
+// there is nothing to look at. The looker is shown the piece and the proof, and this module records what it found.
++R.Checked-Elsewhere("live_screenshot_verified"). +R.Checked-Elsewhere("wire_bytes_verified").
++R.Verifier-Module("yaaihh.train").
+Call Check-Proof(piece: String, cond: String, proof: String) -> R.Finding
+  Template """
+  This piece of work was claimed done: {{ piece }}
+  This is offered as proof of "{{ cond }}", taken from the release that is installed: {{ proof }}
+  Does it show the piece working as asked? A picture of another screen, or bytes of another request, does not.
+  Return Met, or Unmet with what is off.
+  """
+on Proof-Captured(target, cond, file, _) where R.Awaiting(target, cond) do {
+  claimants <- return (Foreach w : w When R.Claimed-Done(w, target));
+  looker <- perform R.Pick-Other("looker", claimants);   // of another family than the claimant, as `R.May-Find` asks
+  piece  <- perform C.TextOf("{{ target }}");
+  proof  <- perform C.TextOf("{{ file }}");
+  found  <- do C.step(looker, Check-Proof(piece, "{{ cond }}", proof));
+  match found {
+    | R.Met        => R.Verify-Condition(self, looker, target, cond)
+    | R.Unmet(why) => R.Refute-Condition(self, looker, target, cond, why)
+  }
+}
+
+// Edge: a new release. A proof is of one release. When another is installed, the piece's two visual conditions
+// are open again until they are shown on the new one: what was verified is the thing as it was.
+Event Release-Installed(release: Release)
+  Terminates Installed(r) When Installed(r)
+           , R.Verified(t, "live_screenshot_verified") When R.Verified(t, "live_screenshot_verified")
+           , R.Verified(t, "wire_bytes_verified") When R.Verified(t, "wire_bytes_verified")
+  Creates    Installed(release)
+
+// ===== 3. The cut ================================================================================================
+// A train leaves on three ready pieces, on one fix of a fault in his window, or when a piece has waited twenty
+// minutes. One train at a time: back-to-back trains take the build machine from the builders.
+
+Fact Read-Right(target: R.Artifact, by: H.Party)    // somebody else read the change and found it right
+Fact Ready-At(target: R.Artifact, minute: Int)
+Fact Fault-Fix(target: R.Artifact)
+Fact On-Train(target: R.Artifact, train: String)
+Fact Leaving(train: String)
+
+Act Read-As-Right(by: H.Party, target: R.Artifact)
+  Conditioned by Piece(target) && Not(R.Assigned(by, target)) && B.Now(m)
+  Creates        Read-Right(target, by), Ready-At(target, m)
+
+Fact Waiting-Piece(target: R.Artifact)
+  Holds when Ready-At(target, m) && Not(Exists t : On-Train(target, t))
+Fact Cut-Due()
+  Holds when Not(Exists t : Leaving(t))
+             && (Count(Foreach p : p When Waiting-Piece(p)) >= 3
+                 || (Exists p : Waiting-Piece(p) && Fault-Fix(p))
+                 || (Exists p, m, now : Waiting-Piece(p) && Ready-At(p, m) && B.Now(now) && m + 20 <= now))
+
+Event Cut(train: String)
+  Conditioned by Cut-Due()
+  Creates        Leaving(train)
+               , On-Train(p, train) When Waiting-Piece(p)
+Event Arrived(train: String)
+  Terminates Leaving(train)
+
+// ===== 4. The warm build =========================================================================================
+// One content-addressed cache for every worktree, and no compile on his laptop. A compile started any other way
+// is denied, with the way that works.
+
+fn with_shared_cache<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, "tool_called", payload), k where who == agent => {
+        use <- perform H.Tool-Use(who, payload);
+        if matches_glob(use.command, "cargo build*") || matches_glob(use.command, "cargo test*")
+           || matches_glob(use.command, "cargo check*") {
+          resume k(H.Deny("A compile goes through the shared cache on the build machine. Use `build-runner cargo` with the same arguments."))
+        } else {
+          answer <- perform H.Hook(who, "tool_called", payload);
+          resume k(answer)
+        }
+      }
+  }
+}
+
+// ===== 5. The check ==============================================================================================
+// The engine check replays his record, so it runs on his laptop, on one idle core, one at a time. Its saved state
+// is pinned to the flavor it started on.
+// A flavor commit while a check runs throws the check away. The flavor is frozen from a check's start to its last
+// switch, and the denial says why and when it ends.
+
+Fact Checking(train: String)
+Event Check-Begins(train: String)
+  Conditioned by Not(Exists t : Checking(t))
+  Creates        Checking(train)
+Event Check-Ends(train: String)
+  Terminates Checking(train)
+
+fn with_flavor_freeze<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, "tool_called", payload), k where who == agent && Exists t : Checking(t) => {
+        use <- perform H.Tool-Use(who, payload);
+        if (Exists p : H.Changes(agent, p) && matches_glob(p, "flavor/**")) || matches_glob(use.command, "git -C *flavor* commit*") {
+          resume k(H.Deny("An engine check is running, and its saved state is pinned to the flavor as it stood at its start. A change to the flavor now throws the check away. It is frozen until the release is switched in; commit this then."))
+        } else {
+          answer <- perform H.Hook(who, "tool_called", payload);
+          resume k(answer)
+        }
+      }
+  }
+}
+
+// ===== 6. The train ==============================================================================================
+// The commands are the project's text.
+
+Fact Step-Command(step: String, command: String)
++Step-Command("merge",   "git merge --no-ff --no-edit").
++Step-Command("build",   "build-runner cargo build --release").
++Step-Command("check",   "./ops/release/train-check.sh engine").
++Step-Command("install", "./ops/release/release.sh live --no-exe").
++Step-Command("switch",  "./ops/release/release.sh coord-switch").
+Fact Switched-Project(name: String)                 // the projects whose engine is switched: his list
+// The laptop's memory ledger (std.budgets 4). 14 336 MB is today's cap on the engine check; the number is his.
++B.Bucket("yaaihh-laptop"). +B.Machine("yaaihh-laptop"). +B.Limit("yaaihh-laptop", "ram_mb", 14336).
+
+fn command_for(step: String) -> Program<String> {
+  found <- return (Foreach c : c When Step-Command(step, c));
+  match found { | [c] => return c }
+}
+
+// Run from the reaction below, so as this module: the Events are a reaction's to perform, and the reservation is
+// this module's own act.
++H.Party("yaaihh.train").
+fn run_train(train: String) -> Program<Unit> {
+  Cut(train);
+  load    <- return (Foreach p : p When On-Train(p, train));
+  merge   <- do command_for("merge");   build  <- do command_for("build");   check <- do command_for("check");
+  install <- do command_for("install"); switch <- do command_for("switch");
+  par p in load up to 1 { perform B.Command("{{ merge }} {{ p }}") };
+  B.Reserve(self, train, "yaaihh-laptop", 10240);                   // the build's memory, on the machine's ledger
+  perform B.Command(build);
+  Check-Begins(train);
+  said <- perform B.Command("{{ check }} {{ train }}");             // it prints "green", or what is red
+  if said == "green" {
+    perform B.Command("{{ install }} {{ train }}");
+    par name in (Foreach n : n When Switched-Project(n)) up to 1 { perform B.Command("{{ switch }} {{ name }}") };
+    Release-Installed(train);
+    par p in load { Carried(train, p) };
+    return ()
+  } else {
+    par p in load {
+      par w in (Foreach w : w When R.Assigned(w, p)) {
+        perform Ctrl.Deliver(self, w, "The train that carried your piece {{ p }} is red: {{ said }}. Nothing was installed.")
+      }
+    };
+    return ()
+  };
+  Check-Ends(train);                                                // the flavor thaws only now
+  do B.job_ended(train);
+  Arrived(train)
+}
+Event Carried(release: Release, target: R.Artifact)
+  Creates Carries(release, target)
+
+on B.Tick(minute) where Cut-Due() do {
+  do run_train("train-{{ minute }}")
+}
+
+// Installed is not verified. After a green train each piece stands exactly where it stood: claimed by its builder,
+// looked at by a looker when it is claimed (std.rails `look`), and for UI work owed its two proofs first.
+// The proofs are owed to the owner by whoever keeps the capture driver going; the driver's own line ends the
+// duty, which is the only way the closing rule lets a duty to produce something end (spec 9).
+Duty Owes-Proof(holder: H.Party, claimant: H.Party, target: R.Artifact, cond: R.Condition)
+  Holds when C.Role(holder, "keeper") && C.Role(claimant, "owner") && UI-Work(target) && Installed(rel) && Carries(rel, target)
+             && (cond == "live_screenshot_verified" || cond == "wire_bytes_verified")
+             && Not(Exists f : Proof(target, cond, f, rel))

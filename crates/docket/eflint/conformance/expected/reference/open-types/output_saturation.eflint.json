@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type address\nNew type article_one\nNew type citizen\nNew type first_property\nNew type property\nNew type value\n+citizen(\"Alice\")\n+article_one(citizen(\"Alice\"),property(address(\"Q\"),value(1)))\n+first_property(citizen(\"Alice\"),property(address(\"Q\"),value(1)))\n+property(address(\"Q\"),value(1))\nquery successful\n-first_property(citizen(\"Alice\"),property(address(\"PP\"),value(10)))\n+property(address(\"PP\"),value(10))\nquery successful\n#5 > "
+ }
+}

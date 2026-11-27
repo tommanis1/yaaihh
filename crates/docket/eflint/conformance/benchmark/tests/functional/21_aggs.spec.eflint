@@ -1,0 +1,5 @@
+Fact x Identified by Int
+Fact countx Identified by Int
+	Derived from countx(Count(Foreach x: 1))
+Fact sumx Identified by Int
+	Derived from sumx(Sum(Foreach x: x))

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\nNew type y\n#2 > \n#2 > +x(0)\n#3 > x(0) = True\n\n#3 > +x(1)\n+y(x(0),x(1),x(0))\n+y(x(0),x(1),x(1))\n#4 > x(0) = True\nx(1) = True\ny(x(0),x(1),x(0)) = True\ny(x(0),x(1),x(1)) = True\n\n#4 > +x(2)\n+y(x(0),x(1),x(2))\n+y(x(0),x(2),x(0))\n+y(x(0),x(2),x(1))\n+y(x(0),x(2),x(2))\n+y(x(1),x(2),x(0))\n+y(x(1),x(2),x(1))\n+y(x(1),x(2),x(2))\n#5 > x(0) = True\nx(1) = True\nx(2) = True\ny(x(0),x(1),x(0)) = True\ny(x(0),x(1),x(1)) = True\ny(x(0),x(1),x(2)) = True\ny(x(0),x(2),x(0)) = True\ny(x(0),x(2),x(1)) = True\ny(x(0),x(2),x(2)) = True\ny(x(1),x(2),x(0)) = True\ny(x(1),x(2),x(1)) = True\ny(x(1),x(2),x(2)) = True\n\n#5 > "
+ }
+}

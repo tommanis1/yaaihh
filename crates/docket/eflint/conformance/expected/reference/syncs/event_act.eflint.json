@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type break\nNew type destroy\nNew type nearby\nNew type object\nNew type owner-of\nNew type promise-to-compensate\n+actor(\"Alice\")\n+actor(\"Bob\")\n+owner-of(actor(\"Alice\"),object(\"Flower\"))\n+owner-of(actor(\"Bob\"),object(\"Knife\"))\n+nearby(actor(\"Bob\"),object(\"Flower\"))\nquery successful\nquery successful\nexecuted transition: \nbreak(object(\"Flower\")) \n|\n`- destroy(actor(\"Bob\"),object(\"Flower\")) (DISABLED)\nviolations:\n  disabled action: destroy(actor(\"Bob\"),object(\"Flower\"))\n+promise-to-compensate(actor(\"Bob\"),actor(\"Alice\"),object(\"Flower\"))\nquery successful\n#11 > "
+ }
+}

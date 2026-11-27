@@ -1,0 +1,56 @@
+# The speech worker (worker.py) on the GPU VM. install.sh copies it to ~/.config/yaaihh-voice/config.toml (or
+# $YAAIHH_VOICE_CONF/config.toml) once; edit it there.
+
+# `tailscale`: the GPU VM's own Tailscale IPv4 (`tailscale ip -4`); any other value must be a Tailscale address
+host = "tailscale"
+port = 8765
+# the tailnet nodes that may send sound, by Tailscale address or stable node id (`tailscale whois`); never by name,
+# which whoever manages the tailnet can change; no one else is answered
+allow = [
+  # "100.x.y.z",   # the laptop
+]
+# when not empty, every take must give it (speech.toml's [tower] token): against a machine on this VM's own network
+# that reaches the Tailscale address from an address in Tailscale's range
+token = ""
+# the most takes answered at once; one more is told the worker is busy
+max_connections = 4
+# a take that sends nothing this long is closed
+read_timeout_s = 10
+# `whisper` (faster-whisper) or `parakeet` (NeMo; install.sh --parakeet); the other's table is then unused
+backend = "whisper"
+
+# each model at one commit of its Hugging Face repository, checked at load (asr.py `pinned`)
+[whisper]
+# faster-whisper 1.2.1's `large-v3-turbo` (mobiuslabsgmbh's name now redirects here), read 26 Nov 2026
+repo = "dropbox-dash/faster-whisper-large-v3-turbo"
+revision = "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
+device = "cuda"
+device_index = 0
+# INT8 weights, FP16 compute: about 1 GB of the 3060's 12 GB
+compute_type = "int8_float16"
+language = "en"
+beam_size = 5
+
+[parakeet]
+# read 26 Nov 2026
+repo = "nvidia/parakeet-tdt-0.6b-v3"
+revision = "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
+device = "cuda"
+
+[vad]
+threshold = 0.5
+# a pause this long settles the words before it
+min_silence_ms = 500
+pad_ms = 200
+# the open words are heard again after each second of new sound
+tail_every_s = 1.0
+# speech with no pause this long settles anyway
+max_segment_s = 25
+
+[vocab]
+# read again at each take; a project with no file here gets the global words alone; a relative path is from ops/voice
+global = "vocab.md"
+
+[vocab.projects]
+# a project's id (its box's or host coordd's name, as projects.toml has it) = its own vocab.md
+# research = "/path/to/its/checkout/docs/specs/vocabulary.md"

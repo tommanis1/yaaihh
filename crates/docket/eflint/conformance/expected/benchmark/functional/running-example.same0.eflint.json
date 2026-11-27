@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type access\nNew type controls\nNew type dataset\nNew type elapsed\nNew type instant\nNew type must_notify\nNew type notify\nNew type user\n#2 > \n#2 > +user(\"Amy\")\n#3 > user(\"Amy\") = True\n\n#3 > +instant(9)\n#4 > user(\"Amy\") = True\ninstant(9) = True\n\n#4 > +dataset(\"X-Rays\")\n+controls(user(\"Amy\"),dataset(\"X-Rays\"))\n+access(user(\"Amy\"),dataset(\"X-Rays\"),instant(9))\n#5 > user(\"Amy\") = True\ndataset(\"X-Rays\") = True\ninstant(9) = True\ncontrols(user(\"Amy\"),dataset(\"X-Rays\")) = True\naccess(user(\"Amy\"),dataset(\"X-Rays\"),instant(9)) = True\n\n#5 > #6 > user(\"Amy\") = True\ndataset(\"X-Rays\") = True\ninstant(9) = True\ncontrols(user(\"Amy\"),dataset(\"X-Rays\")) = True\naccess(user(\"Amy\"),dataset(\"X-Rays\"),instant(9)) = True\n\n#6 > "
+ }
+}

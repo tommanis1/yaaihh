@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type asset\nNew type permission\nNew type prohibited\n+permission(actor(\"Eve\"),asset(\"A1\"))\n+permission(actor(\"Eve\"),asset(\"A2\"))\n+permission(actor(\"Eve\"),asset(\"A3\"))\n+permission(actor(\"John\"),asset(\"A1\"))\n+permission(actor(\"John\"),asset(\"A2\"))\n+permission(actor(\"John\"),asset(\"A3\"))\nquery successful\nquery successful\n~permission(actor(\"Eve\"),asset(\"A1\"))\n+prohibited(actor(\"Eve\"),asset(\"A1\"))\nquery successful\nquery successful\n~permission(actor(\"Eve\"),asset(\"A2\"))\n~permission(actor(\"Eve\"),asset(\"A3\"))\n~permission(actor(\"John\"),asset(\"A1\"))\n~permission(actor(\"John\"),asset(\"A2\"))\n~permission(actor(\"John\"),asset(\"A3\"))\n+prohibited(actor(\"Eve\"),asset(\"A2\"))\n+prohibited(actor(\"Eve\"),asset(\"A3\"))\n+prohibited(actor(\"John\"),asset(\"A1\"))\n+prohibited(actor(\"John\"),asset(\"A2\"))\n+prohibited(actor(\"John\"),asset(\"A3\"))\nquery successful\nquery successful\n#11 > "
+ }
+}

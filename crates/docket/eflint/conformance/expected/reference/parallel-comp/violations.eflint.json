@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\n+x(0)\nNew type in-violation\nNew type increment\nNew type keep-not-in-violation\nNew type not-in-violation\n+not-in-violation()\nNew invariant not-in-violation\n+keep-not-in-violation(actor(\"Alice\"),actor(\"Bob\"))\nexecuted transition: \nincrement() \nexecuted transition: \nincrement() \nviolations:\n  violated duty!: keep-not-in-violation(actor(\"Alice\"),actor(\"Bob\"))\n  violated invariant!: not-in-violation\n~not-in-violation()\n-x(0)\n+x(1)\n+in-violation()\nquery successful\nviolations:\n  violated duty!: keep-not-in-violation(actor(\"Alice\"),actor(\"Bob\"))\n  violated invariant!: not-in-violation\nexecuted transition: \nincrement() \nexecuted transition: \nincrement() \n~in-violation()\n-x(1)\n+x(2)\n+not-in-violation()\nquery successful\nexecuted transition: \nincrement() \nviolations:\n  violated duty!: keep-not-in-violation(actor(\"Alice\"),actor(\"Bob\"))\n  violated invariant!: not-in-violation\n~not-in-violation()\n-x(2)\n+x(3)\n+in-violation()\nquery successful\nviolations:\n  violated duty!: keep-not-in-violation(actor(\"Alice\"),actor(\"Bob\"))\n  violated invariant!: not-in-violation\n#11 > "
+ }
+}

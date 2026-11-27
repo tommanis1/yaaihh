@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type address\nNew type do\nNew type done\nNew type name\nquery successful\nexecuted transition: \ndo(actor(name(\"Alice\"),address(\"SciencePark\"))) (DISABLED)\nviolations:\n  disabled action: do(actor(name(\"Alice\"),address(\"SciencePark\")))\n+done(\"Alice\")\nquery successful\nquery successful\nexecuted transition: \ndo(actor(name(\"Bob\"),address(\"Roeterseiland\"))) (DISABLED)\nviolations:\n  disabled action: do(actor(name(\"Bob\"),address(\"Roeterseiland\")))\n+done(\"Bob\")\nquery successful\nquery successful\n#9 > "
+ }
+}

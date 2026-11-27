@@ -1,0 +1,12 @@
+[package]
+name = "symbols"
+version = "0.1.0"
+edition = "2024"
+description = "The symbol tools (N-117): read and edit code by definition, over a project's language servers, as an MCP server"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+toml = "0.8"
+libc = "0.2"
+

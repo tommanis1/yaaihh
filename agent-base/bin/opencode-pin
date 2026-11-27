@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# opencode-pin COORD: the pinned opencode for the coord whose folder is COORD, so its opencode accounts sign in and its
+# agents run on opencode in every project (the owner, N-1104 p780: "also stuff opencode we really need that asap").
+#
+# The coord's place for it is COORD/opt/opencode/1.18.34: the one opencode coordd's sign-in (accounts/opencode.rs
+# `program`), roster and opencode-rpc run, each checking its sha256 before every run (docket-core3's condition 3, N-591
+# post 121; N-946 posts 8 and 12). Here that place becomes a link to the machine's one copy, ~/agent-coord/opt/opencode/
+# 1.18.34, which is fetched once as tool-scan fetched research's (the owner's yes, N-616 posts 22 and 23; N-946 post 5):
+# opencode's own release asset for linux x64 into a new empty folder beside it, the archive checked against GitHub's
+# digest for it, the binary against the pinned sha256, nothing run, no installer, read-only, SOURCE kept beside it.
+# A coord whose place is there already is left as it is (research's own copy, fetched on 19 Nov).
+#
+# host-coordd start runs it for its coord, in the background (its log: COORD/opencode-pin.log). The last line says what
+# was done; a failure, why, on stderr, and its exit code is not 0. OPENCODE_PIN_HOME (tests) is where the machine's copy
+# is kept instead of ~/agent-coord/opt.
+# Way back: rm COORD/opt/opencode/1.18.34 (a link) and, once no coord links to it, ~/agent-coord/opt/opencode.
+set -euo pipefail
+# the pin, as accounts/opencode.rs VERSION and SHA256 and opencode-rpc's OPENCODE_SHA256 (tests/opencode-pin-test.sh)
+VERSION=1.18.34
+SHA256=9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2
+ARCHIVE=opencode-linux-x64.tar.gz
+URL=https://github.com/anomalyco/opencode/releases/download/v$VERSION/$ARCHIVE
+ARCHIVE_SHA256=0f22479647226d1d2dd99595d20082ee7bda3870b62dc6a90b41efc1a71d7e9a
+
+fail() { echo "opencode-pin: $*" >&2; exit 1; }
+[ $# = 1 ] || { echo "usage: opencode-pin COORD" >&2; exit 2; }
+coord=$1
+[ -d "$coord" ] || fail "no coord folder $coord"
+place=$coord/opt/opencode/$VERSION
+if [ -e "$place/bin/opencode" ]; then
+  echo "opencode-pin: $place is there already"
+  exit 0
+fi
+[ ! -e "$place" ] && [ ! -L "$place" ] || fail "$place is there but holds no bin/opencode; it is left as it is"
+machine=${OPENCODE_PIN_HOME:-$HOME/agent-coord/opt}/opencode/$VERSION
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+if [ ! -e "$machine/bin/opencode" ]; then
+  parent=$(dirname "$machine")
+  mkdir -p "$parent"
+  new=$(mktemp -d "$parent/.fetch-$VERSION.XXXXXX")
+  trap 'chmod -R u+w "$new" 2>/dev/null || true; rm -rf "$new"' EXIT
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --output "$new/$ARCHIVE" "$URL" \
+    || fail "the fetch of $URL failed; nothing is kept"
+  got=$(sha "$new/$ARCHIVE")
+  [ "$got" = "$ARCHIVE_SHA256" ] || fail "$URL is not the release's asset (its sha256 is $got, not GitHub's digest $ARCHIVE_SHA256); nothing is kept"
+  mkdir "$new/bin"
+  tar -xzf "$new/$ARCHIVE" -C "$new/bin" --no-same-owner opencode || fail "$ARCHIVE holds no opencode; nothing is kept"
+  got=$(sha "$new/bin/opencode")
+  [ "$got" = "$SHA256" ] || fail "the opencode in $ARCHIVE is not the pinned one (its sha256 is $got, not $SHA256); nothing is kept"
+  printf '%s  %s\n' "$ARCHIVE_SHA256" "$ARCHIVE" >"$new/$ARCHIVE.sha256"
+  printf '%s  %s\n' "$SHA256" bin/opencode >"$new/bin/opencode.sha256"
+  printf 'opencode v%s linux x64\nfrom %s\nrelease digest sha256:%s (GitHub asset digest)\nfetched %s by opencode-pin for %s; not run\n' \
+    "$VERSION" "$URL" "$ARCHIVE_SHA256" "$(date -u +%FT%TZ)" "$coord" >"$new/SOURCE"
+  chmod 0555 "$new/bin/opencode"
+  chmod 0755 "$new"
+  chmod -R a-w "$new"
+  # another coord's start may have put it there meanwhile: then that one is taken, and this fetch dropped
+  if mv -T "$new" "$machine" 2>/dev/null; then
+    trap - EXIT
+  else
+    [ -e "$machine/bin/opencode" ] || fail "cannot put the fetched opencode at $machine"
+  fi
+fi
+
+got=$(sha "$machine/bin/opencode")
+[ "$got" = "$SHA256" ] || fail "$machine/bin/opencode is not the pinned opencode (its sha256 is $got, not $SHA256); $place is not linked to it"
+mkdir -p "$coord/opt/opencode"
+ln -sT "$machine" "$place" || fail "cannot link $place to $machine"
+echo "opencode-pin: $place is $machine"

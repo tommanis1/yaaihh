@@ -1,0 +1,51 @@
+// What an idle agent gets now (0.2, runtime-design §5; the owner, 20 Nov: "call a decision llm dont hardcode the
+// rules"): delivery.kind's `free` handler makes the step, owed by the watcher, which coordd answers itself as it does
+// route. It ran `choose` (fold.call's now) once, statelessly, with the model the policy names for the task `deliver`
+// (decisions.eflint: Codex only), and answers `next` with its verdict, by id: of what waits, what goes now as one
+// message, most important first, and what waits on, named at the message's foot; or Rest(why), and all of it waits,
+// WHY shown under each sender's message. coordd leaves out an id that is not waiting, and names in REST each item
+// waiting that the verdict names nowhere. A message holds at most one step, since the agent's last message answers
+// it: coordd names in REST any step after the first that NOW gives. A call that fails or answers out of shape is
+// answered Give(everything waiting, oldest first, one step at most): nothing is held back on a failed call.
+// Since I-1480 c (373c572a) coordd answers `next` with no call (delivery.rs `next_given`). It stays for the recorded
+// programs that name it; delivery.kind steps fold.call's `fold` (the owner, N-1104 p923; proto-mind N-1446 p2094).
+// `choose` is told the AGENT it decides for, by name: whose delivery ticket it is (coordd's `run_of`, the agent of
+// `free`'s event). Without it the call took the names in `doing`'s thread label for the agent: docket-core, last on
+// N-1397 "0.2 A1–A3 (docket-core2)", had its lead's posts kept six times as docket-core2's, 19:25Z to 19:31Z on 20
+// Nov (paper-research N-1397.p103).
+// A post that brings what the agent was asked to read is its work, not news, and `choose` sees that it was asked: a
+// line's column "the post it answers" names that post (the reply tool's `to`, else, of what was new to its writer
+// when it wrote, up to what it had been handed there, the latest that names the agent or is its own: a turn's reply
+// answers what its turn held, and a post handed after the ask must not hide it, consult-3 p173), whose it is, and
+// that post's words that name the agent, or its first line when it is the agent's own (coordd's `answered_column`).
+// A post's own line quotes its lines further down that name the agent: N-1446.p728's ask to consult-3 came under its
+// first line, and it was held from consult-3 seven times, 03:47:05Z to 04:04:21Z (proto-mind N-1397.p173). An
+// answer to its own post is its work when that post asked something; a bare "taken" to it still goes only with
+// something else (proto-reader p171). proto-lead's N-1446.p728 said consult-3 and proto-reader read docket-core4's
+// head; docket-core4's p729 and p730 brought it, and were kept from proto-reader as "the waiting posts confirm fixes
+// or report test results" at 04:04:54Z and 04:12:57Z on 21 Nov: build 51 stood 30 minutes (paper-research
+// N-1397.p169).
+
+/// one thing waiting for an agent, as the delivery events carry it (docket-machine `syntax::waiting_type`)
+type Waiting {
+  id: Text          /// N-412.p7 for a post; else the delivery's, as C-12.s3 for a step
+  thread: Ticket    /// the thread it is on
+  label: Text       /// that thread's label
+  from: Agent       /// who wrote it: owner, an agent, or coordd for a step (the agent, for one it raised)
+  owner: Bool       /// it is the owner's
+  names: Bool       /// it is typed to the agent, or names it with @
+  inform: Bool      /// it only informs the agent: it starts no turn
+  lead: Bool        /// it is a post whose author is above the agent in the team's tree
+  answers: Text?    /// the post it answers
+  text: Text        /// its words
+  what: Text        /// post, step, closed, withdrawn, refused, words, taken_back
+  kept: Text?       /// why it was kept, when it was
+  waits: Bool       /// the owner sent it to wait for the agent's turn to end
+  raised: Bool      /// a step its own act asked for (`coord item start`'s seek): from the agent itself
+  about_turn: Bool  /// its ticket stands at a post of a thread its running turn holds (its brain's line)
+  into_turn: Bool   /// its post asks to go into the running turn it is about (a program's `post … informing`)
+}
+
+/// what an idle agent gets now, as one message, and what waits on
+call next(doing: Text, waiting: [Waiting]) -> Give(now: [Text], rest: [Text]) | Rest(why: Text)
+  task deliver

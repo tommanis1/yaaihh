@@ -1,0 +1,2 @@
+go(person("Amy")).
+go(person("Bob")).

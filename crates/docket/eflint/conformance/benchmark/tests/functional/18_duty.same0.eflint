@@ -1,0 +1,4 @@
++duty(int(2),string("x")).
++duty(int(2),string("y")).
++bad(duty(int(3),string("x"))).
++duty(int(3),string("x")).

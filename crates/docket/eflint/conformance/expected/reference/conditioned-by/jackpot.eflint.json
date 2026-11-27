@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type input\nNew type jackpot\nNew type jackpot-conditions\nNew type player\n+player(\"P\")\n+input(3)\nquery successful\n-input(3)\n+input(6)\n+jackpot(player(\"P\"))\n+jackpot-conditions(player(\"P\"))\nquery successful\n~jackpot(player(\"P\"))\n~jackpot-conditions(player(\"P\"))\n-input(6)\n+input(10)\nquery successful\n-input(10)\n#12 > "
+ }
+}

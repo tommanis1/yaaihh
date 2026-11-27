@@ -1,0 +1,17 @@
+# The packs added to an agent's system prompt for its model, by the start of the model's id: the first entry that
+# matches, each pack the file NAME.md here. A model that matches none gets no pack, and its start says so.
+[[pack]]
+models = ["claude-fable-"]
+packs = ["claude", "fable"]
+
+[[pack]]
+models = ["claude-"]
+packs = ["claude"]
+
+[[pack]]
+models = ["gpt-"]
+packs = ["codex"]
+
+[[pack]]
+models = ["agy/", "gemini-"]
+packs = ["agy"]

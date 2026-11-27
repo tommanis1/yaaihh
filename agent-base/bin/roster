@@ -7,41 +7,70 @@
 # roster on the host with its environment (`host-coordd sh NAME roster ...`): its agents are plain host processes.
 #
 #   roster up FILE     start every agent in FILE that is not running yet
-#   roster add NAME MODEL PROMPT-FILE [DIR]
-#                      start one agent, as one line of FILE would
+#   roster add NAME MODEL PROMPT-FILE DIR
+#                      start one agent, as one line of FILE would; DIR is required (with none it is refused).
+#                      ROSTER_BARE=1 makes an agy agent bare, for good: nothing of ours on it (agy_agent)
+#                      ROSTER_AGY_NATIVE=1 runs an agy agent on a sign-in through agy's own ACP client, not t3code, for good
+#                      ROSTER_RENDERINGS=SET registers it with that renderings set (`coordc add --renderings SET`)
 #                      (up and add register the agent with coordd, the caller, an agent or the owner, its parent;
 #                      restart keeps it)
-#   roster restart NAME [--force]
+#   roster standing    the standing text every agent's system prompt ends with (spawn-v2.sh composes with it)
+#   roster restart NAME [--force] [--cut FILE BYTES] [--system N append|replace]
 #   roster rename NAME NEW   NAME is called NEW: once its turn has ended it stops, is renamed, and resumes its own
 #                      session as NEW (its id, session and history stay; coordd's `rename`)
 #                      start NAME again on its own session (session.json: id, cwd, model), hanging up the running
-#                      terminal; refused while NAME is working, unless --force
-#   roster fork NAME [--name NEW] [--model MODEL] [TEXT]
+#                      terminal; refused while NAME is working, unless --force. --cut (coordd's `fork`, part 4,
+#                      docket-core N-1446 p2096): NAME goes on under its own name from a copy of its session cut after
+#                      FILE's first BYTES bytes (whole lines; FILE its session's transcript), a new session beside it;
+#                      its own session stays as it was. Claude Code's only; refused before anything is hung up when
+#                      the cut cannot be made. --system (coordd's SystemPrompt, the owner's edit of NAME's system
+#                      prompt as a branch, accounts-lead N-1446 p2447): NAME starts with version N of its own system
+#                      prompt, $COORD/prompts/NAME.system/N.md, appended to Claude Code's own or replacing it, and every
+#                      later start of NAME takes it too (`current` there names it) until he edits again; its start's
+#                      record line says phase system, the version, and with --cut the session it was cut from
+#   roster fork NAME [--cut FILE BYTES] [--name NEW] [--model MODEL] [--dir DIR] [TEXT]
+#                      --cut (coordd's copy, N-1104 p1154): on a copy of NAME's session cut after BYTES of FILE, its
+#                      transcript (fork_copy), not the whole of it. Otherwise
 #                      a new agent NEW (default NAME-fork, NAME-fork2, ...) on a copy of NAME's whole conversation
 #                      (`claude --resume --fork-session`: a new session id, the same history, settings and hooks); NAME
 #                      goes on unchanged. NEW's parent is the caller (the owner from yaaihh's Fork, or the agent that
 #                      runs `coord fork`). Its first prompt says it is a fork, then TEXT, if any (vault designs/
-#                      decisions-policies-forks-2026-11-08.md §4.5)
+#                      decisions-policies-forks-2026-11-08.md §4.5). DIR: where NEW runs, else NAME's cwd; NAME's
+#                      transcript must be found from DIR (coordd copies it there first for a pattern's fork, N-101,
+#                      in a layer's view and box as ROSTER_VIEW and ROSTER_BOX say). NEW goes on with the version of
+#                      its own system prompt NAME runs with (`restart --system`), its versions copied as NEW's.
+#                      NEW is registered as a copy of NAME (`coord add --from`: the window's spin-off), and NAME's
+#                      transcript is put where NEW's Claude Code finds it, or NEW is not started (N-1794)
+#   roster ask NAME TEXT
+#                      one answer to TEXT from a copy of NAME's session (`claude -p --resume --fork-session`), printed:
+#                      the owner's Join back of a spin-off (coordd's SpinEnd, N-1794). NAME's own session is not touched;
+#                      run with its account, model and system prompt, without hooks, channel or terminal
 #   roster resume      resume the agents that ran when coordd last went down (box.sh start and host-coordd start
 #                      run it after a reboot)
 #   roster tab NAME DIR CMD...
 #                      run a non-agent program (the runner) on terminal NAME, hanging up a running one; it is
 #                      registered as kind `program` and gets its own cgroup as an agent does
+#   roster account NAME ACCT DIR [--cols C] CMD...
+#                      CMD on terminal NAME in DIR, trusted in the owner's account folder ACCT: coordd's session for a
+#                      reset he pressed `Use` on (coordd types `/limit-reset`, reads the answer, hangs up)
 #   roster down NAME   hang up NAME's terminal (its session ends; the transcript stays), and a Codex agent's app-server
 #   roster ls          the terminals: name, size, the title the program sets, command
+#   roster said FIELD=VALUE... -- CMD...
+#                      the start of a Claude Code agent in its coord's record (below), then CMD; agent() runs it
 #
 # FILE has one agent per line, `#` comments allowed:
 #   NAME  MODEL  PROMPT-FILE  [DIR]
 # MODEL is passed to --model as written; a gpt-* MODEL makes a Codex agent (below). MODEL:EFFORT also sets the
-# reasoning effort (Claude --effort, Codex model_reasoning_effort; else the default of each), e.g. gpt-6-astra:medium.
+# reasoning effort (Claude --effort, Codex model_reasoning_effort, agy's thought_level; else the default of each), e.g. gpt-6-astra:medium.
 # AGENT_MODEL and session.json keep MODEL:EFFORT, so a restart keeps the effort. PROMPT-FILE (relative to FILE) is the agent's first prompt. A first line
-# `resume: SESSION-ID` resumes that session instead (its transcript in ~/.claude/projects/ for DIR), with the rest of
-# the file as the first message. DIR defaults to the current directory.
+# `resume: SESSION-ID` resumes that session instead (Claude Code's, Codex's, or an agy conversation: agy-import), with the rest of
+# the file as the first message. DIR defaults to the folder `roster up` runs in (roster add takes none: below).
 #
 # Every agent is registered with coordd (`coordc add`) and its process claims it (`coordc run NAME -- CMD`): coordd
 # puts the process in the agent's cgroup, knows it by that from then on, and sees it end (vault designs/
 # yaaihh-2026-11-07.md §7). coordd also writes agents/NAME/session.json, which restart reads.
-# Each session runs with bypass permissions and $COORD/claude-settings.json, made from claude/settings.json (hooks,
+# Each session runs with bypass permissions and $COORD/claude-settings.json, made from claude/settings.json and the
+# project's claude-settings.json beside its project file, if any (hooks,
 # crossSessionInbound accept; with a model route the proxy key from $COORD/.proxy-key through apiKeyHelper rather than
 # the environment, which sbx rewrites; without one the session's own login), AGENT_NAME and
 # AGENT_MODEL set, and git's hooksPath on git/hooks for the commit trailers. Terminal NAME is the agent's.
@@ -54,9 +83,52 @@
 # app-server runs the same claude/hook from $CODEX_HOME/hooks.json, which roster writes and trusts; the app-server is the
 # agent's process for coordd, and coordd reaches the thread through bin/codex-rpc.
 set -euo pipefail
+# roster said FIELD=VALUE... -- CMD...: an agent's start in its coord's record, then CMD (paper-research N-1446 p1388:
+# an agent's side reads its kind, model and brief from the record as they stood, not from its folder, which holds the
+# present). agent() runs it as the program `coordc run NAME` starts, so it runs in the agent's own cgroup and the line
+# is the agent's own act: `coordc act began TEXT FIELD=VALUE...`, coordd's Request::Act (64's coordd a45d6e7d takes
+# it, as the runner's `job`), recorded as {"ev": "act", "agent": NAME, "is": "began", "text", "phase" (start,
+# restart, fork, rename), "kind", "model", "effort", "dir" (the folder it starts in, not the worktrees it works in:
+# those are its commits' and runner jobs'), "session", "from" (a fork's parent session), "cut" (for a restart on a cut
+# copy of its session, the byte of "from" it was cut after: where its line goes off the old one), "brief" (the first
+# post the first prompt names), "prompt_sha" (sha256 of that prompt, the session's first user message), "prompt" (that
+# prompt whole, when it names no brief: words from outside, which the record holds; paper-research N-1446 p3041),
+# "starter" (the
+# agent that ran roster, if one did), "system" (the owner's version N of its system prompt it starts with, if any),
+# "replace" (1 when that version replaces Claude Code's own), "system_sha" (sha256 of the text given to Claude Code as
+# its system prompt, his version's or the standing text, as prompt_sha is made: Claude Code carries it as the tail of
+# a system block, not as a block of its own, so a version is told by the start that gave it; docket-edge6 N-1446
+# p2529)}. A field with no value is left out. The start waits for nothing (paper-research N-1446
+# p1398: no fixed limits): coordc runs as a child of its own, handed to the session's reaper at once (so no zombie sits
+# under CMD), and CMD is exec'd straight away with its words and this environment as given; the line goes when coordc
+# is done, and when coordc fails, what it says goes to the journal (logger -t roster-said), never to the agent's
+# terminal. It comes first here, so nothing below changes the agent's environment.
+if [ "${1:-}" = said ]; then
+  shift; said=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do [ -z "${1#*=}" ] || said+=("$1"); shift; done
+  [ "${1:-}" = -- ] && shift
+  [ $# -gt 0 ] || { echo "usage: roster said FIELD=VALUE... -- CMD..." >&2; exit 2; }
+  field() { local kv; for kv in "${said[@]}"; do [ "${kv%%=*}" != "$1" ] || { printf '%s' "${kv#*=}"; return; }; done; }
+  text="$(field phase): $(field kind) $(field model)$(e=$(field effort); [ -z "$e" ] || echo " effort $e") in $(field dir)"
+  text+="$(x=$(field session); [ -z "$x" ] || echo ", session $x")$(x=$(field from); [ -z "$x" ] || echo ", forked from $x")"
+  text+="$(x=$(field cut); [ -z "$x" ] || echo " after $x bytes")"
+  text+="$(x=$(field brief); [ -z "$x" ] || echo ", briefed by $x")$(x=$(field starter); [ -z "$x" ] || echo ", by $x")"
+  if [ -x "${AGENT_BASE:-/nonexistent}/bin/coordc" ]; then
+    journal() { if command -v logger >/dev/null 2>&1; then logger -t roster-said; else cat >/dev/null; fi; }
+    ( { { "$AGENT_BASE/bin/coordc" act began "$text" "${said[@]}" 2>&1 >/dev/null </dev/null \
+          || echo "roster said: ${AGENT_NAME:-?}'s start line not recorded: coordc act began failed (rc $?)"; } | journal
+      } >/dev/null 2>&1 & )
+  fi
+  exec "$@"
+fi
 : "${AGENT_BASE:?AGENT_BASE is not set}" "${COORD:?COORD is not set}"
-# a host project's coordd socket goes to everything roster starts (in a box the default /run/coordd.sock serves)
+# a coordd's own socket goes to everything roster starts (a host project's; a box's second coordd's), else the default
+# /run/coordd.sock serves (a box's own coordd)
 sockenv=(); [ -z "${COORDD_SOCK:-}" ] || sockenv=(COORDD_SOCK="$COORDD_SOCK")
+# the project's toolchain first on the PATH of everything roster starts (its `path`, written by coordd to $COORD/path
+# at its start), whoever runs roster: coordd, a shell, a resume
+projpath=$(cat "$COORD/path" 2>/dev/null) || projpath=
+[ -z "$projpath" ] || PATH=$projpath:$PATH
 
 export CODEX_HOME=${CODEX_HOME:-$COORD/codex-home}
 . "$AGENT_BASE/lib/route.sh"
@@ -68,79 +140,499 @@ apps=$CODEX_HOME/app  # NAME.sock, NAME.pid, NAME.log; the sockets' directory mu
 # what an agent's session leaves in the environment of the programs it runs (roster among them); a terminal's program
 # gets its starter's environment, and a Claude Code that inherits them takes itself for a nested session, with
 # no channels (7 Nov) and, with CLAUDE_CODE_CHILD_SESSION, no saved transcript (6 Nov). Every program roster starts
-# goes without them.
+# goes without them, and without ROSTER_DIR (coordd's word to `restart` alone).
 inherited=()
-for v in $(compgen -e); do case $v in CLAUDECODE | CLAUDE_CODE_* | CLAUDE_PID | CLAUDE_EFFORT) inherited+=(-u "$v") ;; esac; done
+# CLAUDE_CONFIG_DIR too: an agent that runs on one of the owner's accounts (below, `account`) has its account's folder
+# there, and an agent it starts gets its own from coordd or none, never its starter's
+for v in $(compgen -e); do case $v in CLAUDECODE | CLAUDE_CODE_* | CLAUDE_PID | CLAUDE_EFFORT | CLAUDE_CONFIG_DIR | ROSTER_DIR) inherited+=(-u "$v") ;; esac; done
 coordc() { "$AGENT_BASE/bin/coordc" "$@"; }
+# standing: the text every agent with tools has in its system prompt (plan/edge.md §3, S5: one file, for tickets); the
+# project's own standing.md, beside the project file $COORD/project names, when it has one, as a project's calls and
+# kinds win over agent-base's (paper-research m1586: a project's agents are told only what works there). The 2>/dev/null
+# before the file: one after it came too late for the shell's own "No such file" of a project with no file, printed on
+# the new agent's screen (the walk, N-1446 p2423)
+# Before it, his text for every agent of every project: standing.md at the root of the flavor repository's main checkout,
+# the first worktree of the repository the project file is in (read from git, whichever worktree the project file is
+# in), when it has one (the owner, yaaihh N-1.p389: "we need ot set global ruels too he for agents .md"). A bare agent
+# gets neither (agy_agent).
+standing() {
+  local p top
+  read -r p 2>/dev/null <"$COORD/project" || p=
+  if [ -n "$p" ] && top=$(git -C "$(dirname "$p")" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p') && [ -f "$top/standing.md" ]; then
+    cat "$top/standing.md"; echo
+  fi
+  if [ -n "$p" ] && [ -f "$(dirname "$p")/standing.md" ]; then cat "$(dirname "$p")/standing.md"; else cat "$AGENT_BASE/claude/standing.md"; fi
+}
+# project_dirs DIR: one `--add-dir PATH` per repository of the project file ($COORD/project names it; `[project] repos`,
+# in the file's order), each a folder that is there and not DIR, so that Claude Code takes them as working folders:
+# read without asking, and a write there is one inside the project, never "outside the working folder" (the owner's
+# walk 13, a popup that blocked fresh; paper-research N-1446 p3535). Paths as coordd's project.rs `path` takes them:
+# ~/ is the home, a relative one is beside the project file. Claude Code's --add-dir refuses a folder that is not
+# there, so one that is not is left out. Nothing printed for no project file, no repos or a file it cannot read.
+project_dirs() {
+  local pf; pf=$(cat "$COORD/project" 2>/dev/null || true); pf=${pf%%$'\n'*}
+  [ -n "$pf" ] && [ -f "$pf" ] || return 0
+  python3 -I - "$pf" "$1" <<'PY' 2>/dev/null || true
+import os, sys, tomllib
+f, start = sys.argv[1], os.path.realpath(sys.argv[2]) if sys.argv[2] else ""
+repos = tomllib.load(open(f, "rb")).get("project", {}).get("repos", {})
+for r in repos.values():
+    r = str(r).strip()
+    p = os.path.join(os.environ["HOME"], r[2:]) if r.startswith("~/") else r if r.startswith("/") else os.path.join(os.path.dirname(f), r)
+    if os.path.isdir(p) and os.path.realpath(p) != start:
+        print("--add-dir"); print(os.path.realpath(p))
+PY
+}
 state() { coordc ls | awk -F'\t' -v n="$1" '$1 == n { print $3 }'; }  # state NAME: coordd's state, empty if unknown
-rpc() { CODEX_SOCK=$apps/$1.sock "$AGENT_BASE/bin/codex-rpc" "${@:2}"; }  # rpc NAME ARGS...
+# csock NAME: NAME's app-server socket. A boxed Codex agent's is in its own CODEX_HOME in its box's home (coordd's
+# sandbox.rs builds it: $COORD/box/NAME/home/.codex, its uid's), since its app-server runs as its own user and Codex
+# keeps its socket's folder its own alone; codex-rpc reaches it through the box's user namespace. Any other's in $apps.
+csock() {
+  if [ -f "$COORD/boxed" ] && [ -d "$COORD/box/$1/home/.codex/app" ]; then echo "$COORD/box/$1/home/.codex/app/$1.sock"; else echo "$apps/$1.sock"; fi
+}
+rpc() { CODEX_SOCK=$(csock "$1") "$AGENT_BASE/bin/codex-rpc" "${@:2}"; }  # rpc NAME ARGS...
 
-close() { coordc hangup "$1"; }  # close NAME: hang up NAME's terminal and wait for its program to end
-
-open() {  # open NAME DIR [--confirm TEXT] CMD...: CMD in DIR on terminal NAME (coord-pty returns once the terminal is up)
-  local name=$1 dir=$2 confirm=(); shift 2
-  [ "$1" != --confirm ] || { confirm=(--confirm "$2"); shift 2; }
-  (cd "$dir" && "$AGENT_BASE/bin/coord-pty" "$name" "${confirm[@]}" -- "$@")
+# account NAME: ACCT, the folder NAME's Claude Code session runs with (Claude Code's CLAUDE_CONFIG_DIR) when NAME is to
+# run on one of the owner's own accounts, with nothing of ours between it and Anthropic (coordd's accounts/mover.rs,
+# N-412 ask 12: the owner's `coord native NAME on`; coordd chooses the account by tier and turn and records it); empty:
+# the project's model route, as ever. False, with coordd's words, when NAME is to run on an account and none can take
+# it: it is not started then, and a running session is left as it is. A coordd from before accounts refuses the request
+# in other words: taken as the model route. After the folder coordd's answer has the session's telemetry environment,
+# a line each (ACCT_SET: NAME=VALUE to set, ACCT_UNSET: -NAME to remove): the session's usage goes to coordd's own
+# receiver (accounts/telemetry.rs), and nothing in the starter's environment sends it elsewhere. For an account that
+# runs on an API key, a line `@key PATH` (ACCT_KEY): where its key file is, never the key.
+ACCT= ACCT_FOR= ACCT_KEY= ACCT_SET=() ACCT_UNSET=()
+# OWN: the project's own Claude Code folder, $COORD/claude-home, when NAME's session runs with it (own_home); empty: none.
+# Only agent() sets it, for the one start it makes; every other start (codex, opencode, agy) has none.
+OWN=
+# own_home NAME: OWN for NAME's Claude Code session (paper-research N-1446 p3051, place 2 of the walk p3050). A project
+# that has $COORD/claude-home (new-project makes it with every host project) runs its unboxed agents with that folder
+# as Claude Code's CLAUDE_CONFIG_DIR, never the owner's ~/.claude: neither his settings, his CLAUDE.md, his memory nor
+# his sessions' folder. An agent on one of his accounts has its account's folder instead (account), and a boxed one
+# its box's home. There its agents run on his accounts with no route (coordd's `accounts_only`, p3105); with that folder
+# and neither a model route ($COORD/.proxy-key) nor an account the session would have no login: false then, with his
+# words (the place to add one), and it is not started; nothing of the owner's is read, copied or moved, and it never
+# falls back to his folder. A project without the folder (every one made before it) is as it was.
+own_home() {
+  OWN=
+  [ -z "$ACCT" ] && [ -z "${ROSTER_BOX:-}" ] && [ -z "${COORD_IN_BOX:-}" ] && [ -d "$COORD/claude-home" ] || return 0
+  if [ ! -s "$COORD/.proxy-key" ]; then
+    echo "$1: this project has no account yet: add one under Accounts" >&2
+    return 1
+  fi
+  OWN=$COORD/claude-home
+}
+account() {
+  local out l
+  ACCT= ACCT_FOR=$1 ACCT_KEY= ACCT_SET=() ACCT_UNSET=()
+  if out=$(coordc account-for "$1" 2>&1); then
+    ACCT=${out%%$'\n'*}
+    while IFS= read -r l; do
+      case $l in "@key "*) ACCT_KEY=${l#@key } ;; -*) ACCT_UNSET+=(-u "${l#-}") ;; *=*) ACCT_SET+=("$l") ;; esac
+    done < <(tail -n +2 <<<"$out")
+    return 0
+  fi
+  case $out in "coord account:"*) echo "$1: ${out#coord account: }" >&2; return 1 ;; esac
 }
 
-home() {  # home NAME DIR: false if DIR is gone; else lock it
+# acct_sets VAR: the account `account` read sets VAR
+acct_sets() { local v; for v in "${ACCT_SET[@]}"; do [[ $v != "$1="* ]] || return 0; done; return 1; }
+
+close() { coordc hangup "$1"; }  # close NAME: hang up NAME's terminal and wait for its program to end
+# stopped NAME: wait until coordd has NAME stopped, or knows no NAME (coordd itself gone: what follows says so); no
+# time limit (the owner, N-68): a process that has not ended may still end
+stopped() { local s; while s=$(state "$1"); [ -n "$s" ] && [ "$s" != stopped ]; do sleep 0.25; done; }
+
+# viewed DIR: VIEWED, the words that run a command in DIR inside the view ROSTER_VIEW holds and the box ROSTER_BOX
+# says (see open); none outside a view. A Codex agent's app-server runs its commands, so it joins the view as its
+# terminal does (N-101 p466: coordd's moves, and a Codex agent made for a step in a layer)
+viewed() {
+  VIEWED=()
+  if [ -n "${ROSTER_BOX:-}" ]; then
+    VIEWED=(nsenter --user --mount --preserve-credentials -t "$ROSTER_VIEW" -- unshare --mount --ipc -- "$AGENT_BASE/bin/box-enter" "$1")
+  elif [ -n "${ROSTER_VIEW:-}" ]; then
+    VIEWED=(nsenter --user --mount --preserve-credentials -t "$ROSTER_VIEW" -- unshare --user --map-user="$(id -u)" --map-group="$(id -g)" -- env -C "$1" --)
+  fi
+}
+
+open() {  # open NAME DIR [--confirm TEXT] [--cols C] [--trust D]... [--home H] CMD...: CMD in DIR on terminal NAME (coord-pty returns once the
+  # terminal is up; its options as coord-pty takes them)
+  local name=$1 dir=$2 holder=(); shift 2
+  while [ "$1" = --confirm ] || [ "$1" = --cols ] || [ "$1" = --trust ] || [ "$1" = --home ]; do holder+=("$1" "$2"); shift 2; done
+  # ROSTER_VIEW=PID (coordd, an agent made for a step in a layer): CMD joins the view PID holds (its user and mount
+  # namespace, coordd's layer.rs `joiner`) at DIR, the project's path with the layer on top, and maps itself back to
+  # this user in a user namespace of its own; into DIR only once inside (nsenter --wd opens DIR before it enters, so the
+  # agent would be in the project's own folder under the view)
+  # ROSTER_BOX=K as well (coordd's sandbox.rs: a boxed project): it stays in the view's user namespace, gets a mount
+  # namespace of its own and becomes its own uid K there (box-enter)
+  viewed "$dir"
+  set -- "${VIEWED[@]}" "$@"
+  (cd "$dir" && "$AGENT_BASE/bin/coord-pty" "$name" "${holder[@]}" -- "$@")
+}
+
+home() {  # home NAME DIR [REPO...]: false if DIR is gone; else lock it, and trust it and each REPO
   # claude --resume finds the session by its working directory, so a cleanup must not remove it: a worktree is locked
   # (git worktree remove refuses it; orch's cleanup removed ROWS's on 30 Oct and the resume after a reboot failed)
   [ -d "$2" ] || { echo "$1: its directory $2 is gone; not started" >&2; return 1; }
   git -C "$2" worktree lock --reason "session home of $1 (roster)" "$2" 2>/dev/null || true
   # trusted in Claude Code's ~/.claude.json, so the session does not stop at "Do you trust this folder?" (a new box
-  # starts with a fresh one)
-  local cj=$HOME/.claude.json
-  [ -f "$cj" ] || echo '{}' >"$cj"
-  jq --arg d "$2" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' "$cj" >"$cj.roster.$$" &&
+  # starts with a fresh one). On one of the owner's accounts (ACCT) that file is the account folder's, and there the
+  # first-start screens a fresh folder shows before its prompt are marked seen as well, as the box recipe has them
+  # (tests/box/setup.sh): onboarding's theme, and the LSP plugin recommendation ("Install this LSP plugin?" stood on
+  # docket-core8's and here-2's screens when they were moved onto an account on 20 Nov). An agent's terminal has
+  # nobody to answer them. Nothing else in that file is read or changed, and nothing of it is printed.
+  # Each REPO (a Claude Code agent's: the project file's repositories, its --add-dir folders) is trusted there too, and
+  # no other folder: Claude Code 2.1.332 asks "Adding a new directory: … Is this a directory you created or one you
+  # trust?" for a working folder with no trust of its own, No first (fresh in yaaihh, /home/t/src/rune, 26 Nov).
+  # The agents moved onto one account start together (38 within seconds on 20 Nov), next to the sessions already on
+  # it, and each of those writes the same file. A write that read the file before another one wrote it loses that
+  # one's change (two roster starts: roster-account-test, part 7). So the write is made under Claude Code's own lock
+  # on that file, taken as Claude Code takes it: the folder `.claude.json.lock` beside it, made with mkdir by the one
+  # that writes and removed when done (seen in a try with sessions running and starting on one folder, 20 Nov; Claude
+  # Code itself writes the file through a temporary one and a rename). A holder refreshes the folder's time while it
+  # holds it, so one untouched for 30 s was left by a holder that ended without letting go, and is taken away. Only a
+  # held lock is waited for: one that cannot be made at all (the account folder gone, or not writable) is said, and the
+  # session is not started.
+  # A project's own Claude Code folder (OWN, agent's `own_home`) is taken as an account folder is.
+  local cj=$HOME/.claude.json seen='{}' rc why
+  [ -z "$ACCT" ] || { cj=$ACCT/.claude.json seen='{hasCompletedOnboarding: true, lspRecommendationDisabled: true}'; }
+  [ -z "$OWN" ] || { cj=$OWN/.claude.json seen='{hasCompletedOnboarding: true, lspRecommendationDisabled: true}'; }
+  until why=$(mkdir "$cj.lock" 2>&1); do
+    if [ ! -d "$cj.lock" ]; then
+      # let go of between the two looks, or not to be made
+      why=$(mkdir "$cj.lock" 2>&1) && break
+      [ -d "$cj.lock" ] || { echo "$1: the lock on $cj cannot be taken ($why); not started" >&2; return 1; }
+    fi
+    [ $(($(date +%s) - $(stat -c %Y "$cj.lock" 2>/dev/null || date +%s))) -le 30 ] || rmdir "$cj.lock" 2>/dev/null
+    sleep 0.05
+  done
+  [ -s "$cj" ] || (umask 077; echo '{}' >"$cj")
+  jq ". + $seen | reduce \$ARGS.positional[] as \$d (.; .projects[\$d] = ((.projects[\$d] // {}) + {hasTrustDialogAccepted: true}))" "$cj" --args "${@:2}" >"$cj.roster.$$" &&
     chmod 600 "$cj.roster.$$" && mv "$cj.roster.$$" "$cj"
+  rc=$?
+  rmdir "$cj.lock"
+  return $rc
 }
 
+# what the record line of the next agent() says beyond its own facts (roster said): its phase, and a start's brief
+said_phase=start said_brief='' said_sha='' said_prompt=''
+# claude_version: the version of the Claude Code roster starts, from its installed folder's name, else its own word
+claude_version() {
+  local v; v=$(basename "$(readlink -f "$(command -v claude)")")
+  [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || v=$(claude --version 2>/dev/null | cut -d' ' -f1)
+  printf '%s' "$v"
+}
+# system_prompt NAME [HARNESS MODEL RECIPE-ARGS...]: the system prompt flag of NAME's Claude Code (sysflag), and what its record line says of it
+# (said_system, said_replace, said_system_sha): the version of its own the owner gave it (coordd's SystemPrompt;
+# `restart --system` names it in $COORD/prompts/NAME.system/current as "N append|replace", N.md its text), given as
+# its file (--system-prompt-file, --append-system-prompt-file: no bound of one argument's length, N-1788), else the
+# standing text appended; the sha256 of the text as given
+# The text goes to Claude Code as a file (`--system-prompt-file`, `--append-system-prompt-file`, read in Claude Code
+# 2.1.332's own options), never as one argument, so no size of Linux's on one argument (128 KiB) bounds it: the file
+# is written where the session can read it, the agent's own folder, or its box's folder for an agent in a box
+# (`system-prompt.md` there), at each start. The same file and its mode (sys_file, sys_how: append|replace) are what
+# the other harnesses take it from (app_server, opencode_agent, agy_agent), so a version of his reaches each kind.
+# else bin/prompt-recipe composes it (base - cuts + MODEL's packs + standing text, N-1979), said in the record as recipe
+sysflag=() said_system='' said_replace='' said_system_sha='' said_recipe='' sys_file='' sys_how=''
+system_prompt() {
+  local d=$COORD/prompts/$1.system n m text at got
+  said_recipe=''
+  at=$COORD/agents/$1
+  [ -z "${ROSTER_BOX:-}" ] || at=$ROSTER_BOX_DIR
+  mkdir -p "$at"
+  if read -r n m 2>/dev/null <"$d/current" && [ -f "$d/$n.md" ]; then
+    said_system=$n text=$(cat "$d/$n.md")
+    rm -f "$at/system-prompt.md.diff.json"
+    printf '%s' "$text" >"$at/system-prompt.md.$$" && mv "$at/system-prompt.md.$$" "$at/system-prompt.md"
+    if [ "$m" = replace ]; then sysflag=(--system-prompt-file "$at/system-prompt.md") said_replace=1 sys_how=replace; else sysflag=(--append-system-prompt-file "$at/system-prompt.md") sys_how=append; fi
+  else
+    text=$(standing)
+    if [ $# -ge 3 ] && got=$(printf '%s' "$text" | "$AGENT_BASE/bin/prompt-recipe" "$2" "${3%%:*}" - "$at/system-prompt.md" "${@:4}" 2>&1); then
+      sys_how=${got%%$'\n'*} said_recipe=$(printf '%s' "$got" | paste -sd ';' -) text=$(cat "$at/system-prompt.md")
+    else
+      [ $# -lt 3 ] || said_recipe="failed: ${got//$'\n'/; }"
+      rm -f "$at/system-prompt.md.diff.json"
+      printf '%s' "$text" >"$at/system-prompt.md.$$" && mv "$at/system-prompt.md.$$" "$at/system-prompt.md"
+      sys_how=append
+    fi
+    if [ "$sys_how" = replace ]; then sysflag=(--system-prompt-file "$at/system-prompt.md"); else sysflag=(--append-system-prompt-file "$at/system-prompt.md"); fi
+  fi
+  sys_file=$at/system-prompt.md
+  said_system_sha=$(printf '%s' "$text" | sha256sum | cut -c1-64)
+  # Claude Code records the system prompt on a conversation's first request and, until it is compacted, sends that
+  # recorded text after any --resume, whatever flag a later start passes (its CLI reference, "System prompt flags in
+  # resumed conversations"). Measured on 2.1.331 against a loopback stand-in (accounts-lead, N-1446): resumed with a
+  # new appended text, or with --system-prompt, the request still carried the first text; with this flag, the new one.
+  # So without it an edit of his (coordd's SystemPrompt) or a changed standing text never reached a resumed agent.
+  sysflag+=(--system-prompt-snapshot off)
+}
+# a restart on a cut copy of its session (restart --cut): the session it was cut from, its line's `from`, and the byte
+# of it the copy was cut after, its line's `cut`
+said_cut='' said_upto=''
+# said_of CLAUDE-ARGS...: the session a start resumes (`--resume ID`), a fork's parent (with --fork-session), or for a
+# new session an id agent() gives Claude Code (--session-id), so its line names it: sets said_session, said_from and
+# said_newid
+said_of() {
+  local a b fork=''
+  said_session='' said_from=${said_cut:-} said_newid=()
+  for a in "$@"; do [ "$a" != --fork-session ] || fork=1; done
+  for ((a = 1; a < $#; a++)); do [ "${!a}" != --resume ] || { b=$((a + 1)); said_session=${!b}; }; done
+  if [ -n "$fork" ]; then said_from=$said_session; said_session=''
+  elif [ -z "$said_session" ]; then said_session=$(cat /proc/sys/kernel/random/uuid); said_newid=(--session-id "$said_session"); fi
+}
 agent() {  # agent NAME MODEL DIR CLAUDE-ARGS...: a Claude Code session as roster agent NAME
   local name=$1 model=$2 dir=$3 effort=(); shift 3
-  home "$name" "$dir" || return 0
+  # its account, unless restart asked already (before it ended the running session)
+  [ "$ACCT_FOR" = "$name" ] || account "$name" || return 1
+  own_home "$name" || return 1
+  # the project's repositories, trusted with its folder (not in a box: its view has its own paths)
+  local repos=()
+  [ -n "${ROSTER_BOX:-}" ] || mapfile -t repos < <(project_dirs "$dir" | grep -vx -- --add-dir)
+  home "$name" "$dir" "${repos[@]}" || { OWN=; return 0; }
   case $model in *:*) effort=(--effort "${model#*:}") ;; esac
+  # where it compacts: its own point (`coord compact`, or `/autocompact` typed in its session; kept by coordd in
+  # session.json; paper-research N-490 p8), else the coord's (autoCompactWindow of the project's claude-settings.json,
+  # else of claude/settings.json; coordd reads the same: Core::context_window). Given as Claude Code's launch flag
+  # --autocompact and in no other way: a window in the settings file below stands above what the owner sets inside
+  # Claude Code (`/autocompact 600k` saved and the session stayed at 350k, N-541 post 34), and
+  # CLAUDE_CODE_AUTO_COMPACT_WINDOW makes the command refuse; after the flag, the command typed in the session holds
+  local cw=() point pset=()
+  point=$(jq -r '.compact // empty' "$COORD/agents/$name/session.json" 2>/dev/null || true)
+  case $point in '' | *[!0-9]*)
+    point=$(cat "$COORD/project" 2>/dev/null || true); point=${point%%$'\n'*}
+    [ -n "$point" ] && [ -f "$(dirname "$point")/claude-settings.json" ] && pset=("$(dirname "$point")/claude-settings.json")
+    point=$(jq -rs '[.[].autoCompactWindow | numbers] | last // empty' "$AGENT_BASE/claude/settings.json" "${pset[@]}" 2>/dev/null || true) ;;
+  esac
+  case $point in '' | *[!0-9]*) ;; *) cw=(--autocompact "$point") ;; esac
+  # the owner's Safe · Yolo for it (coordd's `mode`, kept in session.json as `compact` is; 0.2 line 25, N-1400): Yolo
+  # gives a host session Claude Code's own bypass (lib/route.sh session_place); a fork reads its own session.json,
+  # which has none yet, so a copy starts in Safe whatever its original runs in
+  local YOLO= YOLO_ON=
+  [ "$(jq -r '.mode // empty' "$COORD/agents/$name/session.json" 2>/dev/null || true)" != yolo ] || YOLO=1
   # the coord channel (claude/channel.py, mail per vault designs/agent-messaging-2026-11-07.md) and the standing
   # instruction that team mail is to be acted on (without it Haiku and Opus refused mid-turn mail, 7 Nov)
-  local mcp settings=$COORD/claude-settings.json mode=(--dangerously-skip-permissions) url=() filter=.
+  # the coord's compaction point is no setting of the session (above): left out of its settings file
+  local mcp settings=$COORD/claude-settings.json mode=(--dangerously-skip-permissions) url=() filter='del(.autoCompactWindow)'
   mcp=$(jq -nc --arg c "$AGENT_BASE/claude/channel.py" '{mcpServers: {coord: {command: $c, args: []}}}')
   # the project's own MCP servers: each executable $COORD/mcp/NAME (a link to it) is server NAME of every agent session
   # (owner m326, 10 Nov: the box's agda-mcp, registered for all agents, not by hand per agent)
   local m
   for m in "$COORD"/mcp/*; do
     [ -x "$m" ] && [ "${m##*/}" != coord ] || continue
+    case ${m##*/} in *.new | *.previous | *.previous-* | *.swap) continue ;; esac  # install-mcp's kept copies (consult-3 p1235)
     mcp=$(jq -c --arg n "${m##*/}" --arg c "$m" '.mcpServers[$n] = {command: $c, args: []}' <<<"$mcp")
   done
-  # On the host (a project without a box, COORDD_SOCK set) nothing but the session's permissions stands between it and
-  # the owner's machine: it keeps the owner's own Claude Code permission mode (prompts answered in its terminal, which
-  # yaaihh shows), with the same hooks. In a box the box is the boundary and agents bypass prompts.
-  if [ -n "${COORDD_SOCK:-}" ]; then
-    mode=() filter+=' | del(.permissions.defaultMode, .skipDangerousModePermissionPrompt)'
-    # the route's endpoint (a box's comes with every exec, box.sh)
-    local u; u=$(route_get ANTHROPIC_BASE_URL); [ -z "$u" ] || url=(ANTHROPIC_BASE_URL="$u")
-  fi
+  # On the host nothing but the session's permissions stands between it and the owner's machine: it keeps the owner's
+  # own Claude Code permission mode (prompts answered in its terminal, which yaaihh shows), with the same hooks. In a
+  # docker box (COORD_IN_BOX, set by whoever starts things there) or the light sandbox (ROSTER_BOX) the box is the
+  # boundary and agents bypass prompts (the owner, N-216.p1).
+  # Which socket (COORDD_SOCK) says nothing of where: a box's second coordd has its own (lib/route.sh session_place).
+  session_place
+  # one journal line per start in Yolo (N-1400), which nothing else would show outside the window
+  [ -z "$YOLO_ON" ] || logger -t roster "$name starts in Yolo (the owner's): claude --dangerously-skip-permissions in $dir" 2>/dev/null || true
   # the proxy key through apiKeyHelper only with a route (lib/route.sh); without one the session uses its own login
   [ -s "$COORD/.proxy-key" ] || filter+=' | del(.apiKeyHelper)'
-  jq "$filter" "$AGENT_BASE/claude/settings.json" >"$settings.$$" && mv "$settings.$$" "$settings"
+  # on one of the owner's accounts (ACCT): Claude Code's own login in that folder and nothing of the route: no endpoint,
+  # no key helper, no gateway models; and a settings file of its own, since the coord's is written for the route
+  local acct_unset=() acct_env=() acct_run=()
+  if [ -n "$ACCT" ]; then
+    url=() acct_unset=(-u ANTHROPIC_BASE_URL "${ACCT_UNSET[@]}") acct_env=(CLAUDE_CONFIG_DIR="$ACCT" "${ACCT_SET[@]}")
+    # the coord's telemetry token, which coordd's receiver asks of every request, goes into the session's environment
+    # from its file (claude/telemetry-token): it is in no answer of coordd's and no command line
+    acct_run=("$AGENT_BASE/claude/telemetry-token")
+    filter+=' | del(.apiKeyHelper, .modelPicker, .env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY)'
+    # an account that runs on an API key (ACCT_KEY): Claude Code asks claude/account-key for it at each need; the
+    # command names the key's file, so the key is in no settings file, no environment and no command line
+    [ -z "$ACCT_KEY" ] || filter+=" | .apiKeyHelper = $(jq -n --arg f "$ACCT_KEY" '"\"$AGENT_BASE/claude/account-key\" " + ($f | @sh)')"
+    # what the session says of its account's limits goes to coordd (accounts/limits.rs): the status line's two windows
+    # after each answer (claude/statusline), and Claude Code's quota notices; a turn that fails on a limit is the
+    # `failed` hook every agent has
+    filter+=' | .statusLine = {type: "command", command: "\"$AGENT_BASE/claude/statusline\""}'
+    filter+=' | .hooks.Notification = [{hooks: [{type: "command", command: "\"$AGENT_BASE/claude/hook\" notification", timeout: 600}]}]'
+    # at a usage limit the turn ends (the `failed` hook) and the session does not wait for the reset by itself: coordd
+    # moves the agent to another account between turns, which a session that waits would hold on the one that is out
+    filter+=' | .autoContinueAtUsageLimit = false'
+    mkdir -p "$COORD/agents/$name" && settings=$COORD/agents/$name/claude-settings.json
+  else
+    # no folder: the route, as ever. An agent of the owner's accounts that goes on through the gateway while its
+    # account is out (coordd's answer: an empty first line) has only the lines that go on with a turn the limit cut,
+    # or keep one from being run again; any other agent has none
+    acct_unset=("${ACCT_UNSET[@]}") acct_env=("${ACCT_SET[@]}")
+    # the project's own folder (own_home), with the route as ever
+    [ -z "$OWN" ] || acct_env+=(CLAUDE_CONFIG_DIR="$OWN")
+  fi
+  OWN=
+  # boxed (ROSTER_BOX, coordd's sandbox.rs): coordd built its box as it started it, settings and key file included
+  # (sandbox::home), so they are used as they are; here only how it is run: its home, tmp and coordd socket as
+  # box-enter places them, git's commits in the owner's identity, its view's git folder not the owner's uid's
+  local box=() boxargs=() dirs=()
+  if [ -n "${ROSTER_BOX:-}" ]; then
+    settings=$ROSTER_BOX_DIR/claude-settings.json
+    [ -f "$settings" ] || { echo "$name: boxed, and coordd built no box at $ROSTER_BOX_DIR: not started" >&2; return 1; }
+    box_env
+    # Claude Code's messaging socket, named: its own folder check walks up to /, which is no mapped user's in the view's
+    # namespace, and turns cross-session messaging off
+    boxargs=(--messaging-socket-path /tmp/.claude-messaging.sock)
+  else
+    # the project's repositories as working folders (not in a box: its view has its own paths)
+    mapfile -t dirs < <(project_dirs "$dir")
+    jq "$filter" "$AGENT_BASE/claude/settings.json" >"$settings.$$" && mv "$settings.$$" "$settings"
+    # the project's own settings, merged over these (jq's *: objects merge, a value or array replaces): a
+    # claude-settings.json beside the project file ($COORD/project), e.g. {"autoMemoryEnabled": false} where agents need
+    # no Claude Code memory of their own (paper-research m1111: off on docket-dev and docket-play, unset elsewhere)
+    local pf; pf=$(cat "$COORD/project" 2>/dev/null || true); pf=${pf%%$'\n'*}
+    if [ -n "$pf" ] && [ -f "$(dirname "$pf")/claude-settings.json" ]; then
+      jq -s '.[0] * .[1] | del(.autoCompactWindow)' "$settings" "$(dirname "$pf")/claude-settings.json" >"$settings.$$" && mv "$settings.$$" "$settings"
+    fi
+  fi
   # Claude Code's development-channel warning, the one dialog at each start (design additions 11), is confirmed by the
   # terminal's holder: a poller here died with roster's caller and left the agent stuck there (9 Nov)
-  open "$name" "$dir" --confirm 'Loading development channels' env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-    LANG=C.UTF-8 AGENT_NAME="$name" AGENT_MODEL="$model" COORD="$COORD" "${sockenv[@]}" "${url[@]}" AGENT_BASE="$AGENT_BASE" \
+  # its start in the record (roster said)
+  said_of "$@"
+  local cfg=$HOME/.claude kv memory=(--memory off)
+  [ -z "${ROSTER_BOX:-}" ] || cfg=$ROSTER_BOX_DIR/home/.claude
+  for kv in "${acct_env[@]}"; do case $kv in CLAUDE_CONFIG_DIR=*) cfg=${kv#*=} ;; esac; done
+  [ "$(jq -r '.autoMemoryEnabled != false' "$settings")" != true ] || memory=(--config-dir "$cfg" --cwd "$dir")
+  harness_switches claude "$name" || return 1
+  system_prompt "$name" claude-code "$model" --version "$(claude_version)" "${memory[@]}" "${hpacks[@]}"
+  local effort_said=''; [[ $model != *:* ]] || effort_said=${model#*:}
+  local said=(phase="$said_phase" kind=claude model="${model%%:*}" effort="$effort_said" dir="$dir"
+    session="$said_session" from="$said_from" cut="$said_upto" brief="$said_brief" prompt_sha="$said_sha" prompt="$said_prompt" starter="${AGENT_NAME:-}"
+    system="$said_system" replace="$said_replace" system_sha="$said_system_sha" recipe="$said_recipe" switches="$said_switches")
+  if [ -n "${ROSTER_ASK:-}" ]; then
+    # `roster ask` (Join back): one answer on a copy of NAME's session, printed. Run in its folder
+    # with its account, model and system prompt, but with none of an agent's running parts: no terminal, no coord
+    # channel, no hooks or status line (they would take the copy for NAME's session), and no record line
+    local quiet=$COORD/agents/$name/claude-settings.ask.json
+    jq 'del(.hooks, .statusLine)' "$settings" >"$quiet.$$" && mv "$quiet.$$" "$quiet" || return 1
+    (cd "$dir" && env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u AGENT_NAME -u COORDD_SOCK "${acct_unset[@]}" \
+      LANG=C.UTF-8 "${url[@]}" "${acct_env[@]}" "${box[@]}" "${acct_run[@]}" \
+      claude -p "$@" --model "${model%%:*}" "${effort[@]}" "${dirs[@]}" --settings "$quiet" "${mode[@]}" "${sysflag[@]}")
+    return
+  fi
+  # the folders whose trust popup the holder answers Yes: its own and the project's repositories, no other
+  # and its HOME, which a `~` in a popup is: a boxed agent's is its box's
+  local home=$HOME r
+  [ -z "${ROSTER_BOX:-}" ] || home=$ROSTER_BOX_DIR/home
+  local trusts=(--trust "$dir" --home "$home")
+  for r in "${repos[@]}"; do trusts+=(--trust "$r"); done
+  open "$name" "$dir" --confirm 'Loading development channels' "${trusts[@]}" env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN "${acct_unset[@]}" \
+    LANG=C.UTF-8 AGENT_NAME="$name" AGENT_HOME="$COORD/agents/$name/home" AGENT_MODEL="$model" COORD="$COORD" "${sockenv[@]}" "${url[@]}" "${acct_env[@]}" "${henv[@]}" AGENT_BASE="$AGENT_BASE" \
     PATH="$AGENT_BASE/bin:$PATH" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
-    GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" \
-    "$AGENT_BASE/bin/coordc" run "$name" -- claude "$@" --name "$name" --model "${model%%:*}" "${effort[@]}" --settings "$settings" \
+    GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" "${box[@]}" "${acct_run[@]}" \
+    "$AGENT_BASE/bin/coordc" run "$name" -- "$AGENT_BASE/bin/roster" said "${said[@]}" -- \
+    claude "$@" "${said_newid[@]}" --name "$name" --model "${model%%:*}" "${effort[@]}" "${cw[@]}" "${boxargs[@]}" "${dirs[@]}" --settings "$settings" \
     "${mode[@]}" --mcp-config "$mcp" --dangerously-load-development-channels server:coord \
-    --append-system-prompt "$(cat "$AGENT_BASE/claude/team-mail.md")"
+    "${sysflag[@]}" "${hflags[@]}"
 }
 
-app_server() {  # app_server NAME MODEL[:EFFORT]: NAME's Codex app-server, started unless it runs
-  # developer_instructions: the standing team-mail paragraph Claude Code agents get with --append-system-prompt
+# harness_switches HARNESS NAME: the owner's switches for NAME (bin/harness-settings: harness.toml at the flavor's root,
+# beside the project file, and in the agent's own folder, the later winning; walk items 17 and 30) as HARNESS takes
+# them: hflags, its arguments; henv, its environment; said_switches, what its start's record line says of them. A
+# settings file that does not read stops the start, so no switch is dropped without a word. Claude Code (2.1.332,
+# read in its own text and checked on the wire, agent-base/tests/harness-wire): tools_off as --disallowedTools, which
+# takes each one out of the request's tools; parts_off as CLAUDE_CODE_REMOVE_PROMPT_STRINGS, each part's text taken
+# out of its own system prompt and nothing else; safety_check off as CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS,
+# which lets its check on dangerous rm commands go under bypass permissions (in a box, and in Yolo) and does nothing in
+# the owner's own permission mode on the host, where that check asks him in the terminal. Codex takes a tool off by
+# the setting that takes it out of its request, where it has one (harness-settings CODEX_TOOLS); opencode takes tools
+# off as its permission rules (opencode_agent). What a harness cannot take is in its record line (`not_taken`) and in
+# coord-types' HarnessCapabilities, never dropped in silence.
+hflags=() henv=() hpacks=() said_switches=''
+harness_switches() {
+  local got
+  hflags=() henv=() hpacks=() said_switches=''
+  got=$(ROSTER_BOX="${ROSTER_BOX:-}" COORD_IN_BOX="${COORD_IN_BOX:-}" "$AGENT_BASE/bin/harness-settings" "$1" "$2") || {
+    echo "$2: its harness settings do not read (above): not started" >&2; return 1; }
+  said_switches=$(jq -c '{safety_check, tools_off, parts_off: (.parts_off | length)} + (if (.not_taken | length) > 0 then {not_taken} else {} end)' <<<"$got")
+  mapfile -d '' -t hflags < <(jq -j '.flags[] | (., "\u0000")' <<<"$got")
+  mapfile -d '' -t henv < <(jq -j '.env | to_entries[] | ("\(.key)=\(.value)", "\u0000")' <<<"$got")
+  # the packs his settings add by role, for prompt-recipe
+  mapfile -d '' -t hpacks < <(jq -j '.packs[] | ("--with", "\u0000", ., "\u0000")' <<<"$got")
+  HARNESS_GOT=$got
+}
+
+# box_env: BOX, a boxed agent's environment (ROSTER_BOX): its home, tmp and coordd socket as box-enter places them,
+# git's commits in the owner's identity, its view's git folder not the owner's uid's; Codex (bin/codex: an app-server,
+# its terminal, a Codex run by a Claude Code agent) at its box's CODEX_HOME with its own key file, never the coord's
+# codex-home (read-only in the box) or key (the owner's only)
+box=()
+box_env() {
+  local gn ge
+  gn=$(git config user.name || true) ge=$(git config user.email || true)
+  box=(AGENT_BOX=1 HOME="$ROSTER_BOX_DIR/home" TMPDIR=/tmp XDG_RUNTIME_DIR=/tmp COORDD_SOCK=/tmp/.coordd.sock
+    GIT_AUTHOR_NAME="$gn" GIT_AUTHOR_EMAIL="$ge" GIT_COMMITTER_NAME="$gn" GIT_COMMITTER_EMAIL="$ge"
+    GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_1=safe.directory GIT_CONFIG_VALUE_1='*'
+    CODEX_HOME="$ROSTER_BOX_DIR/home/.codex" CODEX_KEY_FILE="$ROSTER_BOX_DIR/home/.proxy-key")
+}
+
+# listens SOCK [SINCE]: an app-server listens at SOCK (made after file SINCE). Codex listens in a folder of its own
+# under its /tmp and leaves a link at SOCK; a boxed one's /tmp is its box's (box-enter), so from here the link points
+# nowhere and only it is seen (codex-rpc follows it into the box's tmp)
+listens() {
+  if [ -n "${ROSTER_BOX:-}" ] && [ -L "$1" ]; then
+    [ -z "${2:-}" ] || [ -n "$(find "$1" -maxdepth 0 -newer "$2" 2>/dev/null)" ]
+  else
+    [ -S "$1" ]
+  fi
+}
+
+tool_limit() {  # a Claude Code agent's limit on a tool call, in ms (MCP_TOOL_TIMEOUT in its settings: agent-base's
+  # claude/settings.json, under the project's claude-settings.json beside its project file); nothing when unset
+  local pf proj=(); pf=$(cat "$COORD/project" 2>/dev/null || true); pf=${pf%%$'\n'*}
+  [ -n "$pf" ] && [ -f "$(dirname "$pf")/claude-settings.json" ] && proj=("$(dirname "$pf")/claude-settings.json")
+  jq -rs 'reduce .[] as $s ({}; . * $s) | .env.MCP_TOOL_TIMEOUT // empty | tostring | select(test("^[0-9]+$"))' \
+    "$AGENT_BASE/claude/settings.json" "${proj[@]}" 2>/dev/null || true
+}
+app_server() {  # app_server NAME MODEL[:EFFORT] DIR [THREAD]: NAME's Codex app-server, started unless it runs; in DIR's view
+  # and box when ROSTER_VIEW (and ROSTER_BOX) say one, since it is what runs the agent's commands. A new one goes
+  # through `roster said` with the start's record fields (said_server; THREAD, the thread it resumes, is its session),
+  # so a Codex start is in the record with its first words as every kind's is (paper-research N-1446 p3174)
+  # developer_instructions: the standing text Claude Code agents get with --append-system-prompt
   # (without it a Codex agent told to wait for mail slept inside its turn, so no mail could reach it, 7 Nov)
-  local name=$1 sock=$apps/$1.sock pid effort=()
+  local name=$1 sock pid effort=() boxed=()
+  sock=$(csock "$1")
+  viewed "$3"
+  harness_switches codex "$name" || exit 1
+  # its system text (system_prompt): his version in place of Codex's own instructions as a file
+  # (`model_instructions_file`, which takes Codex 0.160.0's whole instructions out of the request: measured on loopback,
+  # accounts-lead N-1789), else appended as its developer instructions; Codex has no file for those, so an appended
+  # text goes as one argument and Linux bounds it at 128 KiB
+  local codexsys=()
+  system_prompt "$name" codex "$2" "${hpacks[@]}"
+  if [ "$sys_how" = replace ]; then codexsys=(-c "model_instructions_file=$(jq -n --arg f "$sys_file" '$f')")
+  else codexsys=(-c "developer_instructions=$(jq -Rs . <"$sys_file")"); fi
   case $2 in *:*) effort=(-c "model_reasoning_effort=\"${2#*:}\"") ;; esac
+  # its own compaction point (`coord compact`, kept by coordd in session.json, as a Claude Code agent's in `agent`):
+  # Codex takes it as model_auto_compact_token_limit, at a start; with none, Codex's own default for the model
+  local cw=() point
+  point=$(jq -r '.compact // empty' "$COORD/agents/$name/session.json" 2>/dev/null || true)
+  case $point in '' | *[!0-9]*) ;; *) cw=(-c "model_auto_compact_token_limit=$point") ;; esac
+  # the project's own MCP servers, as a Claude Code agent's (agent): each executable $COORD/mcp/NAME is server NAME.
+  # Codex gives a server only a few variables of its own (HOME, PATH), so the coord's that they read are passed on
+  # (without this a Codex agent had no symbols tools, a2h-speed, N-101 p675)
+  # Each one's limit on a tool call is a Claude Code agent's (`tool_limit`): Codex ends the call then, and the server
+  # reads it as MCP_TOOL_TIMEOUT and answers before it (symbols' "Not done yet … call again"). Without it Codex's own
+  # 300 s cut a symbols call that symbols held to Claude's 660 s, and the agent got an error (tool-scan, N-101 p865)
+  local m mcp=() lim pass='["COORD","COORD_LAYER","COORDD_SOCK","COORD_IN_BOX","AGENT_BASE","AGENT_NAME","AGENT_MODEL","AGENT_KIND","ROSTER_VIEW","ROSTER_BOX","SYMBOLS_PROJECT"]'
+  lim=$(tool_limit)
+  for m in "$COORD"/mcp/*; do
+    [ -x "$m" ] && [ "${m##*/}" != coord ] || continue
+    case ${m##*/} in *.new | *.previous | *.previous-* | *.swap) continue ;; esac  # install-mcp's kept copies (consult-3 p1235)
+    mcp+=(-c "mcp_servers.${m##*/}.command=\"$m\"" -c "mcp_servers.${m##*/}.env_vars=$pass")
+    [ -z "$lim" ] || mcp+=(-c "mcp_servers.${m##*/}.tool_timeout_sec=$((lim / 1000))" -c "mcp_servers.${m##*/}.env.MCP_TOOL_TIMEOUT=\"$lim\"")
+  done
   pid=$(cat "$apps/$name.pid" 2>/dev/null) || pid=
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ -S "$sock" ] && return
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && listens "$sock" && return
   mkdir -p -m 700 "$apps"
+  : >"$apps/$name.start"
+  # boxed (ROSTER_BOX): its own CODEX_HOME as coordd built it, hooks.json and the settings included, and its key file;
+  # its box's environment, as a boxed Claude Code agent's (box_env)
+  if [ -n "${ROSTER_BOX:-}" ]; then
+    [ -d "$ROSTER_BOX_DIR/home/.codex/app" ] || { echo "$name: boxed, and coordd built no Codex home at $ROSTER_BOX_DIR/home/.codex: not started" >&2; exit 1; }
+    box_env
+    boxed=("${box[@]}")
+  else
   jq -n --arg h "$AGENT_BASE/claude/hook" '
     def on(e; a): {(e): [{hooks: [{type: "command", command: "\"\($h)\" \(a)"}]}]};
     def tool(e; a): {(e): [{matcher: "*", hooks: [{type: "command", command: "\"\($h)\" \(a)"}]}]};
@@ -148,107 +640,604 @@ app_server() {  # app_server NAME MODEL[:EFFORT]: NAME's Codex app-server, start
              + tool("PostToolUse"; "post") + on("Stop"; "stop"))}' >"$apps/hooks.json.$$"
   cmp -s "$apps/hooks.json.$$" "$CODEX_HOME/hooks.json" && rm "$apps/hooks.json.$$" ||
     mv "$apps/hooks.json.$$" "$CODEX_HOME/hooks.json"
-  rm -f "$sock"
-  env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-    LANG=C.UTF-8 AGENT_NAME="$name" AGENT_MODEL="$2" AGENT_KIND=codex CODEX_SOCK="$sock" COORD="$COORD" "${sockenv[@]}" \
+  fi
+  rm -f "$sock" 2>/dev/null || true
+  said_server codex "$name" "$2" "$3" "${4:-}"
+  # the view and the box first, then its environment and coordc's run in them, as a Claude Code agent's terminal has
+  # it (agent): the box's environment (its HOME, coordd's socket at /tmp/.coordd.sock) holds only inside the box, and
+  # box-enter itself reads the owner's HOME. The app-server runs under its follower (codex-rpc serve), in the same
+  # coordc run, so what Codex says only to a connection reaches coordd from the agent's own cgroup (N-1446 p1500)
+  setsid "${VIEWED[@]}" env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+    LANG=C.UTF-8 AGENT_NAME="$name" AGENT_HOME="$COORD/agents/$name/home" AGENT_MODEL="$2" AGENT_KIND=codex CODEX_SOCK="$sock" COORD="$COORD" "${sockenv[@]}" \
     AGENT_BASE="$AGENT_BASE" PATH="$AGENT_BASE/bin:$PATH" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
-    GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" \
-    setsid "$AGENT_BASE/bin/coordc" run "$name" -- codex app-server -c sandbox_mode='"danger-full-access"' -c approval_policy='"never"' "${effort[@]}" \
-    -c "developer_instructions=$(jq -Rs . "$AGENT_BASE/claude/team-mail.md")" \
+    GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" "${boxed[@]}" \
+    "$AGENT_BASE/bin/coordc" run "$name" -- "$AGENT_BASE/bin/roster" said "${SAID[@]}" -- \
+    "$AGENT_BASE/bin/codex-rpc" serve -- codex app-server -c sandbox_mode='"danger-full-access"' -c approval_policy='"never"' "${effort[@]}" "${cw[@]}" "${mcp[@]}" "${hflags[@]}" \
+    "${codexsys[@]}" \
     --listen "unix://$sock" </dev/null >>"$apps/$name.log" 2>&1 &
-  echo $! >"$apps/$name.pid"
-  for _ in $(seq 100); do [ -S "$sock" ] && return; sleep 0.1; done
-  echo "$name: codex app-server did not start; see $apps/$name.log" >&2; exit 1
+  pid=$!; echo "$pid" >"$apps/$name.pid"
+  # its socket is waited for while the app-server runs: one that ended will not open it (no time limit, the owner N-68)
+  until listens "$sock" "$apps/$name.start"; do
+    kill -0 "$pid" 2>/dev/null || { echo "$name: codex app-server did not start; see $apps/$name.log" >&2; exit 1; }
+    sleep 0.1
+  done
 }
 
 app_stop() {  # app_stop NAME: stop NAME's app-server, if the pid on file is still that app-server
-  local pid
+  # its running turn is cut first (as coord esc does): an app-server in a turn did not end on TERM, and `roster down`
+  # returned 0 with codex-1 and codex-2 still running (paper-research N-412 p1136); then it is waited for while it lives
+  local pid tid
   pid=$(cat "$apps/$1.pid" 2>/dev/null) || return 0
-  grep -qF "unix://$apps/$1.sock" "/proc/$pid/cmdline" 2>/dev/null && kill "$pid"
+  if ! kill -0 "$pid" 2>/dev/null; then rm -f "$apps/$1.pid"; return 0; fi
+  grep -qF -- "unix://$(csock "$1")" "/proc/$pid/cmdline" 2>/dev/null ||
+    { echo "$1: pid $pid on file is not its app-server; nothing stopped, the pid file left" >&2; return 1; }
+  tid=$(jq -r '.session_id // empty' "$COORD/agents/$1/session.json" 2>/dev/null || true)
+  [ -z "$tid" ] || rpc "$1" interrupt "$tid" >/dev/null 2>&1 || true
+  kill "$pid"
+  while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
   rm -f "$apps/$1.pid"
+  echo "$1: app-server $pid ended"
 }
 
 codex_agent() {  # codex_agent NAME MODEL DIR THREAD PROMPT: Codex roster agent NAME; no THREAD starts a new one
   local name=$1 model=$2 dir=$3 tid=$4 prompt=$5
+  ACCT= ACCT_FOR=  # the owner's accounts are Claude Code's so far
   home "$name" "$dir" || return 0
-  app_server "$name" "$model"
+  box=(); [ -z "${ROSTER_BOX:-}" ] || box_env
+  app_server "$name" "$model" "$dir" "$tid"
   rpc "$name" trust-hooks "$dir" >/dev/null
+  local sock err before; sock=$(csock "$name")
+  # a thread that never had a turn (a New agent given no first words) has no rollout, so nothing to resume (Codex
+  # 0.160.0: "no rollout found"): a new one in its place
+  if [ -n "$tid" ] && ! err=$(rpc "$name" status "$tid" 2>&1 >/dev/null); then
+    [[ $err == *"no rollout found"* ]] || { echo "$name: thread $tid: $err" >&2; return 1; }
+    echo "$name: thread $tid never had a turn, so there is nothing of it to resume: a new thread in its place" >&2; tid=
+  fi
+  local tui=(env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" "${sockenv[@]}" AGENT_BASE="$AGENT_BASE" PATH="$AGENT_BASE/bin:$PATH" "${box[@]}"
+    codex -c check_for_update_on_startup=false)
+  if [ -z "$tid" ] && [ -z "$prompt" ]; then
+    # no first words (N-1997): no turn, so no model call, till the owner's first message. A thread with no turn cannot
+    # be resumed once the connection that made it closes, so the TUI makes it and holds it, on his model (-m: else
+    # Codex's default, measured on 0.160.0): the new one loaded in the app-server is its, told coordd as ready, since
+    # Codex's SessionStart comes only with a first turn. Looked for every 0.5 s while its TUI and app-server run, for 30 s
+    before=$(rpc "$name" loaded)
+    open "$name" "$dir" "${tui[@]}" --remote "unix://$sock" -m "${model%%:*}"
+    local waited=0
+    until tid=$(comm -13 <(sort <<<"$before") <(rpc "$name" loaded | sort) | head -n 1) && [ -n "$tid" ]; do
+      kill -0 "$(cat "$apps/$name.pid" 2>/dev/null)" 2>/dev/null || { echo "$name: its codex app-server ended; see $apps/$name.log" >&2; return 1; }
+      coordc terms | awk -F'\t' -v n="$name" '$1 == n && $NF !~ /^\(ended: / { up = 1 } END { exit !up }' ||
+        { echo "$name: its codex TUI ended without opening a thread; see its terminal" >&2; return 1; }
+      [ $((waited += 1)) -le 60 ] || { echo "$name: codex opened no thread in 30 s; not started (its terminal shows why)" >&2; return 1; }
+      sleep 0.5
+    done
+    coordc session "$name" "$(jq -nc --arg t "$tid" --arg d "$dir" --arg k "$sock" '{session_id: $t, cwd: $d, socket: $k, ready: true}')"
+    return
+  fi
   if [ -z "$tid" ]; then
     tid=$(rpc "$name" new-thread "$dir" "${model%%:*}" "$prompt") prompt=
-  else
-    rpc "$name" status "$tid" >/dev/null  # loaded by its app-server before the TUI attaches
   fi
   # the thread's SessionStart hook tells coordd its transcript later; coordd needs the thread from now (mail to it)
-  coordc session "$name" "$(jq -nc --arg t "$tid" --arg d "$dir" --arg k "$apps/$name.sock" '{session_id: $t, cwd: $d, socket: $k}')"
-  open "$name" "$dir" env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" "${sockenv[@]}" AGENT_BASE="$AGENT_BASE" \
-    PATH="$AGENT_BASE/bin:$PATH" codex -c check_for_update_on_startup=false resume "$tid" --remote "unix://$apps/$name.sock"
+  coordc session "$name" "$(jq -nc --arg t "$tid" --arg d "$dir" --arg k "$sock" '{session_id: $t, cwd: $d, socket: $k}')"
+  open "$name" "$dir" "${tui[@]}" resume "$tid" --remote "unix://$sock"
   [ -z "$prompt" ] || rpc "$name" send "$tid" next "$prompt"
 }
 
+ocdir() { echo "$COORD/agents/$1/opencode"; }  # ocdir NAME: an opencode agent's own folder
+ocrpc() { CODEX_SOCK=$(ocdir "$1")/coord "$AGENT_BASE/bin/opencode-rpc" "${@:2}"; }  # ocrpc NAME ARGS...
+
+# oc_ours NAME PID: PID is NAME's `opencode-rpc serve` by its command line (a live pid on file may be another's by now)
+oc_ours() { [ -n "$2" ] && [[ $(tr '\0' ' ' 2>/dev/null <"/proc/$2/cmdline") == *"opencode-rpc serve $1 "* ]]; }
+oc_stop() {  # oc_stop NAME: stop NAME's opencode server and follower, if the pid on file is still that `opencode-rpc serve`
+  local pid
+  pid=$(cat "$apps/$1.pid" 2>/dev/null) || return 0
+  # only its own pid file: a Codex agent's app-server keeps its pid in the same place (app_stop)
+  oc_ours "$1" "$pid" || return 0
+  kill "$pid"; rm -f "$apps/$1.pid"
+}
+
+opencode_agent() {  # opencode_agent NAME MODEL DIR SESSION PROMPT: opencode roster agent NAME; no SESSION starts a new one
+  # its own `opencode serve` on loopback (opencode-rpc serve, under coordc run: the server, its plugin and the
+  # follower are NAME's process for coordd), with opencode's folders under $COORD/agents/NAME/opencode: config (ours,
+  # written here at each start), data, state and cache (opencode's own: its sessions and any sign-in; never read by us).
+  # The pinned opencode of $COORD/opt only (the owner's yes, N-946 post 5), never one on PATH. Neither the repository's
+  # opencode.json nor the owner's ~/.claude is read (OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE).
+  # Mail comes as Codex's does, from coordd through opencode-rpc send; there is no channel server.
+  # Our config (opencode.json, the plugin, the standing text) is opencode's global config through OPENCODE_CONFIG_DIR,
+  # so it holds whatever folders the account gives; opencode's own home (OPENCODE_TEST_HOME, read only for its
+  # `.opencode` folder) is an empty one of the agent's, so the owner's ~/.opencode is never read.
+  # The account: coordd's answer to `account-for` (account), asked only when a new server starts: a running server
+  # keeps the account it started on, and a second answer could bind another account of its provider, so the card
+  # would name one the server does not use (accounts-3, N-946 post 14). On one of the owner's opencode accounts, its
+  # folders (accounts' session_env: XDG_DATA_HOME, which holds the sign-in, and the others) override the agent's own
+  # in the server's environment only; the screen asks the server for everything and runs on the agent's folders.
+  local name=$1 model=$2 dir=$3 sid=$4 prompt=$5 a c bin pid kept=
+  ACCT= ACCT_FOR= ACCT_SET=() ACCT_UNSET=()
+  [ -z "${ROSTER_BOX:-}" ] || { echo "$name: an opencode agent in a box is not supported yet; not started" >&2; return 1; }
+  bin=$COORD/opt/opencode/1.18.34/bin/opencode
+  [ -x "$bin" ] || { echo "$name: no opencode at $bin; not started" >&2; return 1; }
+  home "$name" "$dir" || return 0
+  a=$(ocdir "$name"); c=$a/coord
+  pid=$(cat "$apps/$name.pid" 2>/dev/null) || pid=
+  oc_ours "$name" "$pid" && [ -s "$c/session" ] && kept=1
+  [ -n "$kept" ] || account "$name" || return 1
+  mkdir -p -m 700 "$a" "$a/config/opencode/plugin" "$a/data" "$a/state" "$a/cache" "$a/home" "$c"
+  local ocenv=(XDG_CONFIG_HOME="$a/config" XDG_DATA_HOME="$a/data" XDG_STATE_HOME="$a/state" XDG_CACHE_HOME="$a/cache"
+    OPENCODE_CONFIG_DIR="$a/config/opencode" OPENCODE_TEST_HOME="$a/home"
+    OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DISABLE_CLAUDE_CODE=1 OPENCODE_DISABLE_AUTOUPDATE=1)
+  install -m 644 "$AGENT_BASE/opencode/plugin/coord.js" "$a/config/opencode/plugin/coord.js"
+  # its system text (system_prompt), read by opencode 1.18.34 from the file at its server's start (measured on
+  # loopback, accounts-lead N-1789): appended as its `instructions`, or his version in place of opencode's own main
+  # text as the default agent's prompt (`agent.build.prompt` "{file:…}"; opencode-rpc names no agent, so `build` runs)
+  # the owner's switches (harness_switches): a tool he turned off is denied by name in opencode 1.18.34's permission
+  # rules, which have taken the place of its old `tools` switches; its own prompt has no parts to leave out and it has
+  # no check of its own to lift
+  harness_switches opencode "$name" || return 1
+  system_prompt "$name" opencode "$model" "${hpacks[@]}"
+  # every ask allowed, as a Claude Code agent runs under bypassPermissions: the plugin's `pre` is the boundary; the
+  # question tool denied (nobody is at its form; the model is told to ask through coord). Each project MCP server
+  # ($COORD/mcp/NAME, as a Codex agent's) gets the coord's variables it reads.
+  local m mcp='{}'
+  for m in "$COORD"/mcp/*; do
+    [ -x "$m" ] && [ "${m##*/}" != coord ] || continue
+    mcp=$(jq -c --arg n "${m##*/}" --arg c "$m" --arg co "$COORD" --arg b "$AGENT_BASE" --arg an "$name" --arg am "$model" \
+      '. + {($n): {type: "local", command: [$c], enabled: true,
+                   environment: {COORD: $co, AGENT_BASE: $b, AGENT_NAME: $an, AGENT_MODEL: $am, AGENT_KIND: "opencode"}}}' <<<"$mcp")
+  done
+  jq -n --arg s "$sys_file" --arg mode "$sys_how" --argjson mcp "$mcp" --argjson got "$HARNESS_GOT" '{
+    "$schema": "https://opencode.ai/config.json",
+    autoupdate: false, share: "disabled",
+    permission: ({"*": "allow", question: "deny"} + $got.permission),
+    mcp: $mcp}
+    + if $mode == "replace" then {instructions: [], agent: {build: {prompt: "{file:\($s)}"}}} else {instructions: [$s]} end' \
+    >"$a/config/opencode/opencode.json"
+  if [ -z "$kept" ]; then
+    mkdir -p -m 700 "$apps"
+    rm -f "$c/session"
+    viewed "$dir"
+    said_server opencode "$name" "$model" "$dir" "$sid"
+    setsid "${VIEWED[@]}" env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u OPENAI_API_KEY "${ACCT_UNSET[@]}" \
+      LANG=C.UTF-8 AGENT_NAME="$name" AGENT_HOME="$COORD/agents/$name/home" AGENT_MODEL="$model" AGENT_KIND=opencode CODEX_SOCK="$c" COORD="$COORD" "${sockenv[@]}" \
+      AGENT_BASE="$AGENT_BASE" PATH="$AGENT_BASE/bin:$PATH" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
+      GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" OPENCODE_BIN="$bin" "${ocenv[@]}" "${ACCT_SET[@]}" \
+      "$AGENT_BASE/bin/coordc" run "$name" -- "$AGENT_BASE/bin/roster" said "${SAID[@]}" -- \
+      "$AGENT_BASE/bin/opencode-rpc" serve "$name" "$dir" "${model%%:*}" ${sid:+"$sid"} \
+      </dev/null >>"$apps/$name.log" 2>&1 &
+    pid=$!; echo "$pid" >"$apps/$name.pid"
+    # the session file is written once the plugin's mark is there and the session is made or found (no time limit)
+    until [ -s "$c/session" ]; do
+      kill -0 "$pid" 2>/dev/null || { rm -f "$apps/$name.pid"; echo "$name: opencode did not start; see $apps/$name.log" >&2; return 1; }
+      sleep 0.1
+    done
+  fi
+  sid=$(cat "$c/session")
+  coordc session "$name" "$(jq -nc --arg t "$sid" --arg d "$dir" --arg k "$c" '{session_id: $t, cwd: $d, socket: $k}')"
+  open "$name" "$dir" env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" CODEX_SOCK="$c" OPENCODE_BIN="$bin" "${ocenv[@]}" \
+    "$AGENT_BASE/bin/opencode-rpc" screen
+  [ -z "$prompt" ] || ocrpc "$name" send "$sid" next "$prompt"
+}
+
+agdir() { echo "$COORD/agents/$1/agy"; }  # agdir NAME: an agy agent's own folder
+agrpc() { CODEX_SOCK=$(agdir "$1")/coord "$AGENT_BASE/bin/agy-rpc" "${@:2}"; }  # agrpc NAME ARGS...
+
+# ag_ours NAME PID: PID is NAME's `agy-rpc serve`, by its command line (a live pid alone is not: one on file from a
+# start that ended may be another process's by now)
+ag_ours() { [ -n "$2" ] && [[ $(tr '\0' ' ' 2>/dev/null <"/proc/$2/cmdline") == *"agy-rpc serve $1 "* ]]; }
+# ag_yolo PID: PID's `agy-rpc serve` runs in the owner's Yolo, by its command line (its last argument, which coordd
+# reads there too: started_yolo)
+ag_yolo() { [[ $(tr '\0' ' ' 2>/dev/null <"/proc/$1/cmdline") == *" --dangerously-skip-permissions "* ]]; }
+ag_stop() {  # ag_stop NAME: stop NAME's agy session, if the pid on file is still that `agy-rpc serve`, and wait till it
+  # and its agy have let go of the agent's lock (no time limit, as for any stop: N-68), so a start after it is not
+  # refused for a serve still ending
+  local pid lock
+  pid=$(cat "$apps/$1.pid" 2>/dev/null) || return 0
+  ag_ours "$1" "$pid" || return 0
+  kill "$pid"; rm -f "$apps/$1.pid"
+  lock=$(agdir "$1")/serve.lock
+  [ ! -e "$lock" ] || flock "$lock" true
+}
+
+# agy_system NAME MODEL FOLDER: an agy agent's system text, its packs by model and by role; a bare one's none (FOLDER/bare)
+agy_system() {
+  if [ -f "$3/bare" ]; then system_prompt "$1"; else harness_switches agy "$1" || return 1; system_prompt "$1" agy "$2" "${hpacks[@]}"; fi
+}
+agy_agent() {  # agy_agent NAME MODEL DIR SESSION PROMPT: agy roster agent NAME on MODEL (`agy/gemini-…`); no SESSION starts a new one
+  # agy-rpc serve, under coordc run (it is NAME's process for coordd), the way its account gives (coordd's answer to
+  # `account-for`, asked only when no session of NAME runs, as for opencode): a key account's `@key PATH` or a sign-in
+  # account's `AGY_SIGNIN=…` line (its profile, where agy's own sign-in keeps it), agy's own ACP server run by agy-rpc,
+  # with the project's MCP servers; or, on an account t3code signed in, its `T3_HOME=…` line, a thread on that account's
+  # t3code server (the agent's commands run in that server, with its environment and cgroup: its coord is agy-rpc's
+  # `bin/coord`, which declares its name, N-1446 p2099). Its folder $COORD/agents/NAME/agy holds `coord` (agy-rpc's: the
+  # session, its transcript and socket), the t3code way's `bin/coord` and `home/` (agy's HOME, and on a key its profile);
+  # of the owner's ~/.gemini only a chat imported is read, once, and its copy put in agy's data (agy-import). Mail
+  # comes from coordd through agy-rpc send, as an opencode agent's.
+  local name=$1 model=$2 dir=$3 sid=$4 prompt=$5 a c pid kept= how=() m mcp='[]' bare=0 yolo= runs=
+  ACCT= ACCT_FOR= ACCT_KEY= ACCT_SET=() ACCT_UNSET=()
+  [ -z "${ROSTER_BOX:-}" ] || { echo "$name: an agy agent in a box is not supported yet; not started" >&2; return 1; }
+  home "$name" "$dir" || return 0
+  a=$(agdir "$name"); c=$a/coord
+  pid=$(cat "$apps/$name.pid" 2>/dev/null) || pid=
+  # the owner's Safe · Yolo for it (coordd's `mode`, in session.json as for a Claude Code agent; N-1956): Yolo starts
+  # agy-rpc with `--dangerously-skip-permissions` last, which agy-rpc gives agy (or, through t3code, a full-access
+  # thread): it asks nothing. A server running in the other mode is stopped and started again on its session, as agy
+  # reads the flag only as it starts (coordd's restart for a mode, `yolo_due`).
+  [ "$(jq -r '.mode // empty' "$COORD/agents/$name/session.json" 2>/dev/null || true)" != yolo ] || yolo=1
+  if ag_ours "$name" "$pid" && [ -s "$c/session" ]; then
+    ! ag_yolo "$pid" || runs=1
+    if [ "$runs" = "$yolo" ]; then kept=1; else ag_stop "$name"; fi
+  fi
+  if [ -z "$kept" ]; then
+    account "$name" || return 1
+    if [ -n "$ACCT_KEY" ]; then
+      how=(AGY_KEY_FILE="$ACCT_KEY" AGY_BIN="$COORD/opt/agy/1.5.18/bin/antigravity")
+    elif acct_sets AGY_SIGNIN; then
+      how=(AGY_BIN="$COORD/opt/agy/1.5.18/bin/antigravity")
+    elif acct_sets T3_HOME; then
+      # a thread of t3code, whose commands run outside the agent's view; one kept on agy's own client
+      # (ROSTER_AGY_NATIVE=1 at its first start, kept as $a/native; an imported chat) agy-rpc does not start until the
+      # account is signed in again, by agy's own sign-in
+      [ -z "${ROSTER_AGY_NATIVE:-}" ] || { mkdir -p -m 700 "$a" && : >"$a/native"; }
+      how=()
+      if [ ! -f "$a/native" ] && [ ! -f "$a/imported" ]; then
+        [ -z "${ROSTER_VIEW:-}" ] || { echo "$name: an agy agent on a sign-in account runs its commands in the account's t3code server, outside this view; not started" >&2; return 1; }
+      fi
+    else
+      echo "$name: coordd gave it no agy account (no sign-in, no key); not started" >&2; return 1
+    fi
+  fi
+  mkdir -p -m 700 "$a" "$a/home" "$c"
+  # a bare agent (ROSTER_BARE=1 at its first start, kept as $a/bare): no standing text, no MCP server, no tool call
+  # asked first (agy-rpc's AGY_BARE); a version of his still reaches it. agy takes a system text appended only.
+  [ -z "${ROSTER_BARE:-}" ] || : >"$a/bare"
+  [ ! -f "$a/bare" ] || bare=1
+  agy_system "$name" "$model" "$a" || return 1
+  [ "$sys_how" != replace ] || { echo "$name: agy takes a system text only appended; its version ${said_system:-?} is in place of agy's own: not started" >&2; return 1; }
+  if [ -f "$a/bare" ] && [ -z "$said_system" ]; then : >"$sys_file"; said_system_sha=$(printf '' | sha256sum | cut -c1-64); fi
+  # each project MCP server ($COORD/mcp/NAME, as an opencode agent's), as ACP's stdio servers, for the key way; and
+  # its brain (coord-brain-mcp: read_brain, report_work), how an agy agent pulls, unless the project has its own
+  # (N-1998). A bare agent has none.
+  local brain= n
+  [ -x "$COORD/mcp/brain" ] || [ ! -x "$AGENT_BASE/bin/coord-brain-mcp" ] || brain=$AGENT_BASE/bin/coord-brain-mcp
+  for m in "$COORD"/mcp/* ${brain:+"$brain"}; do
+    [ -x "$m" ] && [ "${m##*/}" != coord ] || continue
+    n=${m##*/}; [ "$m" != "$brain" ] || n=brain
+    mcp=$(jq -c --arg n "$n" --arg c "$m" --arg co "$COORD" --arg b "$AGENT_BASE" --arg an "$name" --arg am "$model" \
+      '. + [{name: $n, command: $c, args: [], env: [{name: "COORD", value: $co}, {name: "AGENT_BASE", value: $b},
+             {name: "AGENT_NAME", value: $an}, {name: "AGENT_MODEL", value: $am}, {name: "AGENT_KIND", value: "agy"}]}]' <<<"$mcp")
+  done
+  [ ! -f "$a/bare" ] || mcp='[]'
+  if [ -z "$kept" ]; then
+    mkdir -p -m 700 "$apps"
+    rm -f "$c/session"
+    viewed "$dir"
+    said_server agy "$name" "$model" "$dir" "$sid"
+    setsid "${VIEWED[@]}" env "${inherited[@]}" -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u OPENAI_API_KEY "${ACCT_UNSET[@]}" \
+      LANG=C.UTF-8 AGENT_NAME="$name" AGENT_HOME="$COORD/agents/$name/home" AGENT_MODEL="$model" AGENT_KIND=agy CODEX_SOCK="$c" COORD="$COORD" "${sockenv[@]}" \
+      AGENT_BASE="$AGENT_BASE" PATH="$AGENT_BASE/bin:$PATH" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
+      GIT_CONFIG_VALUE_0="$AGENT_BASE/git/hooks" AGY_STANDING="$sys_file" AGY_MCP="$mcp" AGY_BARE=$bare "${how[@]}" "${ACCT_SET[@]}" \
+      "$AGENT_BASE/bin/coordc" run "$name" -- "$AGENT_BASE/bin/roster" said "${SAID[@]}" -- \
+      "$AGENT_BASE/bin/agy-rpc" serve "$name" "$dir" "${model#agy/}" ${sid:+"$sid"} ${yolo:+--dangerously-skip-permissions} \
+      </dev/null >>"$apps/$name.log" 2>&1 &
+    pid=$!; echo "$pid" >"$apps/$name.pid"
+    # one journal line per start in Yolo (N-1400), as for a Claude Code agent
+    [ -z "$yolo" ] || logger -t roster "$name starts in Yolo (the owner's): agy --dangerously-skip-permissions in $dir" 2>/dev/null || true
+    # the session file is written once the thread or session is made or found (no time limit)
+    until [ -s "$c/session" ]; do
+      kill -0 "$pid" 2>/dev/null || { rm -f "$apps/$name.pid"; echo "$name: agy did not start; see $apps/$name.log" >&2; return 1; }
+      sleep 0.1
+    done
+  fi
+  sid=$(cat "$c/session")
+  coordc session "$name" "$(jq -nc --arg t "$sid" --arg d "$dir" --arg k "$c" '{session_id: $t, cwd: $d, socket: $k}')"
+  open "$name" "$dir" env "${inherited[@]}" LANG=C.UTF-8 CODEX_SOCK="$c" "$AGENT_BASE/bin/agy-rpc" screen
+  [ -z "$prompt" ] || agrpc "$name" send "$sid" next "$prompt"
+}
+
+# via_coordd: in a boxed project (coordd's $COORD/boxed) every agent is started by coordd, as its own user (N-101 post
+# 406, the joint proposal's A); the owner's add and restart are handed to it (`coordc start`), and what coordd itself
+# runs (ROSTER_VIA_COORDD) is not handed back
+via_coordd() { [ -f "$COORD/boxed" ] && [ -z "${ROSTER_VIA_COORDD:-}" ]; }
+
+# said_server KIND NAME MODEL DIR SESSION: SAID, the record line's fields of a start whose session runs in a server
+# of its own (Codex's app-server, opencode's, agy's), as agent() gives a Claude Code start's: its phase, kind, model, folder, session and
+# first words (said_brief, said_sha, said_prompt, set by start). The server goes through `roster said` with them, as
+# Claude Code does, so its start is in the record as one: a new server only, since a kept one started before
+SAID=()
+said_server() {
+  # the effort as its own word first: a `[[ ]]` that fails inside SAID's assignment ended roster (set -e) on every
+  # start of a model named with no effort (N-1997)
+  local effort=''; [[ $3 != *:* ]] || effort=${3#*:}
+  SAID=(phase="$said_phase" kind="$1" model="${3%%:*}" effort="$effort" dir="$4" session="$5" brief="$said_brief" prompt_sha="$said_sha"
+    prompt="$said_prompt" starter="${AGENT_NAME:-}" switches="$said_switches" system="$said_system" replace="$said_replace" system_sha="$said_system_sha")
+}
+
+# brief_of TEXT: the first post TEXT names (N-1446.p1388, N-1446 p1388, N-1446 post 1388), as N-1446.p1388
+brief_of() { grep -oE '\b[A-Z]-[0-9]+(\.p| p| post )[0-9]+\b' <<<"$1" | head -n 1 | sed -E 's/(\.p| p| post )/.p/' || true; }
+
 start() {  # start NAME MODEL PROMPT DIR
   case $(state "$1") in '' | stopped) ;; *) echo "$1: already running"; return ;; esac
+  if via_coordd; then coordc start "$1" "$2" "$3" "$4"; return; fi
   # the hierarchy (owner, 7 Nov): NAME's parent is whoever registers it first, an agent or the owner (coordd knows the
   # caller by its cgroup)
-  local kind=claude; case $2 in gpt-*) kind=codex ;; esac
-  coordc add "$1" "$kind" "$2" >/dev/null
+  local kind=claude renderings=(); case $2 in gpt-*) kind=codex ;; agy/*) kind=agy ;; */*) kind=opencode ;; esac
+  # only an agy agent's start is built to put nothing of ours on it (ROSTER_BARE=1)
+  if [ -n "${ROSTER_BARE:-}" ]; then
+    [ "$kind" = agy ] || { echo "$1: a bare start is built for agy agents only; not started" >&2; return 1; }
+  fi
+  # what it is handed is drawn from the renderings set the project names for it (ROSTER_RENDERINGS), kept by coordd
+  [ -z "${ROSTER_RENDERINGS:-}" ] || renderings=(--renderings "$ROSTER_RENDERINGS")
+  coordc add "$1" "$kind" "$2" "${renderings[@]}" >/dev/null
   local resume=() prompt id
   prompt=$(cat "$3")
   if id=$(sed -n '1s/^resume: *\([0-9a-f-]\{36\}\) *$/\1/p' "$3") && [ -n "$id" ]; then
     resume=(--resume "$id"); prompt=$(tail -n +2 "$3")
   fi
+  # what its record line says of its first words, one way for every kind (paper-research N-1446 p3164): the brief
+  # they name, their hash, and the words whole when they name none, only for a fresh session: on a resume (coordd's
+  # restarts, `resume: SID`) the words are coord's go-on text, not the session's first user message, so the hash
+  # alone (docket-core H-1639 p4)
+  said_brief=$(brief_of "$prompt"); said_sha=$(printf '%s' "$prompt" | sha256sum | cut -c1-64)
+  [ -n "$said_brief" ] || [ ${#resume[@]} -gt 0 ] || said_prompt=$prompt
   case $2 in
   gpt-*) codex_agent "$1" "$2" "$4" "${id:-}" "$prompt" ;;
-  *) agent "$1" "$2" "$4" "${resume[@]}" "$prompt" ;;
+  agy/*) agy_agent "$1" "$2" "$4" "${id:-}" "$prompt" || exit 1 ;;
+  */*) opencode_agent "$1" "$2" "$4" "" "$prompt" || exit 1 ;;
+  *) agent "$1" "$2" "$4" "${resume[@]}" ${prompt:+"$prompt"} ;;  # no first words: its session waits at its prompt
   esac
   echo "$1: started ($2)"
 }
 
-restart() {  # restart NAME: its own session again, from session.json; a program (roster tab) its command again
+# fork_copy SID FILE BYTES: a copy of session SID's transcript FILE, its first BYTES bytes, as a new session beside it
+# (the same folder, so a resume finds it on whichever account: accounts/mod.rs, "Why the link"), every line's
+# sessionId its own; prints the new session's id. Refused, with nothing made, when FILE is not SID's own transcript,
+# or BYTES is not the end of one of its lines.
+fork_copy() {
+  local sid=$1 f=$2 n=$3 size last new
+  [ "${f##*/}" = "$sid.jsonl" ] && [ -f "$f" ] || { echo "$f is not session $sid's transcript" >&2; return 1; }
+  size=$(stat -c %s "$f")
+  case $n in '' | *[!0-9]*) echo "--cut $n: not a number of bytes" >&2; return 1 ;; esac
+  [ "$n" -gt 0 ] && [ "$n" -le "$size" ] || { echo "--cut $n: past the $size bytes of $f" >&2; return 1; }
+  last=$(od -An -tx1 -j $((n - 1)) -N 1 "$f" | tr -d ' \n')
+  [ "$last" = 0a ] || { echo "--cut $n: not the end of a line of $f" >&2; return 1; }
+  new=$(cat /proc/sys/kernel/random/uuid)
+  (umask 077; head -c "$n" "$f" | sed "s/\"sessionId\":\"$sid\"/\"sessionId\":\"$new\"/g" >"${f%/*}/$new.jsonl.part") &&
+    mv "${f%/*}/$new.jsonl.part" "${f%/*}/$new.jsonl" || { rm -f "${f%/*}/$new.jsonl.part"; echo "--cut: no copy made in ${f%/*}" >&2; return 1; }
+  echo "$new"
+}
+
+restart() {  # restart NAME [--force] [--cut FILE BYTES] [--system N MODE]: its own session again, from session.json;
+  # a program (roster tab) its command again; with --cut, a copy of its session cut there (fork_copy); with --system,
+  # with version N of its own system prompt from then on (`system_prompt`)
+  local name=$1 force='' cut='' upto='' sys='' sysmode=''; shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+    --force) force=--force; shift ;;
+    --cut) cut=${2:?--cut FILE BYTES} upto=${3:?--cut FILE BYTES}; shift 3 ;;
+    --system) sys=${2:?--system N append|replace} sysmode=${3:?--system N append|replace}; shift 3 ;;
+    '') shift ;;
+    *) echo "restart $name: $1? (--force, --cut FILE BYTES, --system N append|replace)" >&2; exit 2 ;;
+    esac
+  done
+  if [ -n "$sys" ]; then
+    [ -f "$COORD/prompts/$name.system/$sys.md" ] || { echo "$name: no system prompt $sys ($COORD/prompts/$name.system/$sys.md)" >&2; exit 1; }
+    case $sysmode in append | replace) ;; *) echo "--system $sys $sysmode: append or replace" >&2; exit 2 ;; esac
+  fi
+  set -- "$name" ${force:+"$force"}
   local s=$COORD/agents/$1/session.json sid dir model t=$COORD/agents/$1/tab.json
   if [ -f "$t" ]; then  # a reboot ended the runner too, and nothing started it again (owner m225, 9 Nov)
-    local -a cmd; mapfile -t cmd < <(jq -r '.cmd[]' "$t")
+    # each word NUL-ended: a word may hold a newline (an `sh -c` script)
+    local -a cmd; mapfile -d '' -t cmd < <(jq -j '.cmd[] | (., "\u0000")' "$t")
     tab "$1" "$(jq -r .dir "$t")" "${cmd[@]}"; return
   fi
   [ -f "$s" ] || { echo "$1: no $s (roster add starts a new agent)" >&2; exit 1; }
-  sid=$(jq -r '.session_id // empty' "$s"); dir=$(jq -r '.cwd // empty' "$s"); model=$(jq -r '.model // empty' "$s")
+  # a boxed agent's session is its own user's: no cut copy is made for it yet
+  [ -z "$cut" ] || ! via_coordd || { echo "$1: a boxed agent is not restarted on a cut copy of its session yet" >&2; exit 1; }
+  if via_coordd; then
+    # a boxed agent's version (N-1788): named in `current` before the start coordd makes in the box, whose roster reads
+    # it there ($COORD bound into the box); a start refused puts back what `current` said, as a refusal here leaves it
+    local was=''
+    if [ -n "$sys" ]; then
+      case $(jq -r '.kind // empty' "$s") in '' | claude) ;; *) echo "$1: a $(jq -r .kind "$s") session is not given a system prompt of its own yet" >&2; exit 1 ;; esac
+      was=$(cat "$COORD/prompts/$1.system/current" 2>/dev/null) || was=''
+      printf '%s %s\n' "$sys" "$sysmode" >"$COORD/prompts/$1.system/current"
+    fi
+    coordc start "$1" ${2:+"$2"} && return  # --force goes along (N-101.p1270)
+    if [ -n "$sys" ]; then
+      if [ -n "$was" ]; then printf '%s\n' "$was" >"$COORD/prompts/$1.system/current"; else rm -f "$COORD/prompts/$1.system/current"; fi
+    fi
+    exit 1
+  fi
+  # ROSTER_DIR (coordd, an agent started in a view): the view's path of the project's folder, over the session's cwd
+  sid=$(jq -r '.session_id // empty' "$s"); dir=${ROSTER_DIR:-$(jq -r '.cwd // empty' "$s")}; model=$(jq -r '.model // empty' "$s")
   [ -n "$sid" ] && [ -n "$dir" ] || { echo "$1: $s has no session_id or cwd" >&2; exit 1; }
+  # the owner's switches read before anything is hung up: a settings file that does not read leaves the agent running
+  # as it is, and says why (harness_switches reads them again at the start itself)
+  local kind; kind=$(jq -r '.kind // "claude"' "$s")
+  ROSTER_BOX="${ROSTER_BOX:-}" COORD_IN_BOX="${COORD_IN_BOX:-}" "$AGENT_BASE/bin/harness-settings" "$kind" "$1" >/dev/null ||
+    { echo "$1: its harness settings do not read (above): not restarted, it runs as it was" >&2; exit 1; }
+  case $(jq -r '.kind // empty' "$s") in '' | claude) ;; *)
+    [ -z "$cut" ] || { echo "$1: a $(jq -r .kind "$s") session is not restarted on a cut copy yet" >&2; exit 1; }
+    [ "$kind$sysmode" != agyreplace ] || { echo "$1: agy takes a system text only appended, not in place of its own" >&2; exit 1; } ;;
+  esac
+  # a version of its own for a kind whose server holds the session (Codex's app-server, opencode's, agy-rpc): named for
+  # this start and every later one, then that server stopped, since each reads its system text only as it starts
+  # (system_prompt; app_server, opencode_agent, agy_agent); the session goes on in the new one
+  if [ -n "$sys" ] && [ "$kind" != claude ]; then
+    printf '%s %s\n' "$sys" "$sysmode" >"$COORD/prompts/$1.system/current"; said_phase=system
+    close "$1"
+    case $kind in codex) app_stop "$1" >/dev/null || exit 1 ;; opencode) oc_stop "$1" ;; agy) ag_stop "$1" ;; esac
+  fi
+  if [ "$(jq -r '.kind // empty' "$s")" = opencode ]; then  # the server holds the session: a running one is kept, only the screen is new
+    close "$1"; opencode_agent "$1" "$model" "$dir" "$sid" "" || exit 1
+    echo "$1: restarted (session $sid)"; return
+  fi
+  if [ "$(jq -r '.kind // empty' "$s")" = agy ]; then  # agy-rpc holds the session: a running one is kept, only the screen is new
+    close "$1"; agy_agent "$1" "$model" "$dir" "$sid" "" || exit 1
+    echo "$1: restarted (session $sid)"; return
+  fi
   if [ "$(jq -r '.kind // empty' "$s")" = codex ]; then  # the turn lives in the app-server: only the TUI is new
     close "$1"; codex_agent "$1" "$model" "$dir" "$sid" ""
     echo "$1: restarted (thread $sid)"; return
   fi
   # a running turn is not cut off (a restart killed DEBUG's answer to the owner, 6 Nov); working from the turn's start
   [ "$(state "$1")" != working ] || [ "${2:-}" = --force ] || { echo "$1: working (a turn is running); not restarted (--force)" >&2; exit 1; }
+  # the cut copy before its session is ended: what it copies is written already, and one that cannot be made leaves
+  # the session running as it is
+  local from=$sid
+  if [ -n "$cut" ]; then sid=$(fork_copy "$sid" "$cut" "$upto") || exit 1; fi
+  # its account before its session is ended: with every account out it stays as it is, and coordd tries again
+  account "$1" || exit 1
+  # its session where the start finds it, before its session is ended (docket-core N-2012 p2, fix 2): Claude Code
+  # resumes a session only from projects/ of the folder it runs with, and a move to another account starts it with
+  # that account's folder (acct-a to acct-b: `--resume` found nothing and the program ended at once). The transcript
+  # session.json names, or the cut copy beside the cut file, is carried there, as `fork` carries a fork's; one that is
+  # nowhere, or cannot be put there, leaves the running session as it is. A boxed one's is coordd's (sandbox.rs)
+  local cfg=${ROSTER_BOX_DIR:-}/home/.claude tpath=''
+  if [ -z "${ROSTER_BOX:-}" ]; then
+    own_home "$1" || exit 1
+    cfg=${ACCT:-${OWN:-$HOME/.claude}}
+    tpath=$(carried "$1" "$sid" "$dir" "$cut" "$s" "$cfg") || exit 1
+  fi
+  local was; was=$(stat -c %.9Y "$s" 2>/dev/null || echo none)
   close "$1"
   # the new process claims NAME only once the old one has ended (coordd refuses a second)
-  for _ in $(seq 40); do [ "$(state "$1")" = stopped ] && break; sleep 0.25; done
-  agent "$1" "${model:-claude-opus-5-5}" "$dir" --resume "$sid"
-  echo "$1: restarted (session $sid)"
+  stopped "$1"
+  [ "$said_phase" != start ] || said_phase=restart
+  [ -z "$cut" ] || said_phase=fork said_cut=$from said_upto=$upto
+  # the version it starts with, named for this start and every later one (`system_prompt`); written once nothing can
+  # refuse
+  if [ -n "$sys" ]; then printf '%s %s\n' "$sys" "$sysmode" >"$COORD/prompts/$1.system/current"; said_phase=system; fi
+  agent "$1" "${model:-claude-opus-5-5}" "$dir" --resume "$sid" || exit 1
+  # a start that ended is not a restart (docket-core N-2012 p2, fix 1): said, logged in coordd's log, false, and its
+  # session.json named SID again if the start's own SessionStart named one with no transcript
+  local up=0; came_up "$1" "$sid" "$was" || up=$?
+  if [ "$up" = 1 ]; then
+    local why="$1: ended at once on session $sid under $cfg: not restarted"
+    local now_sid; now_sid=$(jq -r '.session_id // empty' "$s" 2>/dev/null || true)
+    if [ -n "$now_sid" ] && [ "$now_sid" != "$sid" ] && [ ! -f "$(jq -r '.transcript_path // empty' "$s")" ]; then
+      local back; back=$(jq -nc --arg t "$sid" --arg p "${tpath:-}" '{session_id: $t, source: "resume"} + (if $p == "" then {} else {transcript_path: $p} end)')
+      coordc session "$1" "$back" >/dev/null 2>&1 || why+="; session.json names $now_sid, a session with no transcript (coord session refused to name $sid again)"
+    fi
+    echo "$why" >&2
+    printf '%s roster: %s\n' "$(date -u +%FT%TZ)" "$why" >>"$COORD/coordd.log" 2>/dev/null || true
+    exit 1
+  fi
+  local not_yet=''; [ "$up" = 0 ] || not_yet=", its session's start not seen in ${ROSTER_UP_WAIT:-30} s"
+  if [ -n "$cut" ]; then echo "$1: restarted on session $sid, session $from cut after $upto bytes$not_yet"; else echo "$1: restarted (session $sid)$not_yet"; fi
 }
 
-fork() {  # fork NAME [--name NEW] [--model MODEL] [TEXT...]: NAME's conversation, copied, as agent NEW
-  local from=$1 new='' model='' s sid dir; shift
+# carried NAME SID DIR CUT S CFG: where session SID's transcript is for a Claude Code start of NAME in DIR with folder
+# CFG (its projects/ entry for DIR), printed; the transcript put there first when it is elsewhere: the cut copy beside
+# CUT, else the file S (session.json) names, else one under ~/.claude or the project's claude-home. False, said and with
+# nothing changed, when it is nowhere or cannot be put there.
+carried() {
+  local name=$1 sid=$2 dir=$3 cut=$4 s=$5 cfg=$6 src want
+  want=$cfg/projects/$(printf '%s' "$dir" | sed 's/[^A-Za-z0-9]/-/g')/$sid.jsonl
+  if [ -n "$cut" ]; then src=${cut%/*}/$sid.jsonl; else src=$(jq -r '.transcript_path // empty' "$s"); fi
+  [ -n "$src" ] && [ -f "$src" ] || src=$(ls "$HOME"/.claude/projects/*/"$sid.jsonl" "$COORD"/claude-home/projects/*/"$sid.jsonl" 2>/dev/null | head -n 1)
+  if [ -z "$src" ] || [ ! -f "$src" ]; then
+    [ -f "$want" ] && { echo "$want"; return 0; }
+    echo "$name: its session $sid has no transcript here (not under $cfg, nor where session.json names it); not restarted: a start would end at once" >&2
+    return 1
+  fi
+  if [ "$(realpath -e "$src")" != "$(realpath -e "$want" 2>/dev/null)" ] && ! cmp -s "$src" "$want"; then
+    mkdir -p "${want%/*}" && (umask 077; cp "$src" "$want.restart") && mv -f "$want.restart" "$want" ||
+      { rm -f "$want.restart"; echo "$name: its session $sid could not be put where its Claude Code finds it ($want); not restarted" >&2; return 1; }
+  fi
+  echo "$want"
+}
+
+# came_up NAME SID WAS: whether NAME's new program is up on session SID (restart's fix 1): 0 once coordd has it running
+# and has written session.json (its mtime no longer WAS) naming SID, its SessionStart; 1 when its program ended: coordd
+# had it running and has it stopped again, or has it stopped still after ROSTER_UP_WAIT seconds (default 30); 2 when it
+# runs and no SessionStart came in that time
+came_up() {
+  local n=$1 sid=$2 was=$3 s=$COORD/agents/$1/session.json st seen='' i=0 lim
+  lim=$(( ${ROSTER_UP_WAIT:-30} * 4 ))
+  while [ "$i" -lt "$lim" ]; do
+    st=$(state "$n")
+    if [ -n "$st" ] && [ "$st" != stopped ]; then
+      seen=1
+      [ "$(stat -c %.9Y "$s" 2>/dev/null || echo none)" = "$was" ] || [ "$(jq -r '.session_id // empty' "$s" 2>/dev/null)" != "$sid" ] || return 0
+    elif [ -n "$seen" ]; then
+      return 1
+    fi
+    sleep 0.25; i=$((i + 1))
+  done
+  [ -n "$seen" ] && [ "$(state "$n")" != stopped ] && [ -n "$(state "$n")" ] && return 2
+  return 1
+}
+
+ask() {  # ask NAME TEXT...: one answer to TEXT from a copy of NAME's session, printed (the owner's Join back)
+  local name=$1 s sid dir model; shift
+  s=$COORD/agents/$name/session.json
+  [ -f "$s" ] || { echo "$name: no $s" >&2; exit 1; }
+  case $(jq -r '.kind // empty' "$s") in '' | claude) ;; *) echo "$name: only a Claude Code agent's session is asked" >&2; exit 1 ;; esac
+  sid=$(jq -r '.session_id // empty' "$s"); dir=$(jq -r '.cwd // empty' "$s"); model=$(jq -r '.model // empty' "$s")
+  [ -n "$sid" ] && [ -n "$dir" ] || { echo "$name: $s has no session_id or cwd" >&2; exit 1; }
+  ROSTER_ASK=1 agent "$name" "${model:-claude-opus-5-5}" "$dir" --resume "$sid" --fork-session "$*"
+}
+
+fork() {  # fork NAME [--cut FILE BYTES] [--name NEW] [--model MODEL] [--dir DIR] [TEXT...]: NAME's conversation, copied, as agent NEW
+  local from=$1 new='' model='' s sid dir at='' cut='' upto=''; shift
   while [ $# -gt 0 ]; do
     case $1 in
+    --cut) cut=${2:?--cut FILE BYTES} upto=${3:?--cut FILE BYTES}; shift 3 ;;
     --name) new=${2:?--name needs a name}; shift 2 ;;
     --model) model=${2:?--model needs a model}; shift 2 ;;
+    --dir) at=${2:?--dir needs a folder}; shift 2 ;;
     *) break ;;
     esac
   done
   s=$COORD/agents/$from/session.json
   [ -f "$s" ] || { echo "$from: no $s" >&2; exit 1; }
   [ "$(jq -r '.kind // empty' "$s")" != codex ] || { echo "$from: forking a Codex agent is not supported yet" >&2; exit 1; }
+  [ "$(jq -r '.kind // empty' "$s")" != agy ] || { echo "$from: forking an agy agent is not supported yet" >&2; exit 1; }
   sid=$(jq -r '.session_id // empty' "$s"); dir=$(jq -r '.cwd // empty' "$s")
   [ -n "$sid" ] && [ -n "$dir" ] || { echo "$from: $s has no session_id or cwd" >&2; exit 1; }
+  dir=${at:-$dir}
   model=${model:-$(jq -r '.model // empty' "$s")}; model=${model:-claude-opus-5-5}
   if [ -z "$new" ]; then
     new=$from-fork; local n=2
     while [ -n "$(state "$new")" ]; do new=$from-fork$n; n=$((n + 1)); done
   fi
   case $(state "$new") in '' | stopped) ;; *) echo "$new: already running" >&2; exit 1 ;; esac
-  coordc add "$new" claude "$model" >/dev/null
+  # the system prompt FROM runs with goes on in the fork (`system_prompt`; accounts-lead N-1446 p2447: "on restart,
+  # resume and fork"): FROM's versions copied as NEW's, `current` naming the same one. A stopped agent of NEW's name
+  # with versions of its own keeps them: refused, nothing made
+  [ ! -e "$COORD/prompts/$new.system" ] || { echo "$new: has system prompts of its own ($COORD/prompts/$new.system); fork under another name" >&2; exit 1; }
+  # --cut (coordd's copy, fresh-lead-3 N-1104 p1154): NEW goes on from a copy of NAME's session cut after BYTES of
+  # FILE, where NAME's turn began (fork_copy, as restart --cut makes it), beside NAME's own, which is left as it is
+  if [ -n "$cut" ]; then sid=$(fork_copy "$sid" "$cut" "$upto") || exit 1; fi
+  # the session NEW resumes: NAME's own transcript, or the cut copy made beside it
+  local src
+  if [ -n "$cut" ]; then src=${cut%/*}/$sid.jsonl; else src=$(jq -r '.transcript_path // empty' "$s"); fi
+  # a session record from before transcript_path: the session's file where Claude Code keeps it on the host
+  [ -n "$src" ] || src=$(ls "$HOME"/.claude/projects/*/"$sid.jsonl" "$COORD"/claude-home/projects/*/"$sid.jsonl" 2>/dev/null | head -n 1)
+  coordc add "$new" claude "$model" --from "$from" >/dev/null || exit 1
+  # a fork that does not find its session starts an empty one: a fresh agent under a fork's name, which says nothing
+  # (the owner's N-1794: "guarantee requested forks actually inherit the parent's conversation history"). Claude Code
+  # finds session SID only under its own folder's projects entry for the folder it runs in, and NEW's folder is its
+  # own account's, else the project's claude-home, else ~/.claude (as `agent` gives it below), which need not be
+  # where NAME's transcript is: an account whose folder links no projects, a project with a claude-home whose agent
+  # was on an account. So the transcript is put there first, as coordd's fork.rs puts a pattern's fork's, or nothing
+  # is started. A boxed fork's is put there by coordd (ROSTER_BOX: its view binds the conversations folder)
+  if [ -z "${ROSTER_BOX:-}" ]; then
+    account "$new" || exit 1
+    own_home "$new" || exit 1
+    local cfg=${ACCT:-${OWN:-$HOME/.claude}} want
+    want=$cfg/projects/$(printf '%s' "$dir" | sed 's/[^A-Za-z0-9]/-/g')/$sid.jsonl
+    [ -n "$src" ] && [ -f "$src" ] || { echo "$from: its session $sid has no transcript here ($src); $new not started: a fork without it would be a fresh agent" >&2; exit 1; }
+    if [ "$(realpath -e "$src")" != "$(realpath -e "$want" 2>/dev/null)" ]; then
+      mkdir -p "${want%/*}" && cp "$src" "$want.fork" && mv -f "$want.fork" "$want" ||
+        { rm -f "$want.fork"; echo "$from: its session could not be put where $new's Claude Code finds it ($want); $new not started" >&2; exit 1; }
+    fi
+  fi
+  [ ! -d "$COORD/prompts/$from.system" ] || cp -r "$COORD/prompts/$from.system" "$COORD/prompts/$new.system"
   local text="You are now $new: a fork of $from, made at this point of its conversation (a copy of it; $from goes on \
 on its own, and nothing you do changes its session). Your name for mail is $new; mail to $from reaches $from, not you."
   if [ $# -gt 0 ]; then text+=$'\n\n'"$*"; else text+=" Say in one line that you are the fork, then wait for mail."; fi
+  said_phase=fork said_brief=$(brief_of "$*") said_sha=$(printf '%s' "$text" | sha256sum | cut -c1-64)
+  [ -n "$said_brief" ] || said_prompt=$text
   agent "$new" "$model" "$dir" --resume "$sid" --fork-session "$text"
   echo "$new: forked from $from (session $sid)"
 }
@@ -257,7 +1246,9 @@ tab() {  # tab NAME DIR CMD...: a program on terminal NAME, its command kept for
   # registered as a program and claimed like an agent, so it has a delegated cgroup of its own (agents/NAME): the
   # runner's memory-limited jobs go beside it, counted as the runner's, not its starter's
   local n=$1 d=$2; shift 2; close "$n"; coordc add "$n" program - >/dev/null
-  mkdir -p "$COORD/agents/$n" && jq -n --arg d "$d" '{dir: $d, cmd: $ARGS.positional}' --args "$@" >"$COORD/agents/$n/tab.json"
+  # `--`: the command's own options stay its own (jq 1.7 took the -c of `sh -c "…"` for its compact output, and the
+  # restart ran `sh "…"`: Tovrin-dev's runner, yaaihh N-101 p1665)
+  mkdir -p "$COORD/agents/$n" && jq -n --arg d "$d" '{dir: $d, cmd: $ARGS.positional}' --args -- "$@" >"$COORD/agents/$n/tab.json"
   open "$n" "$d" env "${inherited[@]}" LANG=C.UTF-8 COORD="$COORD" "${sockenv[@]}" "$AGENT_BASE/bin/coordc" run "$n" -- "$@"
   echo "$n: started"
 }
@@ -267,8 +1258,11 @@ rename() {  # rename NAME NEW: wait for NAME's turn to end, stop it, rename it, 
   [ -f "$s" ] || { echo "$1: no $s" >&2; exit 1; }
   while [ "$(state "$1")" = working ]; do sleep 2; done
   close "$1"
-  for _ in $(seq 40); do [ "$(state "$1")" = stopped ] && break; sleep 0.25; done
+  stopped "$1"
   coordc rename "$1" "$2" || exit 1
+  # its own system prompts (`system_prompt`) go with its name
+  [ ! -d "$COORD/prompts/$1.system" ] || mv "$COORD/prompts/$1.system" "$COORD/prompts/$2.system"
+  said_phase=rename
   restart "$2"
 }
 
@@ -282,10 +1276,13 @@ up)
   done <"$file"
   ;;
 add)
-  [ $# -ge 4 ] || { echo "usage: roster add NAME MODEL PROMPT-FILE [DIR]" >&2; exit 2; }
-  start "$2" "$3" "$(realpath "$4")" "$(realpath "${5:-$PWD}")"
+  [ $# -ge 4 ] || { echo "usage: roster add NAME MODEL PROMPT-FILE DIR" >&2; exit 2; }
+  # no folder: refused, never the caller's own (it started two agents in the caller's folder on the caller's home,
+  # paper-research N-101 p638)
+  [ -n "${5:-}" ] || { echo "roster add $2: no folder given: the agent would run in this shell's folder ($PWD), the caller's own. Name the folder it works in: roster add NAME MODEL PROMPT-FILE DIR" >&2; exit 2; }
+  start "$2" "$3" "$(realpath "$4")" "$(realpath "$5")"
   ;;
-restart) restart "${2:?roster restart NAME [--force]}" "${3:-}" ;;
+restart) restart "${2:?roster restart NAME [--force] [--cut FILE BYTES]}" "${@:3}" ;;
 resume)  # the agents that ran when coordd last went down, each from its own session (coordd's $COORD/resume.json)
   f=$COORD/resume.json
   [ -f "$f" ] || exit 0
@@ -294,12 +1291,23 @@ resume)  # the agents that ran when coordd last went down, each from its own ses
   rm -f "$f.taking"
   ;;
 fork) fork "${2:?roster fork NAME [--name NEW] [--model MODEL] [TEXT]}" "${@:3}" ;;
+ask) ask "${2:?roster ask NAME TEXT}" "${@:3}" ;;
 rename) rename "${2:?roster rename NAME NEW}" "${3:?roster rename NAME NEW}" ;;
 tab)
   [ $# -ge 4 ] || { echo "usage: roster tab NAME DIR CMD..." >&2; exit 2; }
   tab "$2" "$3" "${@:4}"
   ;;
-down) close "${2:?roster down NAME}"; app_stop "$2" ;;
+account)  # account NAME ACCT DIR [--cols C] CMD...: CMD in DIR on terminal NAME, DIR trusted and the first-start screens
+  # marked seen in the owner's account folder ACCT as for an agent there (home); CMD's environment is the caller's to
+  # give. coordd's session for a reset he pressed `Use` on (accounts/resets.rs `session`): it types `/limit-reset`,
+  # reads the answer and hangs the terminal up
+  [ $# -ge 5 ] || { echo "usage: roster account NAME ACCT DIR [--cols C] CMD..." >&2; exit 2; }
+  ACCT=$3
+  home "$2" "$4" || exit 1
+  open "$2" "$4" "${@:5}"
+  ;;
+down) close "${2:?roster down NAME}"; oc_stop "$2"; ag_stop "$2"; app_stop "$2" ;;
 ls) coordc terms ;;
+standing) standing ;;
 *) sed -n '9,/^[^#]/p' "$0" | grep '^#' | sed 's/^# //'; exit 2 ;;
 esac

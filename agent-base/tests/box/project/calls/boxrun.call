@@ -1,0 +1,12 @@
+// box-run-test.sh's calls: the agent's commit, and the runner's hand-in (the library's, plan/library/lib.call).
+call commit_file(file: Text, text: Text) where model >= small -> Commit(commit: Ref) | Cannot(why: Text)
+  task implement
+  template
+    This is a test of the box, not real work. In the repository you are in, create the file {{ file }} holding exactly
+    this one line:
+    {{ text }}
+    Then `git add` it and `git commit -m "box-run-test"`, and nothing else: no other file, no build, no check.
+    Answer Commit with the full commit id (`git rev-parse HEAD`), or Cannot with what stopped you, word for word.
+
+call hand_in(commit: Ref) -> OnLine(top: Ref, not_built: [Text]?) | Red(errors: Text)
+  task hand_in

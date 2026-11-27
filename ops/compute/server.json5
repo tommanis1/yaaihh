@@ -1,0 +1,79 @@
+// NativeLink CAS + action cache + scheduler; rendered by nl.sh (${COMPUTE_*} from env, `// when` / `// unless` lines kept by it).
+{
+  stores: [
+    {
+      name: "AC",
+      filesystem: {
+        content_path: "${COMPUTE_STATE}/ac",
+        temp_path: "${COMPUTE_STATE}/tmp-ac",
+        eviction_policy: { max_bytes: ${COMPUTE_AC_BYTES} },
+      },
+    },
+    {
+      name: "CAS",
+      fast_slow: {
+        fast: {
+          filesystem: {
+            content_path: "${COMPUTE_STATE}/cas",
+            temp_path: "${COMPUTE_STATE}/tmp-cas",
+            eviction_policy: { max_bytes: ${COMPUTE_CAS_BYTES} },
+          },
+        },
+        slow: { noop: {} }, // unless COMPUTE_COLD_S3_BUCKET
+        slow: { experimental_cloud_object_store: { provider: "aws", bucket: "${COMPUTE_COLD_S3_BUCKET}", region: "${COMPUTE_COLD_S3_REGION}", endpoint: "${COMPUTE_COLD_S3_ENDPOINT}", force_path_style: true, key_prefix: "cas/" } }, // when COMPUTE_COLD_S3_BUCKET
+      },
+    },
+    {
+      name: "AC_CHECKED", // an action result is served only while every blob it names is still in the CAS
+      completeness_checking: { backend: { ref_store: { name: "AC" } }, cas_store: { ref_store: { name: "CAS" } } },
+    },
+  ],
+  schedulers: [
+    {
+      name: "MAIN", // an Execute whose action is in the cache answers from it; the rest go to a worker
+      cache_lookup: {
+        ac_store: "AC_CHECKED",
+        scheduler: {
+          simple: {
+            supported_platform_properties: {
+              sandbox: "exact", // bwrap | podman: which kind of worker runs the action
+              "container-image": "priority", // podman: the pinned image (name@sha256:...)
+              network: "priority", // on | off (default off), enforced by sandbox.sh
+              cpu_count: "minimum",
+              memory_kb: "minimum",
+            },
+          },
+        },
+      },
+    },
+  ],
+  servers: [
+    {
+      name: "clients",
+      listener: {
+        http: {
+          socket_address: "${COMPUTE_LISTEN}",
+          tls: { cert_file: "${COMPUTE_TLS_DIR}/cert.pem", key_file: "${COMPUTE_TLS_DIR}/key.pem", client_ca_file: "${COMPUTE_TLS_DIR}/ca.pem" }, // when COMPUTE_TLS_DIR
+        },
+      },
+      services: {
+        cas: [{ instance_name: "main", cas_store: "CAS" }],
+        ac: [{ instance_name: "main", ac_store: "AC_CHECKED" }],
+        execution: [{ instance_name: "main", cas_store: "CAS", scheduler: "MAIN" }],
+        capabilities: [{ instance_name: "main", remote_execution: { scheduler: "MAIN" } }],
+        bytestream: [{ instance_name: "main", cas_store: "CAS" }],
+        health: {},
+      },
+    },
+    {
+      name: "workers",
+      listener: {
+        http: {
+          socket_address: "${COMPUTE_WORKER_LISTEN}",
+          tls: { cert_file: "${COMPUTE_TLS_DIR}/cert.pem", key_file: "${COMPUTE_TLS_DIR}/key.pem", client_ca_file: "${COMPUTE_TLS_DIR}/ca.pem" }, // when COMPUTE_TLS_DIR
+        },
+      },
+      services: { worker_api: { scheduler: "MAIN" }, health: {}, admin: {} }, // admin: GET /admin/scheduler/MAIN/workers
+    },
+  ],
+}

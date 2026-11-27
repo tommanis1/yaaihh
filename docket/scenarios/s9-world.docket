@@ -1,0 +1,9 @@
+module scenario.s9
+
+import std.hooks as H
+import std.comms as C
+
+// Scenario 9's parties: the owner, one agent on Claude Code not in a box (w1) and one in a box (w2), not running.
++H.Party("o1"). +C.Role("o1", "owner").
++H.Party("w1"). +H.Running-On("w1", "claude-code", "2.1.332").
++H.Party("w2"). +H.Boxed("w2").

@@ -1,0 +1,23 @@
+module scenario.s11
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.delivery as D
+import std.bridges.claude_code as CC
+import std.bridges.codex as CX
+import std.bridges.agy as A
+
+// Scenarios 11 to 13's parties: the owner, a project brain that directs, and agents on each harness. w1, x1 and
+// g1 are delivered to by their harness's model; w2 runs on Claude Code and is delivered to by none; w3 (Claude
+// Code) and x3 (Codex) are delivered to, and no session of theirs runs yet.
++H.Party("o1"). +C.Role("o1", "owner").
++H.Party("brain"). +D.Directs("brain").
++H.Party("w1"). +H.Running-On("w1", "claude-code", "2.1.332"). +D.Agent("w1", "claude-code", "worker").
++H.Party("w2"). +H.Running-On("w2", "claude-code", "2.1.332").
++H.Party("x1"). +H.Running-On("x1", "codex", "0.160.0"). +D.Agent("x1", "codex", "worker").
++H.Party("g1"). +H.Running-On("g1", "agy", "agy-1.5.18"). +D.Agent("g1", "agy", "worker").
++H.Party("w3"). +D.Agent("w3", "claude-code", "worker").
++H.Party("x3"). +D.Agent("x3", "codex", "worker").
++R.Required("map-work", "tests_green"). +R.Required("legend", "tests_green").

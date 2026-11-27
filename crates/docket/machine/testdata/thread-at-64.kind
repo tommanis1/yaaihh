@@ -1,0 +1,99 @@
+// The owner's message (plan/design-two-systems.md, sections 3 and 16). Every message opens or joins a thread; there is
+// no one-off (§16, 3). TO is the agent written to; with none picked, whoever policy says fills lead (coordd fills it).
+// TYPED is whom the owner typed it to: [TO], or none when he picked nobody. NAMES are the @NAMEs in the words,
+// ADDRESSED whether there were any. FOLLOWS: the closed thread the words were written on (§16, item 10): closed stays
+// closed, and its words open this one, which follows it. A message naming others is a thread for sure; otherwise the
+// watcher's one call (intake) says whether the words belong on an open ticket or are a thread of their own. If that
+// call fails, coordd answers Thread.
+//
+// The words are posted as OPENER's, whom the machine gives at the open (machine.rs `OPENER`): his message's binding
+// gives the owner, so his words are his; an agent's open of a thread (`coord open thread --to X --addressed Named …`,
+// a subthread it starts: N-1445) gives the agent, so its words are its own, never his, and given as the open's own
+// text too (`coord open … TEXT`) they are posted once (hs-ls N-1446 p73). A thread a program opens gives the agent
+// whose open is above it, else the ticket whose program opened it; never the owner (proto-lead p168). With none (a
+// thread from another binding) the thread posts them itself. The open's line records OPENER, so a coordd from before
+// replays the same author (consult-3 p181). Whatever an opener writes in it is given over.
+//
+// - Place(t): the words are posted on t as the opener's (his, for his message), typed to whom they were typed
+//   (base.kind's owner_post handler then says whom his wake).
+// - Thread: the words are this ticket's first post, naming TO and every @NAME; then it rests at the hole, a place for
+//   posts that nothing runs. An Edit fills the hole: `return Kept` ends it, its posts as they are.
+// - Unsure(ts): never reaches this match from coordd's watcher: two or more open tickets the words fit, and coordd
+//   answers Place on the first and posts the same words as the owner's on the second, each post saying the other
+//   (`posted_on`); any further tickets named get no post and are named to him on the first: nothing is held or asked of him
+//   (when two or more of the tickets wait on his own answer, coordd answers Unsure as it is, and it is the arm below) (the owner, 16 Nov, N-354/N-355: "o cannot go rule o nthat he. psot
+//   on both for all i care"; paper-research N-586.p10). Answered otherwise (an older coordd), a thread of its own, as
+//   Thread, given at once to TO.
+//
+// agent_post: an agent's words landed on the thread (its turn's reply, its `coord post`) where the owner takes part
+// (the post is told to him, or he is on the thread: design part 9b; an agents' thread makes no model call). The
+// watcher's call `asks`
+// (asks.call) finds what they ask the owner, as passages of the words; `mark` puts them on the post, its text as
+// written. The thread is not quiet while this runs, so the minder is asked after, and is shown what the post asks.
+//
+// An agent's message (`coord msg NAME[,NAME] TEXT`, design part 9b): ADDRESSED is Sent(by), the sender; TO the first
+// it names, TYPED and NAMES all it names. Its words are this ticket's first post, by the sender, naming them (the
+// open's own post, as a note's was, with whom policy tells); it ends at once as Between: a place for posts that nothing runs, no hole, no minder, no intake. Whom a later post reaches is
+// the one rule for posts (machine.rs `unnamed_reach`, notify.eflint); the owner's words on it open a thread of his own
+// that follows it, as on any closed thread.
+//
+// result Done(why), Dropped(why): ended by `coord end` (paper-research N-447; tickets-patterns plan/one-thread.md), by
+// its opener, an agent above it or a lead (the policy's `edit`), or the owner: the hole is filled with the result. An
+// agents' thread keeps Between and is marked ended. Nothing ends a thread by itself.
+// result Kept: the thread is over (what was asked on it is done, or the owner let it go); its posts stay as they are.
+// result Moved(to): the owner's words belonged on ticket TO and were posted there; this thread holds nothing.
+// result OneOff: old threads only (a one-off, before §16); nothing returns it now.
+// result Between: an agents' thread (above); `coord show` says what it waits on, or quiet.
+// LABEL: the thread's name, what it is listed as and what its parent's line for it shows; with none, coordd cuts it
+// from the first line, as before. Optional, so that the binding's six values and the records' forms without it still
+// fit (tickets-patterns plan/one-thread.md; paper-research, N-101 post 1676). OPENER: who opened it (above), given by
+// the machine; optional and last for the same reason.
+/// the owner's message, or an agents' thread: its posts, and what they open
+kind thread from base
+  letter N
+  drawn line   // a line of the outline where it split off (the kind says so, not a list of names: N-1446 p17)
+  form to: Agent, typed: [Agent], names: [Agent], text: Text, addressed: Named | Unnamed | Sent(by: Agent), follows: Ticket?, label: Text?, opener: Agent?
+  result
+    Done(why: Text)       /// the work it carried is done; why says how (`coord end T done WHY`)
+    | Dropped(why: Text)  /// the work it carried was given up; why says why (`coord end T dropped WHY`)
+    | Kept                /// the thread is over; its posts stay as they are
+    | Moved(to: Ticket)   /// the owner's words belonged on ticket to and were posted there
+    | OneOff              /// old threads only: nothing returns it now
+    | Between             /// an agents' thread
+  pattern
+    match addressed {
+      Sent(by) => return Between
+      _ =>
+        v <- match addressed {
+          Named => return Thread
+          _ => step watcher intake(text, to)
+        };
+        match v {
+          Place(t) =>
+            _ <- match opener {
+              none => post text on t naming typed
+              o => post text on t as o naming typed
+            };
+            return Moved(t)
+          Thread =>
+            _ <- match opener {
+              none => post text naming to, names
+              o => post text as o naming to, names
+            };
+            ...
+          Unsure(ts) =>
+            _ <- match opener {
+              none => post text naming to, names
+              o => post text as o naming to, names
+            };
+            ...
+        }
+    }
+  when agent_post(p) where p.owner_on do
+    q <- step watcher asks(p.text, p.by);
+    match q {
+      Nothing => return none
+      Asks(marks) => mark p marks
+    }
+
+on owner_message(m) open thread(m.to, m.typed, m.names, m.text, m.addressed, m.follows)

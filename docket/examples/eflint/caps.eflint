@@ -1,0 +1,80 @@
+// std.hooks 2 and 6, by hand in the reference eFLINT that eflint-rs reads. A name ending in -f is the rule as the
+// foundation (4b219c61b) has it. Every query below must succeed.
+Fact agent Identified by String
+Fact harness Identified by String
+Fact version Identified by String
+Fact moment Identified by String
+Fact power Identified by String
+Fact running-on Identified by agent * harness * version
+Fact lets Identified by harness * version * moment * power
+Fact reaches Identified by harness * version * moment
+Fact mode Identified by String
+Fact reaches-in Identified by harness * version * mode * moment
+Fact started-in Identified by agent * mode
+Fact comes-to Identified by agent * moment
+  Holds when (Exists harness, version : running-on(agent, harness, version) && reaches(harness, version, moment))
+           , (Exists harness, version, mode : running-on(agent, harness, version) && started-in(agent, mode)
+              && reaches-in(harness, version, mode, moment))
+Fact unread-version Identified by agent
+  Holds when (Exists harness, version : running-on(agent, harness, version)
+              && Not(Exists moment : reaches(harness, version, moment))
+              && Not(Exists mode, moment : reaches-in(harness, version, mode, moment)))
+Fact can Identified by agent * moment * power
+  Holds when (Exists harness, version : running-on(agent, harness, version) && lets(harness, version, moment, power))
+             && comes-to(agent, moment)
+
+Fact boxed Identified by agent
+Fact check-on-said Identified by agent                 // Safety-Check-Override(agent, true)
+Fact check-off-said Identified by agent                // Safety-Check-Override(agent, false)
+Fact safety-check-on-f Identified by agent
+  Holds when check-on-said(agent)
+           , Not(boxed(agent)) && Not(check-off-said(agent))
+Fact safety-check-on Identified by agent
+  Holds when check-on-said(agent) && Not(check-off-said(agent))
+           , agent(agent) && Not(boxed(agent)) && Not(check-off-said(agent)) && Not(check-on-said(agent))
+.
++agent("a"). +agent("b"). +agent("free"). +agent("asked"). +agent("unsaid"). +agent("box-1"). +agent("both").
++harness("claude-code"). +harness("agy"). +version("2.1.332"). +version("2.1.400"). +version("t3code-0.1.11").
++moment("tool_called"). +moment("before_model_call"). +moment("turn_end"). +moment("permission_asked").
++power("deny"). +power("modify"). +power("answer").
++mode("approval-required"). +mode("full-access").
++reaches("claude-code", "2.1.332", "tool_called"). +lets("claude-code", "2.1.332", "tool_called", "deny").
++reaches("agy", "t3code-0.1.11", "turn_end").
++reaches-in("agy", "t3code-0.1.11", "approval-required", "tool_called").
++reaches-in("agy", "t3code-0.1.11", "approval-required", "permission_asked").
++lets("agy", "t3code-0.1.11", "tool_called", "deny"). +lets("agy", "t3code-0.1.11", "permission_asked", "answer").
+
+// 1. The version that was read.
++running-on("a", "claude-code", "2.1.332").
+?can("a", "tool_called", "deny").
+?!can("a", "tool_called", "modify").                            // not stated, so not let: the lines are closed
+?!can("a", "before_model_call", "modify").                      // the moment is not reached at all
+
+// 2. A version nobody has read.
++running-on("b", "claude-code", "2.1.400").
+?unread-version("b").
+?!can("b", "tool_called", "deny").                              // fail closed
+?!unread-version("a").
+
+// 3. agy through t3code: whether a tool call can be refused depends on how the session was started.
++running-on("free", "agy", "t3code-0.1.11"). +started-in("free", "full-access").
++running-on("asked", "agy", "t3code-0.1.11"). +started-in("asked", "approval-required").
++running-on("unsaid", "agy", "t3code-0.1.11").
+?!unread-version("free").                                       // its bridge was read
+?comes-to("free", "turn_end").                                  // reached however it was started
+?!comes-to("free", "tool_called").                              // full access: it asks nobody
+?!can("free", "tool_called", "deny").                           // so no guard on a tool call is counted on
+?can("asked", "tool_called", "deny").                           // started to ask first: a guard may refuse
+?can("asked", "permission_asked", "answer").
+?!can("asked", "turn_end", "deny").                             // reached, and nothing let there
+?!can("unsaid", "tool_called", "deny").                         // no mode stated: not counted on
+
+// 4. The safety check.
++boxed("box-1").
+?!safety-check-on("box-1").                                     // off in a box by default
++check-on-said("box-1").
+?safety-check-on("box-1").                                      // switched on
++boxed("both"). +check-on-said("both"). +check-off-said("both").
+?safety-check-on-f("both").                                     // the foundation: both said, and it is on
+?!safety-check-on("both").                                      // now: off wins
+?safety-check-on("a").                                          // not boxed, nothing said: on

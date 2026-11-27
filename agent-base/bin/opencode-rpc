@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+"""opencode-rpc: an opencode agent's server, from roster and coordd (tool-scan, N-591 post 109; plan N-946).
+
+  opencode-rpc serve NAME DIR MODEL [SESSION]
+                                       run the agent's own `opencode serve` and follow it; roster runs this under
+                                       `coordc run NAME --`, so the server, its plugin and this follower are the
+                                       agent's process for coordd. Prints nothing; SESSION resumes that session,
+                                       none makes a new one; the session's id is written to $CODEX_SOCK/session
+  opencode-rpc send SESSION PRIORITY TEXT
+                                       deliver TEXT as a user message. `next` goes into a running turn (opencode
+                                       takes it at the turn's next step) or starts one; `later` only starts one
+                                       when no turn runs (exit 3 if one does: the caller keeps it held)
+  opencode-rpc screen                  opencode's own screen on the agent's server and session (the agent's terminal,
+                                       roster's `open`); the password goes to it in its environment only
+  opencode-rpc status SESSION          idle, or busy
+  opencode-rpc interrupt SESSION       cut the running turn off (coord esc); nothing when idle
+  opencode-rpc wait-idle SESSION       return once no turn runs
+
+coordd calls the last four exactly as it calls codex-rpc (core.rs `rpc_bin`). $CODEX_SOCK names the agent's coord
+folder for opencode, `$COORD/agents/NAME/opencode/coord/` (mode 700; agents' tools may not write it, N-946 post 4):
+  url          the server's address: `opencode serve --hostname 127.0.0.1 --port 0`, loopback only
+  password     made at each start (mode 600); the server's Basic auth, OPENCODE_SERVER_PASSWORD in its environment
+               only, never on a command line; coordd is given only this folder
+  dir, model   the folder the session runs in, and its model as PROVIDER/MODEL
+  session      the session's id
+  ready        written by our plugin (config/opencode/plugin/coord.js) when opencode loads it
+  raw/         each model request and its answer, one file each, written by our plugin once the answer has ended (no
+               header: they carry the key); the raw pane's calls, which coordd reads (`RawPage`); the newest 200 stay
+  sent         a sha256 per line of each text `send` delivered: a user message in the session that is not here was
+               sent by someone else, and the follower tells coordd (`unsent`)
+  transcript.jsonl
+               the session as a Codex rollout (the lines coordd's follow.rs and transcript.rs read), written by the
+               follower from opencode's events; coordd reads the turn's output and its deliveries from it, the window
+               its chat. opencode's own files (opencode.db, auth.json) are never opened. Each request's usage is
+               written as Codex writes it (`turn_context`, `token_count`: `Follower.step`), so the usage rows of
+               the account the agent runs on are read from it as a Codex session's tokens are (N-1437)
+
+opencode 1.18.34 (the version on this machine, N-591 post 119; its source read at tag v1.18.34). The turn begins
+when the session's status turns busy and ends at `session.idle`; each tool call's end is its tool part completed or
+in error. The start of a tool call is the plugin's, which runs `claude/hook pre` before the tool runs and fails the
+call when coordd refuses it. A message's error is told as `failed`, in the words Claude Code's StopFailure gives
+(`failure`), so coordd reads what it says of the account as it reads Claude Code's.
+"""
+import atexit, base64, hashlib, http.client, json, math, os, secrets, signal, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
+
+C = os.environ.get('CODEX_SOCK', '')
+
+
+def read(name, default=''):
+    try:
+        with open(os.path.join(C, name)) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def write(name, text, mode=0o600):
+    path = os.path.join(C, name)
+    tmp = f'{path}.{os.getpid()}'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, 'w') as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+class Api:
+    """The agent's server, as the folder C says: its url, password and the session's folder (the `directory` every
+    request names, which opencode loads its instance for)."""
+
+    def __init__(self, url=None, password=None, directory=None):
+        self.url = url or read('url')
+        self.auth = 'Basic ' + base64.b64encode(f'opencode:{password if password is not None else read("password")}'.encode()).decode()
+        self.dir = directory or read('dir')
+        if not self.url:
+            raise SystemExit(f'opencode-rpc: no server url in {C or "$CODEX_SOCK (unset)"}')
+
+    def request(self, method, path, body=None, timeout=None):
+        sep = '&' if '?' in path else '?'
+        req = urllib.request.Request(f'{self.url}{path}{sep}directory={urllib.parse.quote(self.dir, safe="")}', method=method,
+                                     data=None if body is None else json.dumps(body).encode(),
+                                     headers={'Authorization': self.auth, 'Content-Type': 'application/json', 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read()
+        return json.loads(data) if data.strip() else None
+
+    def busy(self, session):
+        status = self.request('GET', '/session/status') or {}
+        return (status.get(session) or {}).get('type', 'idle') != 'idle'
+
+    def messages(self, session, floor):
+        """The session's messages created at FLOOR (ms) or later, oldest first, each {info, parts} as opencode keeps
+        them: read back a page at a time from the latest (GET /session/:id/message, its `before` cursor in
+        X-Next-Cursor) until a page reaches an older one, or brings no message not already held (so a cursor that
+        never ends, or names a page again, ends the read all the same: consult-3, N-412 post 1974)."""
+        out, held, before = [], set(), None
+        while True:
+            path = f'/session/{session}/message?limit={PAGE}' + (f'&before={urllib.parse.quote(before, safe="")}' if before else '')
+            req = urllib.request.Request(f'{self.url}{path}&directory={urllib.parse.quote(self.dir, safe="")}',
+                                         headers={'Authorization': self.auth, 'Accept': 'application/json'})
+            with urllib.request.urlopen(req) as r:
+                items, before = json.loads(r.read() or b'[]'), r.headers.get('X-Next-Cursor')
+            new = [m for m in items if m['info']['id'] not in held]
+            held.update(m['info']['id'] for m in new)
+            out[:0] = new
+            if not before or not new or created(items[0]) < floor:
+                return [m for m in out if created(m) >= floor]
+
+    def events(self):
+        """The server's events for our folder, one dict each, until the stream ends."""
+        sep = '?'
+        req = urllib.request.Request(f'{self.url}/event{sep}directory={urllib.parse.quote(self.dir, safe="")}',
+                                     headers={'Authorization': self.auth, 'Accept': 'text/event-stream'})
+        with urllib.request.urlopen(req) as r:
+            data = []
+            for raw in r:
+                line = raw.decode('utf-8', 'replace').rstrip('\r\n')
+                if line.startswith('data:'):
+                    data.append(line[5:].lstrip())
+                elif not line and data:
+                    try:
+                        yield json.loads('\n'.join(data))
+                    except ValueError:
+                        pass
+                    data = []
+
+
+# a reconnect's read back (`Follower.settle`) asks opencode for this many messages at a time
+PAGE = 50
+
+
+def created(message):
+    """When MESSAGE ({info, parts}) was made, in ms (opencode's time.created, Date.now() on this machine)."""
+    return ((message.get('info') or {}).get('time') or {}).get('created') or 0
+
+
+def model_ref(model):
+    """PROVIDER/MODEL[:VARIANT] as opencode's prompt takes it."""
+    head, _, variant = model.rpartition(':') if ':' in model.rsplit('/', 1)[-1] else (model, '', '')
+    provider, _, mid = head.partition('/')
+    return {'providerID': provider, 'modelID': mid}, (variant or None)
+
+
+def digest(text):
+    return hashlib.sha256(text.strip().encode()).hexdigest()
+
+
+def failure(err):
+    """What opencode's error ERR (a message's `error`: name and data) says of the account, as `failed`'s input: the
+    `error` word and `error_details` of Claude Code's StopFailure, which coordd's limits.rs `from_failed` reads, from
+    opencode 1.18.34's own classes (consult-3, N-1437 post 9):
+
+      authentication_failed  ProviderAuthError (opencode loaded no key for the provider), or an APIError of status
+                             401. A 403 is not one: a provider gives it for a model the plan lacks, or a region, too,
+                             and opencode's error names none of them the key's
+      rate_limit             an APIError whose body is opencode's FreeUsageLimitError or GoUsageLimitError (the
+                             free_tier_limit and account_rate_limit of session/retry.ts); for GoUsageLimitError its
+                             `retry-after` header gives `resets_at`, seconds since the epoch. A server's own 429 is
+                             not one
+      overloaded             an APIError of status 529, or whose body is the provider's overloaded_error: the
+                             provider's passing failure, which core.rs `limit_of` waits out and gives the turn again
+                             on (the owner's walk item 14 and N-1793), as it does Claude Code's
+      server_error           an APIError of another 5xx status: the same
+      billing_error          an APIError whose body is the provider's insufficient_quota (provider/error.ts: "Quota
+                             exceeded. Check your plan and billing details.")
+
+    Any other error is named by opencode's own name (APIError, ContextOverflowError, UnknownError, ...), which says
+    nothing of the account. opencode sets a message's error only when it stops trying: a retry sets the session's
+    status alone (session/processor.ts), so a limit that lifts while opencode retries is told nothing of."""
+    name, data = err.get('name', ''), err.get('data') or {}
+    body, api = str(data.get('responseBody') or ''), name == 'APIError'
+    if name == 'ProviderAuthError' or api and data.get('statusCode') == 401:
+        word = 'authentication_failed'
+    elif api and ('FreeUsageLimitError' in body or 'GoUsageLimitError' in body):
+        word = 'rate_limit'
+    elif api and 'insufficient_quota' in body:
+        word = 'billing_error'
+    elif api and (data.get('statusCode') == 529 or 'overloaded_error' in body):
+        word = 'overloaded'
+    elif api and isinstance(data.get('statusCode'), int) and 500 <= data['statusCode'] <= 599:
+        word = 'server_error'
+    else:
+        word = name or 'unknown'
+    out = {'error': word, 'error_details': str(data.get('message') or name)[:300]}
+    try:
+        after = float((data.get('responseHeaders') or {}).get('retry-after', ''))
+    except (TypeError, ValueError):
+        after = math.nan
+    if word == 'rate_limit' and 'GoUsageLimitError' in body and math.isfinite(after):
+        out['resets_at'] = int(time.time()) + max(0, math.ceil(after))
+    return out
+
+
+def hook(event, data):
+    """Tell coordd EVENT, as the agent's hook does (claude/hook); from inside the agent's cgroup."""
+    base = os.environ.get('AGENT_BASE', '')
+    if not base:
+        return ''
+    try:
+        return subprocess.run([f'{base}/claude/hook', event], input=json.dumps(data), capture_output=True, text=True).stdout
+    except OSError:
+        return ''
+
+
+# The one opencode an agent runs: 1.18.34 as fetched into $COORD/opt/opencode/1.18.34 (N-946 post 6), checked against
+# this hash before every run (docket-core3's condition 3, post 8; the same value as accounts::opencode::SHA256). The
+# hash is kept here, not read from beside the binary, so a binary and its hash file changed together are refused too.
+# There is no switch around it: the tests run a copy of this file with their stand-in's hash in this line.
+OPENCODE_SHA256 = '9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2'
+
+
+def program():
+    """The pinned binary's resolved path, once its hash matches; the same path is then run (docket-core3, N-946
+    post 12: a relative path would be hashed against our folder and run against the worktree)."""
+    given, coord = os.environ.get('OPENCODE_BIN', ''), os.environ.get('COORD', '')
+    if not coord:
+        sys.exit('opencode-rpc: COORD is not set, so the pinned opencode is not known; nothing is run')
+    pinned = os.path.realpath(os.path.join(coord, 'opt', 'opencode', '1.18.34', 'bin', 'opencode'))
+    if not given or not os.path.isabs(given) or os.path.realpath(given) != pinned:
+        sys.exit(f'opencode-rpc: OPENCODE_BIN must name {pinned}, the opencode fetched for this coord '
+                 f'(it is {given or "unset"}); nothing is run')
+    path = pinned
+    h = hashlib.sha256()
+    try:
+        with open(path, 'rb') as f:
+            for block in iter(lambda: f.read(1 << 20), b''):
+                h.update(block)
+    except OSError as e:
+        sys.exit(f'opencode-rpc: {path}: {e.strerror}; it is not run')
+    if h.hexdigest() != OPENCODE_SHA256:
+        sys.exit(f'opencode-rpc: {path} is not the opencode 1.18.34 that was fetched (its sha256 is {h.hexdigest()}, '
+                 f'not {OPENCODE_SHA256}); it is not run')
+    return path
+
+
+def now():
+    return time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime()) + '.%03dZ' % (int(time.time() * 1000) % 1000)
+
+
+class Follower:
+    """The session's events, as coordd takes them: the turn's begin (`prompt`) and end (`stop`, `failed`), each tool
+    call's end (`post`), a user message nobody of ours sent (`unsent`); and the transcript in Codex's rollout lines.
+
+    Each time the stream (opencode's /event) connects, the session is first read back as the server has it
+    (`settle`): what the stream did not bring while it was down is written then, and the begin or end that follows
+    from it told, once (consult-3, N-412 post 1286)."""
+
+    def __init__(self, api, session, born):
+        self.api, self.session = api, session
+        self.path = os.path.join(C, 'transcript.jsonl')
+        self.roles, self.written, self.running, self.aborted = {}, set(), False, False
+        self.erred, self.refused, self.faults = set(), set(), set()
+        # the assistant messages' models (PROVIDER/MODEL); the model of the last `turn_context` written, and the
+        # session's running total of `token_count` (`step`), both taken back from the transcript at a start
+        self.models, self.model, self.total = {}, '', {}
+        # a read back takes the messages made since FLOOR: this life's start (BORN, ms), then the newest message
+        # seen when a turn ended (every message before it was finished then); NEWEST, the newest seen so far
+        self.floor, self.newest = born, born
+        try:
+            with open(self.path) as f:
+                for line in f:
+                    try:
+                        v = json.loads(line)
+                    except ValueError:
+                        continue
+                    p = v.get('payload') or {}
+                    if p.get('part'):
+                        self.written.add(p['part'])
+                    if v.get('type') == 'turn_context':
+                        self.model = p.get('model', '')
+                    elif p.get('type') == 'token_count':
+                        self.total = (p.get('info') or {}).get('total_token_usage') or self.total
+        except OSError:
+            pass
+
+    def line(self, kind, payload):
+        # follow.rs knows a rollout line by its start, `{"timestamp":`, so the keys keep this order and no spaces
+        with open(self.path, 'a') as f:
+            f.write(json.dumps({'timestamp': now(), 'type': kind, 'payload': payload}, separators=(',', ':')) + '\n')
+
+    def role(self, mid):
+        if mid not in self.roles:
+            try:
+                self.keep(mid, (self.api.request('GET', f'/session/{self.session}/message/{mid}') or {}).get('info', {}))
+            except (OSError, ValueError):
+                return ''
+        return self.roles[mid]
+
+    def keep(self, mid, info):
+        """Message MID's role, and an assistant's model as PROVIDER/MODEL (as the agent's own model is named)."""
+        self.roles[mid] = info.get('role', '')
+        if info.get('modelID'):
+            self.models[mid] = f"{info.get('providerID', '')}/{info['modelID']}"
+
+    def begin(self):
+        if not self.running:
+            self.running, self.aborted = True, False
+            self.line('event_msg', {'type': 'task_started'})
+            hook('prompt', {'session_id': self.session})
+
+    def end(self):
+        if self.running:
+            self.running = False
+            self.floor = max(self.floor, self.newest)
+            self.line('event_msg', {'type': 'turn_aborted' if self.aborted else 'task_complete'})
+            hook('stop', {'session_id': self.session})
+
+    def info(self, info):
+        """A message's info (from `message.updated`, or read back): its role, and its error, taken once."""
+        mid = info.get('id', '')
+        self.keep(mid, info)
+        self.newest = max(self.newest, (info.get('time') or {}).get('created') or 0)
+        err = info.get('error')
+        if err and mid not in self.erred:
+            self.erred.add(mid)
+            name = err.get('name', '')
+            if name == 'MessageAbortedError':
+                self.aborted = True
+            else:
+                hook('failed', dict({'session_id': self.session}, **failure(err)))
+
+    def part(self, p):
+        pid = p.get('id', '')
+        if not pid or pid in self.written:
+            return
+        kind = p.get('type')
+        if kind == 'text':
+            role = self.role(p.get('messageID', ''))
+            text = p.get('text', '')
+            if role == 'user':
+                if p.get('synthetic') or not text.strip():
+                    self.written.add(pid)
+                    return
+                self.written.add(pid)
+                self.line('response_item', {'type': 'message', 'role': 'user', 'part': pid, 'content': [{'type': 'input_text', 'text': text}]})
+                sent = set(read('sent').split())
+                if digest(text) not in sent:
+                    hook('unsent', {'session_id': self.session, 'chars': len(text)})
+            elif role == 'assistant' and (p.get('time') or {}).get('end'):
+                self.written.add(pid)
+                if text.strip():
+                    self.line('response_item', {'type': 'message', 'role': 'assistant', 'part': pid, 'content': [{'type': 'output_text', 'text': text}]})
+        elif kind == 'tool':
+            state = p.get('state') or {}
+            if state.get('status') not in ('completed', 'error'):
+                return
+            self.written.add(pid)
+            call = p.get('callID', pid)
+            self.line('response_item', {'type': 'function_call', 'part': pid, 'name': p.get('tool', ''), 'call_id': call,
+                                        'arguments': json.dumps(state.get('input', {}))})
+            out = state.get('output', '') if state.get('status') == 'completed' else f'error: {state.get("error", "")}'
+            self.line('response_item', {'type': 'function_call_output', 'call_id': call, 'output': str(out)[:20000]})
+            hook('post', {'session_id': self.session, 'tool_use_id': call, 'tool_name': p.get('tool', '')})
+        elif kind == 'step-finish':
+            self.written.add(pid)
+            self.step(pid, p)
+
+    def step(self, pid, p):
+        """A step's end (its `step-finish` part: one request to the provider), as Codex's rollout says a request's
+        usage, for coordd's reader of it (transcript.rs `TranscriptUsage`): `turn_context` with the model when it is
+        another than the last one written, then `token_count` with the step's own tokens (`last_token_usage`) and the
+        session's running total (`total_token_usage`), whose growth the reader counts. A step's part is made once,
+        finished. A message holds its steps' parts and its own `tokens` only the last step's (session/processor.ts),
+        so the parts are what is counted, each once by its id, however often a message is updated or read back.
+        opencode's `input` leaves both caches out and its `output` the reasoning (session/session.ts `getUsage`);
+        Codex's `input_tokens` hold the cached ones and its `output_tokens` the reasoning."""
+        t = p.get('tokens') or {}
+        cache = t.get('cache') or {}
+        n = lambda v: max(0, int(v or 0))
+        read, write, reasoning = n(cache.get('read')), n(cache.get('write')), n(t.get('reasoning'))
+        last = {'input_tokens': n(t.get('input')) + read + write, 'cached_input_tokens': read, 'cache_write_input_tokens': write,
+                'output_tokens': n(t.get('output')) + reasoning, 'reasoning_output_tokens': reasoning}
+        last['total_tokens'] = last['input_tokens'] + last['output_tokens']
+        mid = p.get('messageID', '')
+        model = self.role(mid) and self.models.get(mid, '')
+        if model and model != self.model:
+            self.model = model
+            self.line('turn_context', {'model': model})
+        self.total = {k: self.total.get(k, 0) + v for k, v in last.items()}
+        self.line('event_msg', {'type': 'token_count', 'part': pid, 'info': {'total_token_usage': self.total, 'last_token_usage': last}})
+
+    def refuse(self, kind, rid):
+        """Refuse opencode's question or permission request RID, once: nobody answers opencode's own question form
+        (the model asks with the coord ask tool, standing text), and our config allows every tool (as Claude Code's
+        bypassPermissions), so what still asks has no one to approve it."""
+        if not rid or rid in self.refused:
+            return
+        try:
+            if kind == 'question':
+                self.api.request('POST', f'/question/{rid}/reject', {})
+            else:
+                self.api.request('POST', f'/permission/{rid}/reply', {'reply': 'reject', 'message': 'denied: an agent has no one to approve this; do it another way'})
+            self.refused.add(rid)
+        except (OSError, ValueError):
+            pass
+
+    def settle(self):
+        """The session as the server has it, taken when the stream has connected (opencode listens before it sends
+        its first event, so whatever happens from then on comes in the stream as well; a part or an error taken
+        twice is written and told once). Its status is read first: a turn idle at that read ended before it, one busy
+        then has its end still to come in the stream. Then the messages made before that read (T0) and since FLOOR:
+        their finished parts not yet written are written, a turn begun if one runs or ran (busy, or an assistant
+        message not seen yet: opencode makes one at each step of a turn), and ended if the session was idle. A user
+        message alone begins nothing: opencode writes it before the turn it starts turns busy, and that turn's busy
+        and the rest come in the stream. Last, the questions and permissions still pending in our session are
+        refused, as their events would have been."""
+        t0 = int(time.time() * 1000)
+        busy = self.api.busy(self.session)
+        items = [m for m in self.api.messages(self.session, self.floor)
+                 if (m.get('info') or {}).get('sessionID') == self.session and created(m) < t0]
+        if busy or any(m['info'].get('role') == 'assistant' and m['info'].get('id') not in self.roles for m in items):
+            self.begin()
+        for m in items:
+            self.info(m['info'])
+            for p in m.get('parts') or []:
+                self.part(p)
+        if not busy:
+            self.end()
+        for kind in ('question', 'permission'):
+            for r in self.api.request('GET', f'/{kind}') or []:
+                if r.get('sessionID') == self.session:
+                    self.refuse(kind, r.get('id', ''))
+
+    def event(self, e):
+        kind, props = e.get('type', ''), e.get('properties') or {}
+        if kind == 'message.updated':
+            info = props.get('info') or {}
+            if info.get('sessionID') == self.session:
+                self.info(info)
+        elif kind == 'message.part.updated':
+            p = props.get('part') or {}
+            if p.get('sessionID') == self.session:
+                self.part(p)
+        elif kind == 'session.status' and props.get('sessionID') == self.session:
+            if (props.get('status') or {}).get('type') == 'busy':
+                self.begin()
+        elif kind == 'session.idle' and props.get('sessionID') == self.session:
+            self.end()
+        elif kind in ('question.asked', 'permission.asked') and props.get('sessionID') == self.session:
+            self.refuse(kind.split('.')[0], props.get('id', ''))
+
+    def fault(self, e):
+        """A pass of the stream ended on something the follower did not expect of the server (an error status, an
+        answer in another shape, opencode's source being all it was written from): written to the agent's log with
+        its traceback, once for each kind (its type and the line it was raised at), and told to coordd not at all; then
+        the stream is connected again. A fault of the follower's own read is no turn's end and no API error: told as
+        `failed` it ended coordd's turn at any moment and sent the parent "its turn ended on an API error" (consult-3,
+        N-412 post 2070), where a tool reports its own failure in its journal only (the owner, 14 Nov). A connection
+        that drops is not one: it is connected again with nothing said, as before."""
+        if isinstance(e, http.client.HTTPException) or (isinstance(e, OSError) and not isinstance(e, urllib.error.HTTPError)):
+            return
+        tb = traceback.extract_tb(e.__traceback__)
+        kind = (type(e).__name__, tb[-1].lineno if tb else 0)
+        if kind in self.faults:
+            return
+        self.faults.add(kind)
+        sys.stderr.write(f'opencode-rpc: the follower met an answer it does not know; it connects again\n'
+                         + ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+
+    def run(self, alive):
+        while alive():
+            try:
+                first = True
+                for e in self.api.events():
+                    if first:
+                        first = False
+                        self.settle()
+                    if e.get('type') != 'server.connected':
+                        self.event(e)
+            except Exception as e:  # each pass's own: the thread goes on whatever one pass met
+                self.fault(e)
+            if alive():
+                time.sleep(0.5)
+
+
+def serve(name, directory, model, session):
+    born = int(time.time() * 1000)  # nothing of this life's server is older
+    os.makedirs(C, mode=0o700, exist_ok=True)
+    os.chmod(C, 0o700)
+    password = secrets.token_urlsafe(32)
+    write('password', password)
+    write('dir', directory)
+    write('model', model)
+    for stale in ('ready', 'url'):
+        try:
+            os.unlink(os.path.join(C, stale))
+        except FileNotFoundError:
+            pass
+    program_ = program()
+    env = dict(os.environ, OPENCODE_SERVER_PASSWORD=password, OPENCODE_COORD=C)
+    proc = subprocess.Popen([program_, 'serve', '--hostname', '127.0.0.1', '--port', '0'], cwd=directory, env=env,
+                            stdout=subprocess.PIPE, stderr=None, text=True)
+    # whatever ends this process (a refused session, a lost server) ends its opencode too
+    atexit.register(lambda: proc.poll() is None and proc.terminate())
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, lambda *_: (proc.terminate(), sys.exit(0)))
+    url = ''
+    for line in proc.stdout:
+        sys.stderr.write(line)
+        at = line.find('listening on ')
+        if at >= 0:
+            url = line[at + len('listening on '):].strip()
+            break
+    if not url:
+        sys.exit(f'{name}: opencode serve ended without listening (exit {proc.wait()})')
+    threading.Thread(target=lambda: [sys.stderr.write(l) for l in proc.stdout], daemon=True).start()
+    write('url', url)
+    api = Api(url, password, directory)
+    # the first request loads the folder's instance, and with it the plugins, before it is answered (opencode's
+    # InstanceBootstrap: Plugin.init first); so once it is answered, our plugin has run or never will
+    api.request('GET', '/session')
+    if not os.path.exists(os.path.join(C, 'ready')):
+        proc.terminate()
+        hook('failed', {'error': 'the coord plugin did not load: coordd would not see its tool calls, so it was not started'})
+        sys.exit(f'{name}: opencode did not load the coord plugin (config/opencode/plugin/coord.js); stopped before any turn')
+    resumed = bool(session)
+    if session:
+        api.request('GET', f'/session/{session}')  # a session that is gone is an error here, not a new one
+    else:
+        session = api.request('POST', '/session', {})['id']
+    write('session', session)
+    follower = Follower(api, session, born)  # a turn already running is the follower's first read back
+    # coordd hands the agent nothing until this (`awaiting_start`): after the plugin's mark, with the session
+    hook('start', {'session_id': session, 'transcript_path': follower.path, 'cwd': directory, 'source': 'resume' if resumed else 'startup'})
+    threading.Thread(target=follower.run, args=(lambda: proc.poll() is None,), daemon=True).start()
+    sys.exit(proc.wait())
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.exit(__doc__)
+    cmd = argv[1]
+    if cmd == 'serve':
+        if len(argv) < 5:
+            sys.exit('usage: opencode-rpc serve NAME DIR MODEL [SESSION]')
+        serve(argv[2], argv[3], argv[4], argv[5] if len(argv) > 5 else '')
+        return
+    if cmd == 'screen':
+        path = program()
+        env = dict(os.environ, OPENCODE_SERVER_PASSWORD=read('password'))
+        os.execve(path, [path, 'attach', read('url'), '--dir', read('dir'), '--session', read('session')], env)
+    if len(argv) < 3:
+        sys.exit(__doc__)
+    api, session = Api(), argv[2]
+    if cmd == 'send':
+        prio, text = argv[3], argv[4]
+        if prio == 'later' and api.busy(session):
+            sys.exit(3)
+        with open(os.path.join(C, 'sent'), 'a') as f:
+            f.write(digest(text) + '\n')
+        body = {'parts': [{'type': 'text', 'text': text}]}
+        model = read('model')
+        if '/' in model:
+            body['model'], variant = model_ref(model)
+            variant = os.environ.get('CODEX_EFFORT') or variant  # coordd's effort for the turn (MODEL:EFFORT)
+            if variant:
+                body['variant'] = variant
+        api.request('POST', f'/session/{session}/prompt_async', body)
+    elif cmd == 'status':
+        print('busy' if api.busy(session) else 'idle')
+    elif cmd == 'interrupt':
+        if api.busy(session):
+            api.request('POST', f'/session/{session}/abort', {})
+    elif cmd == 'wait-idle':
+        while api.busy(session):
+            time.sleep(0.5)
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv)
+    except urllib.error.HTTPError as e:
+        sys.exit(f'opencode-rpc: {e.code} {e.reason}')
+    except urllib.error.URLError as e:
+        sys.exit(f'opencode-rpc: {e.reason}')

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\nNew type y\nNew type z\n#2 > \n#2 > +x(\"hey\")\n+x(\"hi\")\n+x(\"ho\")\n+x(\"woo\")\n+y(x(\"hey\"),x(\"ho\"))\n+z(x(\"hi\"),y(x(\"hey\"),x(\"ho\")),y(x(\"ho\"),x(\"woo\")))\n+y(x(\"ho\"),x(\"woo\"))\n#3 > x(\"hey\") = True\nx(\"hi\") = True\nx(\"ho\") = True\nx(\"woo\") = True\ny(x(\"hey\"),x(\"ho\")) = True\nz(x(\"hi\"),y(x(\"hey\"),x(\"ho\")),y(x(\"ho\"),x(\"woo\"))) = True\ny(x(\"ho\"),x(\"woo\")) = True\n\n#3 > +x(\"wah\")\n+y(x(\"wah\"),x(\"ho\"))\n#4 > x(\"hey\") = True\nx(\"hi\") = True\nx(\"ho\") = True\nx(\"wah\") = True\nx(\"woo\") = True\ny(x(\"hey\"),x(\"ho\")) = True\nz(x(\"hi\"),y(x(\"hey\"),x(\"ho\")),y(x(\"ho\"),x(\"woo\"))) = True\ny(x(\"ho\"),x(\"woo\")) = True\ny(x(\"wah\"),x(\"ho\")) = True\n\n#4 > "
+ }
+}

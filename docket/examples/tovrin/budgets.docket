@@ -1,0 +1,71 @@
+module tovrin.budgets
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.control as Ctrl
+import tovrin.ratchet as Ratchet
+
+// Runner Time & Coordinated Box RAM Budgets.
+// 40 GB box RAM ceiling shared across coord-runner, Agda LSP, and agent sessions;
+// 10% regression cap on compile/run time and peak memory (requires explicit Overrule to relax).
+//
+//   1  the box          one memory ledger for everything in it
+//   2  the 10 % cap     for each case and each figure: compile time, run time, peak memory, prep time
+//   3  prep time        held against its bound when the solver is about to start, not after it has finished
+
+// ===== 1. The box ================================================================================================
+// The limit is 38 000 MB of the box's 40 GB: what is left is the box's own. A job reserves what it will hold before
+// it starts (`B.Reserve`); a reservation that would pass the limit is refused and the job waits. The runner's
+// width (tovrin.runner 3) is chosen under the same number.
++B.Bucket("tovrin-box"). +B.Machine("tovrin-box"). +B.Limit("tovrin-box", "ram_mb", 38000).
+
+// ===== 2. The 10 % cap ===========================================================================================
+// Four figures for each case; only the last measurement counts; a better green run is the bound from then on. The
+// duty is the runner's, so that `orch` can overrule it.
+
+Fact Figure Identified by String
++Figure("compile_ms"). +Figure("run_ms"). +Figure("peak_mb"). +Figure("prep_ms").
+Fact Baseline(c: Ratchet.Case, f: Figure, value: Int)
+Fact Measured(c: Ratchet.Case, f: Figure, value: Int)
+Fact Overruled(c: Ratchet.Case, f: Figure)
+
+Event Case-Measured(c: Ratchet.Case, f: Figure, value: Int, green: Bool)    // the runner's line
+  Terminates Measured(c, f, v) When Measured(c, f, v)
+           , Baseline(c, f, b) When Baseline(c, f, b) && green == true && value < b
+  Creates    Measured(c, f, value)
+           , Baseline(c, f, value) When green == true && Not(Exists b : Baseline(c, f, b) && b <= value)
+
+Fact Regressed(c: Ratchet.Case, f: Figure)
+  Holds when Baseline(c, f, base) && Measured(c, f, cur) && (cur * 10 > base * 11) && Not(Overruled(c, f))
+
+Duty Owes-Time-Bound(holder: H.Party, claimant: H.Party, c: Ratchet.Case, f: Figure)
+  Holds when    C.Role(holder, "runner") && C.Role(claimant, "owner") && Baseline(c, f, base) && Measured(c, f, cur)
+  Violated when Regressed(c, f)
+
+Act Overrule-Bound(actor: H.Party, c: Ratchet.Case, f: Figure)
+  Conditioned by C.Role(actor, "owner") || C.Role(actor, "orch")
+  Creates        Overruled(c, f)
+Act Set-Bound(actor: H.Party, c: Ratchet.Case, f: Figure, value: Int)
+  Conditioned by Overruled(c, f) && (C.Role(actor, "owner") || C.Role(actor, "orch"))
+  Terminates     Overruled(c, f)
+               , Baseline(c, f, b) When Baseline(c, f, b)
+  Creates        Baseline(c, f, value)
+
+// A cut with a regressed case does not go onto the line: tovrin.runner's jobs and the train ask this.
+Fact Fit-For-Line()
+  Holds when Not(Exists c, f : Regressed(c, f))
+
+// ===== 3. Prep time ==============================================================================================
+// Before the solver starts, the checker builds what it will ask. That time has crept up unseen behind long solves.
+// The runner writes `Case-Measured(c, "prep_ms", …)` when preparation is over, so it is held against its own bound
+// at that moment. Over the cap, `orch` is told then, while the solve still runs: nothing waits for the end to find
+// out, and nothing is stopped.
+
++H.Party("tovrin.budgets").
+on Case-Measured(c, "prep_ms", value, _) where Regressed(c, "prep_ms") do {
+  par o in (Foreach o : o When C.Role(o, "orch")) {
+    perform Ctrl.Deliver(self, o, "Preparation before the solver took {{ value }} ms for {{ c }}, more than a tenth over its bound. The solve goes on.")
+  }
+}

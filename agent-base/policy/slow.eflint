@@ -1,0 +1,23 @@
+// Slow mode (N-412 ask 5; the owner, N-287.p44: "for now just me mark stuff slow, i will start with per project").
+// Slow set over a SCOPE halts every moment of a ticket the scope covers for the owner's approval: each step given,
+// answer taken, post delivered, ticket opened, policy answer used and notice given. The record keeps what is set
+// (its `slowed` lines; the machine's `slowed`), not this file. The scopes so far: "project", every ticket, those opened
+// later too. A ticket's own switch (`coord slow T on|off`) is apart from these and stays the owner's.
+Fact scope Identified by String
++scope("project").
+
+// Setting it and lifting it (`coord slow project on|off`, the app's menu on the project): the owner may and is not
+// asked, as with esc; an agent may where these acts hold. Here no agent holds the role, so it is the owner's alone.
+// A project says more in PROJECT/policy/eflint/, over the library's act (eflint/yaaihh.eflint, which stands for this
+// file in eFLINT), for example
+//   Extend Act set-slow
+//     Holds when lead(agent)
+Act set-slow
+  Actor agent
+  Related to scope
+  Holds when role(actor, "owner")
+
+Act lift-slow
+  Actor agent
+  Related to scope
+  Holds when role(actor, "owner")

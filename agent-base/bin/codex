@@ -6,5 +6,9 @@ set -euo pipefail
 : "${COORD:?codex: COORD is not set}"
 export CODEX_HOME=${CODEX_HOME:-$COORD/codex-home}
 # the route's key for a codex-home whose config names a proxy provider (env_key CPA_API_KEY); none: Codex's own login
-if [ -s "$COORD/.proxy-key" ]; then CPA_API_KEY=$(cat "$COORD/.proxy-key"); export CPA_API_KEY; fi
-exec "$COORD/opt/codex/bin/codex" "$@"
+# (a boxed agent's own key file, CODEX_KEY_FILE: coordd's sandbox.rs writes it in its box's home, its uid's only)
+key=${CODEX_KEY_FILE:-$COORD/.proxy-key}
+if [ -s "$key" ]; then CPA_API_KEY=$(cat "$key"); export CPA_API_KEY; fi
+bin=$COORD/opt/codex/bin/codex
+[ -x "$bin" ] || { echo "codex: no Codex at $bin (host-coordd start links it: codex-pin $COORD, its log codex-pin.log)" >&2; exit 127; }
+exec "$bin" "$@"

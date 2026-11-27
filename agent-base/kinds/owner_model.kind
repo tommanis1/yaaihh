@@ -1,0 +1,45 @@
+// The owner model (0.3, the brain's part 1; the owner, N-1104 p731: "first of a the brain should os a what do i think
+// the ownerr wnats right ?? jsuti n general"; paper-research-brain N-1445 p28, p29, N-1446 p1107; paper-research
+// N-1446 p1108): what the owner wants in general, not task by task, as a model reads his posts. One ticket of the kind
+// `owner_model` stands for the project, opened once by its lead (`coord open owner_model`) and stopped by the lead to
+// turn it off; each update of it is a ticket of the kind `owner_update` under it, and the update's result is the model.
+// The brain's parts read the newest model (coordd brain.rs `owner_model`), each under the words "the model's reading of
+// him, not his words": his newest words outrank it, and it never stands for him.
+//
+// An update is a ticket of its own, as a pass of the brain is, and not a handler of an event coordd sends: a project's
+// event costs nothing to send, so its handler makes no step (docket-machine check.rs, plan/layers.md I §3).
+// - coordd opens one under the standing ticket in its round (brain.rs `update_owner_model`) when no update is open and
+//   posts of his have reached whom they wake since the last model: POSTS, those posts' ids, oldest first (posts to two
+//   agents are one update; one written while an update was open goes in the next). BUILT, whether a model was made
+//   before. MISSES, how often the model had him wrong since it was last built whole (0 until the brain's predictions
+//   are checked), and REBUILD_AFTER, the policy's `owner-model-rebuild-after`; WITHIN, the policy's
+//   `owner-model-within`, how far back a whole build reads. coordd puts the policy's numbers in the form, so the record
+//   holds what each update was read by.
+// - whole: the first model, or one built again when it keeps missing: all his posts from WITHIN before the newest of
+//   POSTS, his question at the end (brain.call's mentality is not on it: N-1445 p29's call, word for word).
+// - delta: the last model, marked as the model's, his posts since it (POSTS), and the model whole as it now stands.
+// Each step's answer is on the record, so a replay calls nothing. A call that fails answers Failed: the model stands as
+// it was, and the next of his posts tries again. Beside each answer the journal says what its call was sent, his posts
+// and its bytes (brain.rs `owner_sent`; proto-lead N-1446 p1118), so the cost of every build can be read; a call
+// refused for length is Failed, and why is said there.
+//
+// Hidden (paper-research N-1446 p1117, p1121, p1128; proto-lead p1123): neither kind says `drawn`, so neither stands in
+// an outline, and the window's Threads lists neither (yaaihh threads.rs `listed`, coord-types `OWNER_MODEL`). The Map
+// draws the standing ticket at the project's level, and he opens it from there; each update is a run under it.
+/// the owner model of the project: what the owner wants in general, as a model reads his posts; its updates make it
+kind owner_model
+  result Stopped(why: Text)
+  pattern
+    hold role lead stop()
+
+/// one update of the project's owner model: built whole from his posts, or brought up to date from the last model
+kind owner_update
+  form posts: [Text], built: Bool, misses: Int, rebuild_after: Int, within: Int
+  result Model(text: Text) | Failed(why: Text)
+  pattern
+    m <- match posts {
+      p where built == false => step watcher whole(posts, within)
+      p where misses >= rebuild_after => step watcher whole(posts, within)
+      p => step watcher delta(posts)
+    };
+    return m

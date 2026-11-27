@@ -1,0 +1,147 @@
+# Scenario 3: a hardcoded word in the engine's code is denied. This file holds what the denial stands on: for
+# which agent a guard on a tool call can be counted on at all, and that every file of a call is before the guards,
+# a moved file under both its names, noted and forgotten again; then the denial itself, as the tool calls of a
+# real session under the project's handlers. The harness's moments and the tool calls' parts are the stand-in's.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load s3-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+# can the guards hold for this agent?
+holds Can(b1, tool_called, deny)
+not Comes-To(a1, tool_called)
+not Can(a1, tool_called, deny)
+holds Comes-To(a2, tool_called)
+holds Can(a2, tool_called, deny)
+holds Can(a2, permission_asked, answer)
+not Can(a3, tool_called, deny)
+holds Comes-To(a1, turn_end)
+# the mode is the session's own line: stated, the guards can be counted on; a new session forgets it
+driver: Mode-Stated(a3, approval-required) -> performed
+holds Can(a3, tool_called, deny)
+driver: Mode-Stated(a3, approval-required) -> performed
+holds Started-In(a3, approval-required)
+driver: Session-Started(a3, agy, t3code-0.1.11) -> performed
+not Started-In(a3, approval-required)
+not Can(a3, tool_called, deny)
+not Can(a2, turn_end, deny)
+b1: Note-Change(b1, edit, agent-base/renderings/words/posts.tmpl, "", x, 0) -> performed -> ended ()
+holds Changes(b1, agent-base/renderings/words/posts.tmpl)
+b1: Note-Change(b1, edit, crates/coordd/src/core.rs, "", pub bare: bool, 0) -> performed -> ended ()
+holds Changes(b1, crates/coordd/src/core.rs)
+b1: Note-Change(b1, move, crates/coordd/src/old_tests.rs, crates/coordd/src/ticket/tests.rs, "", 0) -> performed -> ended ()
+a2: Note-Change(b1, edit, crates/coordd/src/core.rs, "", y, 0) -> refused source -> raised Refused
+holds Changes(b1, crates/coordd/src/old_tests.rs)
+holds Changes(b1, crates/coordd/src/ticket/tests.rs)
+not Changes(a2, crates/coordd/src/core.rs)
+# and they are gone once the call is answered
+b1: Forget-Changes(b1) -> performed -> ended ()
+not Changes(b1, crates/coordd/src/core.rs)
+not Changes(b1, crates/coordd/src/ticket/tests.rs)
+# the denial itself: the agent's session, under the project's handlers, reaches a tool call. Each step below is one
+# call: the stand-in gives the moment and the call's parts (the guards that read them ask three times), the answer
+# is applied, and the session ends there because the stand-in has no further moment, which the step states as Fault.
+w1: Assign(w1, b1, start-work) -> performed -> ended ()
+# 1: a listed word added to the engine's code is denied
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-1 }
+stand-in: Tool-Use(b1, edit-1) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-1) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-1) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+record lacks Apply(b1, tool_called, std.hooks.Allow)
+not Changes(b1, crates/coordd/src/core.rs)
+# 2: the same file with no listed word is allowed
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-2 }
+stand-in: Tool-Use(b1, edit-2) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    let n = 3;" }] }
+stand-in: Tool-Use(b1, edit-2) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    let n = 3;" }] }
+stand-in: Tool-Use(b1, edit-2) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    let n = 3;" }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Allow)
+record lacks Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+not Changes(b1, crates/coordd/src/core.rs)
+# 3: the same word in the library's own text is allowed
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-3 }
+stand-in: Tool-Use(b1, edit-3) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-3) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-3) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Allow)
+record lacks Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+not Changes(b1, crates/coordd/src/core.rs)
+# 4: one call, two files, the word only in the library's file: allowed
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-4 }
+stand-in: Tool-Use(b1, edit-4) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    let n = 3;" }, FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-4) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    let n = 3;" }, FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-4) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    let n = 3;" }, FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Allow)
+record lacks Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+not Changes(b1, crates/coordd/src/core.rs)
+# 5: one call, two files, the word in the engine's file, which is the second: denied
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-5 }
+stand-in: Tool-Use(b1, edit-5) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "x" }, FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-5) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "x" }, FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Tool-Use(b1, edit-5) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: agent-base/renderings/words/posts.tmpl, from: "", patch: "", added: "x" }, FileChange { kind: edit, path: crates/coordd/src/core.rs, from: "", patch: "", added: "    pub bare: bool," }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+record lacks Apply(b1, tool_called, std.hooks.Allow)
+not Changes(b1, crates/coordd/src/core.rs)
+# 6: a change to the file that judges the agent's own work is denied
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-6 }
+stand-in: Tool-Use(b1, edit-6) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/ticket/tests.rs, from: "", patch: "", added: "    assert!(true);" }] }
+stand-in: Tool-Use(b1, edit-6) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/ticket/tests.rs, from: "", patch: "", added: "    assert!(true);" }] }
+stand-in: Tool-Use(b1, edit-6) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: edit, path: crates/coordd/src/ticket/tests.rs, from: "", patch: "", added: "    assert!(true);" }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Allow)
+not Changes(b1, crates/coordd/src/core.rs)
+# 7: a plain move of an engine file that already holds listed words is allowed
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-7 }
+stand-in: Tool-Use(b1, edit-7) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: move, path: crates/coordd/src/machine/core.rs, from: crates/coordd/src/core.rs, patch: "", added: "" }] }
+stand-in: Tool-Use(b1, edit-7) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: move, path: crates/coordd/src/machine/core.rs, from: crates/coordd/src/core.rs, patch: "", added: "" }] }
+stand-in: Tool-Use(b1, edit-7) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: move, path: crates/coordd/src/machine/core.rs, from: crates/coordd/src/core.rs, patch: "", added: "" }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Allow)
+record lacks Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+not Changes(b1, crates/coordd/src/core.rs)
+# 8: moving the judging file away is denied, under its old name
+stand-in: Next-Moment(b1) -> Reached { moment: tool_called, payload: edit-8 }
+stand-in: Tool-Use(b1, edit-8) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: move, path: crates/coordd/src/old_tests.rs, from: crates/coordd/src/ticket/tests.rs, patch: "", added: "" }] }
+stand-in: Tool-Use(b1, edit-8) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: move, path: crates/coordd/src/old_tests.rs, from: crates/coordd/src/ticket/tests.rs, patch: "", added: "" }] }
+stand-in: Tool-Use(b1, edit-8) -> ToolUse { tool: edit, command: "", changes: [FileChange { kind: move, path: crates/coordd/src/old_tests.rs, from: crates/coordd/src/ticket/tests.rs, patch: "", added: "" }] }
+stand-in: Apply(b1, tool_called, _) -> ()
+b1: Serve(b1) -> performed -> raised Fault
+record has Apply(b1, tool_called, std.hooks.Deny(This file judges your own work.
+record lacks Apply(b1, tool_called, std.hooks.Deny(This adds a word of the library's world to the engine's code.
+record lacks Apply(b1, tool_called, std.hooks.Allow)
+not Changes(b1, crates/coordd/src/core.rs)

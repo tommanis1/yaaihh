@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type b\n+b(int(1),int(2))\n+b(int(2),int(1))\nquery successful\n#4 > "
+ }
+}

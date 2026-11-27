@@ -1,0 +1,11 @@
+[package]
+name = "docket-driver-agy"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Docket v2's driver for agy, through t3code 0.1.11 or over ACP: what agy-rpc relays as std.hooks' moments and its answer to each HookAction its bridge lets"
+
+[dependencies]
+docket-v2 = { path = "../../docket/v2" }
+docket-hooks = { path = "../hook-ir" }
+serde_json.workspace = true

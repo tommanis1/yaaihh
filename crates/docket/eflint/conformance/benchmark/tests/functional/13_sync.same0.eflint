@@ -1,0 +1,3 @@
+go(string("x")).
+go(string("y")).
+go(string("z")).

@@ -1,0 +1,26 @@
+module scenario.s10
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+import std.adapt as A
+
+// Scenario 10's parties: two builders of Claude's family and one of another, all with the role builder. w1's model
+// takes efforts up to high, and its piece t1 is planned at high, the top; w2's pieces t2 and t3 at medium.
++H.Party("o1"). +C.Role("o1", "owner").
++H.Party("w1"). +C.Role("w1", "builder"). +R.Of-Family("w1", "anthropic").
++H.Party("w2"). +C.Role("w2", "builder"). +R.Of-Family("w2", "anthropic").
++H.Party("x1"). +C.Role("x1", "builder"). +R.Of-Family("x1", "openai").
++R.Condition("tests_green"). +R.Artifact("t1"). +R.Artifact("t2").
++B.On-Model("w1", "m1"). +B.On-Model("w2", "m1").
++A.Takes-Effort("m1", "medium"). +A.Takes-Effort("m1", "high").
++A.Of-Kind("t1", "proof"). +A.Of-Kind("t2", "feature"). +A.Of-Kind("t3", "feature"). +R.Artifact("t3").
++A.Chosen-Effort("w1", "proof", "high"). +A.Chosen-Effort("w2", "feature", "medium").
+// x1 runs the same model at the top on proofs; t4 is held by w3 and w4 together, both at the top, and x2 is free
++B.On-Model("x1", "m1"). +A.Chosen-Effort("x1", "proof", "high").
++H.Party("w3"). +C.Role("w3", "builder"). +R.Of-Family("w3", "anthropic").
++H.Party("w4"). +C.Role("w4", "builder"). +R.Of-Family("w4", "anthropic").
++H.Party("x2"). +C.Role("x2", "builder"). +R.Of-Family("x2", "openai").
++B.On-Model("w3", "m1"). +B.On-Model("w4", "m1"). +A.Chosen-Effort("w3", "proof", "high"). +A.Chosen-Effort("w4", "proof", "high").
++R.Artifact("t4"). +A.Of-Kind("t4", "proof").

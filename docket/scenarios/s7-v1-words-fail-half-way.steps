@@ -1,0 +1,40 @@
+# Scenario 7: a thread whose words fail half way is not taken, the import cannot close, and taking them again does.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load ../defaults/v1.docket
+load s6-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+driver: Record-Taken("9f2c4a71", 7, im1) -> performed
+driver: Thread-Was(t1, "N-1", thread, w1, "The map", 1764000000) -> performed
+driver: Passage-Was(n1, w1, t1) -> performed
+driver: Passage-Was(n2, w1, t1) -> performed
+# only the importer takes words, so no other party's driver can answer them
+w1: Take-Words(w1, t1) -> refused policy -> raised Refused
+# the importer has the first passage's words and not the second's
+stand-in: TextOf(n1) -> I looked at the map code.
+im1: Take-Words(im1, t1) -> performed -> raised Fault
+not Words-Taken(t1)
+driver: Import-Closed() -> refused policy
+# with both answers the same act takes them, and the import closes
+stand-in: TextOf(n1) -> I looked at the map code.
+stand-in: TextOf(n2) -> The map work is done now.
+im1: Take-Words(im1, t1) -> performed -> ended ()
+holds Words-Taken(t1)
+driver: Import-Closed() -> performed
+holds Closed()

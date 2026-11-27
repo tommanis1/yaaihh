@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": "query failed\n"
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type asset\nNew type read\n+read(actor(\"Alice\"),asset(\"AliceAccount\"))\nNew type prohibition\n+prohibition(actor(\"Alice\"),asset(\"AliceAccount\"))\nquery successful\nquery successful\nquery failed\n#10 > "
+ }
+}

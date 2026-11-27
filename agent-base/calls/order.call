@@ -1,0 +1,4 @@
+// An order by the owner or a lead about the runner's bounds (N-101 post 27, H; plan/eflint/record-to-events.md row 15,
+// duties.eflint section 10): overrule a bound of a build kind's measure, set one, or spare a run from ending. The record
+// has it as the `open` and `closed` lines of an `order` ticket (agent-base/kinds/order.kind).
+type Order = Overrule(kind: Text, measure: Text) | SetBound(kind: Text, measure: Text, amount: Int) | Spare(run: Text)

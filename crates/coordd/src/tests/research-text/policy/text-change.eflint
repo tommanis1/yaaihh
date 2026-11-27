@@ -1,0 +1,45 @@
+// research's text changes (agent-base kinds/text-change.kind; this file replaces agent-base's
+// policy/text-change.eflint): an agent's change to research's own text goes live in seconds once one agent other
+// than its writer has read it, rule 6 run by the engine (paper-research N-1446 p2876, p2884); the owner's own change
+// is live once it checks. The read is the kind's `read_text` step. The `//` line above each rule is the why its
+// decision gives.
+
+Fact text-read-option Identified by String
++text-read-option("Go").
++text-read-option("Read").
++text-read-option("No").
+
+Decision text-read
+  Options text-read-option
+
+// The owner's own change (his window's Save): live once it checks.
+Only for text-read When call.by == "owner":
+  option == "Go"
+
+// An agent's change to research's kinds, calls, renderings, views, policy or library: read once, by an agent other than
+// its writer, before it is live (rule 6, N-1446 p2653, p2884).
+Only for text-read When call.by != "owner":
+  option == "Read"
+
+// ---- Who reads it: the kind's step goes to the role `text-reader`, and `fills` picks among those holding it, given
+// who made the change (`call.by`) and each name it touches as among(N, I) (agent-base tickets.eflint; p2888, p2894).
+// The lead holds it (text-reader.eflint), and here any running agent of research; several alike, the first by name;
+// nobody, the change is refused, never the owner's.
+Extend Fact role
+  Derived from role(agent, "text-reader") When running(agent)
+
+// OWNS(A, N): research says agent A owns N, a name a change touches as text-read's lists name it (`kinds/holders.kind`,
+// a view's id). None is stated yet: a line `+owns("accounts-lead", "kinds/holders.kind").` in this file states one.
+Fact owns Identified by agent * String
+Fact owns-touched Identified by agent
+  Derived from owns-touched(agent) When owns(agent, name) and among(name, i)
+
+// Never the agent that made it: the read is another agent's (rule 6).
+Only for fills When call.role == "text-reader":
+  option != call.by
+// An agent that owns a name the change touches reads it first.
+Prefer for fills When call.role == "text-reader":
+  owns-touched(option) > true
+// The lead last, so that it is not the queue (p2876).
+Prefer for fills When call.role == "text-reader":
+  not role(option, "lead") > true

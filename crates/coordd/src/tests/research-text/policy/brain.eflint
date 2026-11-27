@@ -1,0 +1,7 @@
+// How far back the brain reads for research's agents (0.3, I-1455; the facts are agent-base/policy/tickets.eflint's).
+// These three numbers are proto-mind's pick, for him to change (paper-research N-1446 p1077). The attention pass reads
+// his open posts to the agent from the 12 hours before his burst, and his earlier posts as an index from the 7 days
+// before it, at most 100 of them.
++unanswered-within(43200).
++earlier-within(604800).
++earlier-lines(100).

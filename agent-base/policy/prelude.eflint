@@ -8,10 +8,42 @@ Fact harness Identified by model * String
 // input price, micro-dollars per million tokens (cpa's resources/model_prices.json); a model without one is not used
 Fact price Identified by model * Int
 
-// The model of an LLM call. The call gives `task` (its `task` line), `agent` (who it runs for) and `call` (its name).
+// The reasoning effort a task's calls are made at (paper-research m1405): a level the provider knows (low, medium,
+// high), appended to the model model-for chooses for the task, as an agent's MODEL:EFFORT is. A task with none goes out
+// with no effort sent (the proxy's default; medium for gpt-5.6-luna).
+Fact effort-for Identified by String * String
+
+// How long an owner's step of a call that names a `default` waits for him, in seconds, before it goes on with that
+// answer by itself (N-487: the owner's typed words, `look`, 30 s). The shortest instance holds; a call with none waits
+// for him as any step does. A project gives it in its own policy: `+lapse-after("look", 30).`
+Fact lapse-after Identified by String * Int
+
+// While the owner is writing in the box of the ticket such a step waits on him in (the thread his held post is on), it
+// waits on past its `lapse-after`, up to this many seconds since it was owed (E1b, his burst: 15 s, his own rule, the
+// owner N-1445 p9; up to 60 s while he types, proto-engine's, with paper-research's yes at N-1446 p40). The
+// shortest instance holds; with none, his writing does not hold it.
+Fact lapse-at-most Identified by String * Int
+
+// The model of an LLM call, and of an agent coordd makes. An LLM call gives `place` = `call`, `task` (its `task` line),
+// `agent` (who it runs for) and `call` (its name). An agent made for a step (`step fresh`, `let agent`) or by
+// `coord new` gives `place` = `agent`, `agent` (its name), `call` (the step's call; `coord new` for one made so) and
+// `where` (the call's condition on its model, if any; the models that do not meet it are left out, coordd models.rs).
 Decision model-for
   Options model
   Requires price(option) >= 0
+
+// Fallback mode (the owner, 20 Nov): the model of an LLM call coordd runs itself when model-for's every option was
+// refused for a limit (the gateway's 429, `usage_limit_reached`), asked with the same fields as model-for. Its option is
+// the one `fallback(TASK, MODEL)` names for the call's task; a task with none has no fallback, and its call fails as
+// before (coordd policy/mod.rs `call_prompt`).
+Decision fallback-model
+  Options model
+  Requires price(option) >= 0
+Fact fallback Identified by String * model
+
+// An agent's model is one a harness runs in a session, and coordd starts its agents in Claude Code (roster add).
+Only for model-for When call.place == "agent":
+  harness(option, "claude")
 
 // A net's session is a harness session (owner m116): its model must be one a harness runs. The call gives
 // `place` = `session` for a session's first call.
@@ -31,6 +63,28 @@ Fact brought-in Identified by agent * thread
 // far) and whether it was added to a team. The proxy's `model` and `family` facts are supplied to the norms too.
 Fact runs Identified by agent * model
 Fact parent Identified by agent * agent
+// BELOW(A, B): A is below B, B's child or further down its tree (from the parents, supplied the same way)
+Fact below Identified by agent * agent
 Fact granted Identified by agent * Int
 Fact used Identified by agent * Int
 Fact member Identified by agent
+
+// A decision among agents (`decision NAME(agents: [Agent], ...) -> Agent`, claims.call), supplied when it is asked:
+// AMONG(A, I), A the I-th of the agents it is given, from 0 (for `fills`, the I-th text of its step's lists, which need
+// not name agents: a text change's names, tickets.eflint); IN-TURN(A) for each agent in a turn now; ABOUT(A) for each
+// agent whose work its words are about: a ticket the words name (N-12), or one under it, awaits A's step; WAKEABLE(A)
+// below.
+Fact among Identified by agent * Int
+Fact in-turn Identified by agent
+Fact about Identified by agent
+// WAKEABLE(A): agent A takes a hand-over now: running, and not ended.
+Fact wakeable Identified by agent
+
+// Agents made (item 11; coordd make.rs). MADE(A, BY, FROM, THREAD): agent A was made by
+// BY (an agent, or "program" for a program's `let agent`) copying FROM ("none": a fresh one) in THREAD (the top ticket
+// of the step BY owed; "none" when it owed none; "t" when it is the thread asked about). SOURCE: the agent a
+// `make-agent` copies, or "none". A project that lets agents make agents declares
+//   Act make-agent / Actor agent / Recipient agent / Related to source, thread
+// (none declared: no agent makes one).
+Fact made Identified by String * String * String * String
+Fact source Identified by String

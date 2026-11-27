@@ -1,0 +1,9 @@
++person(Amy).
++person(Bob).
++place(UvA).
++place(VU).
++at(person(Amy), place(UvA)).
++at(person(Bob), place(VU)).
+
+move(person(Amy), place(UvA), place(VU)).
+move(person(Bob), place(VU), place(UvA)).

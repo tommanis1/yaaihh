@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""coord-brain-mcp: the MCP stdio server of a pulling agent (agy, std/bridges/agy.docket; on coordd-v2 or coordd).
+
+Two tools, each one `coord` command run as this session, which the v2 daemon knows by the session's cgroup:
+  read_brain(agent, status_note?)                    coord read-brain NOTE: the briefing, as the JSON object it prints
+  report_work(agent, summary, refs[], done_item?)    coord report-work --refs REF... [--item ITEM] SUMMARY
+`agent` must be this session's own name (AGENT_NAME): the daemon refuses a pull or a report for another party, and
+a call naming another is refused here first, saying so. Nothing here pushes into the session: it calls these tools
+on its own timer, for the minutes its briefing suggests.
+
+Plain JSON-RPC 2.0, newline-delimited, no SDK, as agent-base/claude/channel.py. A project gives it to its agy
+agents as its MCP server `brain` (a link $COORD/mcp/brain to this file: roster passes each $COORD/mcp/NAME on).
+"""
+import json
+import os
+import subprocess
+import sys
+
+COORD_CMD = os.environ.get('COORD_BRAIN_COORD') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'coord')
+ME = os.environ.get('AGENT_NAME', '')
+
+AGENT = {'type': 'string', 'description': 'your own agent name; any other is refused'}
+TOOLS = [
+    {'name': 'read_brain',
+     'description': 'Pull your briefing: what waits for you (messages, directives, items), handed to you now. '
+                    'Answers {mode: work|sleep|stop, priority_directive, new_directives, unread_messages, '
+                    'assigned_items, suggested_wake_mins, wake_hint}. Set your own timer to suggested_wake_mins and '
+                    'pull again then; on "stop", set none.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'agent': AGENT,
+         'status_note': {'type': 'string', 'description': 'where you stand, in a line; kept with the pull'}},
+         'required': ['agent']}},
+    {'name': 'report_work',
+     'description': 'Hand your work in: what you did, what shows it, and the item it finishes, if any. What your '
+                    'last briefing handed you counts as read.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'agent': AGENT,
+         'summary': {'type': 'string', 'description': 'what was done'},
+         'refs': {'type': 'array', 'items': {'type': 'string'}, 'description': 'commits, posts, files that show it'},
+         'done_item': {'type': 'string', 'description': 'the item this finishes (claimed done), if any'}},
+         'required': ['agent', 'summary']}},
+]
+
+
+def write(msg):
+    sys.stdout.write(json.dumps(msg) + '\n')
+    sys.stdout.flush()
+
+
+def result(text, error=False):
+    return {'content': [{'type': 'text', 'text': text}], 'isError': error}
+
+
+def command(name, args):
+    """The coord command for tool NAME called with ARGS, or why the call is refused here."""
+    agent = args.get('agent', '')
+    if not ME:
+        return None, 'this session has no AGENT_NAME: it is no agent session'
+    if agent != ME:
+        return None, f'agent {agent!r} is not this session ({ME}): a pull or a report is only for oneself'
+    if name == 'read_brain':
+        note = args.get('status_note') or ''
+        return [COORD_CMD, 'read-brain'] + ([note] if note else []), None
+    summary = (args.get('summary') or '').strip()
+    if not summary:
+        return None, 'report_work needs a summary of what was done'
+    refs = args.get('refs') or []
+    if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+        return None, 'refs is a list of texts'
+    cmd = [COORD_CMD, 'report-work']
+    for r in refs:
+        cmd += ['--refs', r]
+    if args.get('done_item'):
+        cmd += ['--item', args['done_item']]
+    return cmd + ['--', summary], None
+
+
+def call(name, args):
+    cmd, why = command(name, args)
+    if cmd is None:
+        return result(why, True)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return result(f'{" ".join(cmd[1:2])}: {e}', True)
+    if p.returncode != 0:
+        return result((p.stderr or p.stdout).strip() or f'exit {p.returncode}', True)
+    return result(p.stdout.strip())
+
+
+def main():
+    for line in sys.stdin:
+        try:
+            req = json.loads(line)
+        except ValueError:
+            continue
+        if 'id' not in req:
+            continue
+        method = req.get('method')
+        params = req.get('params') or {}
+        if method == 'initialize':
+            write({'jsonrpc': '2.0', 'id': req['id'], 'result': {
+                'protocolVersion': params.get('protocolVersion', '2025-06-18'),
+                'capabilities': {'tools': {}}, 'serverInfo': {'name': 'brain', 'version': '1'}}})
+        elif method == 'ping':
+            write({'jsonrpc': '2.0', 'id': req['id'], 'result': {}})
+        elif method == 'tools/list':
+            write({'jsonrpc': '2.0', 'id': req['id'], 'result': {'tools': TOOLS}})
+        elif method == 'tools/call' and params.get('name') in ('read_brain', 'report_work'):
+            write({'jsonrpc': '2.0', 'id': req['id'], 'result': call(params['name'], params.get('arguments') or {})})
+        else:
+            write({'jsonrpc': '2.0', 'id': req['id'], 'error': {'code': -32601, 'message': f'no method {method}'}})
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""slop-count [--list] [ROOT]: per folder of the code that ships, two counts, then the totals.
+
+- history: comment lines that name a ticket or item (N-123, H-12), a post (p123, m1385) or the owner's words.
+- names: lines anywhere (code, tests, messages, comments) that name a project, an agent or a person, or that match
+  a kind or role a project's own files define (`kind == "head"`, a match arm `"head" =>`).
+
+The names are read from this machine, never written here: the projects and agents of each coord in COORDS
+(~/agent-coord) whose project file is in a `flavor/projects` folder, the kinds (`kind NAME` in .kind and .docket files)
+and roles (`+role("AGENT", "ROLE")`) in those project folders, and the authors in ROOT's git history. A name that is
+also a plain word counts only as a string of its own or after a `/`; a name with a hyphen or a digit counts wherever it
+stands as a word. The product's own name (the crate `yaaihh`) is not a project's.
+Inside `…` in a comment a name or id is an example and does not count; anywhere else a real name is real: an example
+uses made-up names.
+
+--list: each counted line as FILE:LINE and what it names (the category, not the name).
+ROOT: the soft-swarm checkout (default: the one this script is in)."""
+import glob, os, re, subprocess, sys
+
+args = [a for a in sys.argv[1:] if a != "--list"]
+listing = "--list" in sys.argv[1:]
+root = os.path.abspath(args[0] if args else os.path.join(os.path.dirname(__file__), "..", ".."))
+coords = os.environ.get("COORDS", os.path.expanduser("~/agent-coord"))
+crates = os.path.join(root, "yaaihh", "crates")
+folders = [os.path.join("yaaihh", "crates", c) for c in sorted(os.listdir(crates))] if os.path.isdir(crates) else []
+base = os.path.join(root, "agent-base")
+folders += [os.path.join("agent-base", d) for d in sorted(os.listdir(base)) if os.path.isdir(os.path.join(base, d))] if os.path.isdir(base) else []
+
+history = re.compile(
+    r"\b[A-Z]-\d+\b|\b[pm]\d{2,}\b"
+    r"|\b(?:his words|he said|he asked)\b|\bthe owner(?:'s)?(?:,| \(| (?:said|asked|says|wants|wish|word|rule|ruling|ask))|\bowner\b[^\"]*\"\w",
+    re.I,
+)
+
+
+def names():
+    """(category, name) of every name read from the machine."""
+    out = set()
+    product = {"yaaihh"}
+    for p in glob.glob(os.path.join(coords, "*", "project")):
+        coord = os.path.dirname(p)
+        try:
+            file = open(p).readline().strip()
+        except OSError:
+            continue
+        if "/flavor/projects/" not in file:
+            continue
+        pdir = os.path.dirname(file)
+        for n in {os.path.basename(coord), os.path.basename(pdir)} - product:
+            out.add(("project", n))
+        try:
+            for line in open(os.path.join(coord, "registry.jsonl"), encoding="utf-8"):
+                for m in re.finditer(r'"(?:name|to)":\s*"([^"]+)"', line):
+                    out.add(("agent", m.group(1)))
+        except OSError:
+            pass
+        for f in glob.glob(os.path.join(pdir, "**", "*"), recursive=True):
+            if not os.path.isfile(f):
+                continue
+            try:
+                text = open(f, encoding="utf-8").read()
+            except (UnicodeDecodeError, OSError):
+                continue
+            if f.endswith((".kind", ".docket")):
+                out.update(("kind", k) for k in re.findall(r"^\s*kind\s+([a-z][\w-]*)", text, re.M))
+            if f.endswith(".eflint"):
+                out.update(("role", r) for r in re.findall(r'\+role\("[^"]*",\s*"([^"]+)"\)', text))
+    authors = subprocess.run(["git", "-C", root, "log", "--format=%an"], capture_output=True, text=True).stdout
+    out.update(("person", a) for a in set(authors.splitlines()) if " " in a.strip())
+    return {(c, n) for c, n in out if len(n) >= 3 and n not in ("owner", "coord")}
+
+
+def pattern(cat, name):
+    """The regex text that finds NAME of category CAT where it counts."""
+    q = re.escape(name)
+    if cat in ("kind", "role"):
+        # matched: compared with (`== "X"`, `"X" !=`), or a match arm (`"X" =>`, `"X" |`, `| "X"`)
+        s = rf"[\"']{q}[\"']"
+        return rf"(?:==|!=|\|)\s*{s}|{s}\s*(?:==|!=|=>|\|[^|])"
+    if cat == "person":
+        return rf"(?i:\b{q}\b)"
+    if re.search(r"[-\d/]", name):
+        return rf"(?<![\w-]){q}(?![\w-])"
+    # a plain word: a string of its own, or a path's last part (`agents/NAME`, not `src/NAME.rs`)
+    return rf"[\"']{q}[\"']|/{q}(?![\w.-])"
+
+
+def lines_of(path):
+    """(comment, code) of each line of PATH, for source, script and policy files; none for others."""
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except (UnicodeDecodeError, OSError):
+        return []
+    hashes = path.endswith((".sh", ".py")) or bool(lines and lines[0].startswith("#!"))
+    slashes = path.endswith((".rs", ".eflint", ".kind", ".call", ".docket", ".js", ".ts"))
+    if not (hashes or slashes or path.endswith((".md", ".json", ".toml", ".tmpl"))):
+        return []
+    out = []
+    for line in lines:
+        s = line.lstrip()
+        if slashes:
+            i = next((m.start() for m in re.finditer(r"//", line) if line[: m.start()].count('"') % 2 == 0 and not line[: m.start()].endswith(":")), None)
+            out.append((line[i:], line[:i]) if i is not None else ("", line))
+        elif hashes and s.startswith("#") and not s.startswith("#!"):
+            out.append((s, ""))
+        else:
+            out.append(("", line))
+    return out
+
+
+known = sorted(names())
+pats = [(c, re.compile("|".join(pattern(c, n) for c2, n in known if c2 == c))) for c in sorted({c for c, _ in known})]
+total = [0, 0, 0, 0]
+for f in folders:
+    hist = seen = named = count = 0
+    for d, dirs, files in os.walk(os.path.join(root, f)):
+        dirs[:] = [x for x in dirs if x not in ("target", "node_modules", ".git")]
+        for fn in sorted(files):
+            path = os.path.join(d, fn)
+            for no, (comment, code) in enumerate(lines_of(path), 1):
+                if not (comment or code).strip():
+                    continue
+                count += 1
+                bare = re.sub(r"`[^`]*`", "", comment)
+                if comment:
+                    seen += 1
+                    hist += bool(history.search(bare))
+                cats = sorted({c for c, p in pats if p.search(code) or p.search(bare)})
+                if cats:
+                    named += 1
+                    if listing:
+                        print(f"  {os.path.relpath(path, root)}:{no}: {', '.join(cats)}")
+    total = [total[0] + hist, total[1] + seen, total[2] + named, total[3] + count]
+    print(f"{f}: history {hist} of {seen} comment lines; names {named} of {count} lines")
+print(f"total: history {total[0]} of {total[1]} comment lines; names {total[2]} of {total[3]} lines "
+      f"({len(known)} names read from this machine)")

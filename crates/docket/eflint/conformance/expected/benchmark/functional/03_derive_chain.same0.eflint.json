@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\nNew type y\n+x(\"hi\")\n+y(\"hi\")\n#2 > x(\"hi\") = True\ny(\"hi\") = True\n\n#2 > "
+ }
+}

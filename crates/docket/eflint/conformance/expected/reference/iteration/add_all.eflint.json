@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type comp\nNew type x\nNew type y\n+comp(x(1),y(\"One\"))\n+comp(x(1),y(\"Three\"))\n+comp(x(1),y(\"Two\"))\n+comp(x(2),y(\"One\"))\n+comp(x(2),y(\"Three\"))\n+comp(x(2),y(\"Two\"))\n+comp(x(3),y(\"One\"))\n+comp(x(3),y(\"Three\"))\n+comp(x(3),y(\"Two\"))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n-comp(x(1),y(\"One\"))\n-comp(x(1),y(\"Three\"))\n-comp(x(1),y(\"Two\"))\n-comp(x(2),y(\"One\"))\n-comp(x(2),y(\"Three\"))\n-comp(x(2),y(\"Two\"))\n-comp(x(3),y(\"One\"))\n-comp(x(3),y(\"Three\"))\n-comp(x(3),y(\"Two\"))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nNew type act\n+act(actor(\"A\"),actor(\"B\"))\n+act(actor(\"B\"),actor(\"A\"))\nquery successful\nquery successful\nquery successful\nquery successful\n~act(actor(\"A\"),actor(\"B\"))\n~act(actor(\"B\"),actor(\"A\"))\nquery successful\nquery successful\nquery successful\nquery successful\nNew type candidate\nNew type cast_vote\nNew type citizen\n+citizen(\"A\")\n+citizen(\"B\")\n+candidate(\"C\")\nquery successful\nquery successful\nquery successful\nquery successful\n#42 > "
+ }
+}

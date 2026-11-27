@@ -1,0 +1,34 @@
+module std.bridges.opencode
+
+import std.hooks as H
+
+// opencode, as read. Pinned to opencode 1.18.34, whose plugin's hooks and server's events these facts were read
+// from.
+//   turn_end, overloaded: events its plugin and this bridge only see.
+//   permission_asked: an event its plugin only sees; this bridge answers it through the server (once, always,
+//     reject). The request stays pending on the server until it is answered, so a Suspend there has no bound.
+
+// Its plugin's hooks and events by their own names: the plugin relays each by its name.
++H.Native-Hook("opencode", "chat.message", "turn_begins").
++H.Native-Hook("opencode", "tool.execute.before", "tool_called").
++H.Native-Hook("opencode", "tool.execute.after", "tool_result").
++H.Native-Hook("opencode", "permission.asked", "permission_asked").
++H.Native-Hook("opencode", "session.idle", "turn_end").
++H.Native-Hook("opencode", "experimental.session.compacting", "compacting").
++H.Native-Hook("opencode", "session.error", "overloaded").
+
++H.Reaches("opencode", "1.18.34", "turn_begins").      +H.Reaches("opencode", "1.18.34", "tool_called").
++H.Reaches("opencode", "1.18.34", "tool_result").      +H.Reaches("opencode", "1.18.34", "permission_asked").
++H.Reaches("opencode", "1.18.34", "turn_end").         +H.Reaches("opencode", "1.18.34", "compacting").
++H.Reaches("opencode", "1.18.34", "overloaded").
+
++H.Lets("opencode", "1.18.34", "turn_begins", "modify").
++H.Lets("opencode", "1.18.34", "tool_called", "deny").       +H.Lets("opencode", "1.18.34", "tool_called", "modify").
++H.Lets("opencode", "1.18.34", "tool_result", "modify").
++H.Lets("opencode", "1.18.34", "permission_asked", "answer"). +H.Lets("opencode", "1.18.34", "permission_asked", "suspend").
++H.Lets("opencode", "1.18.34", "compacting", "modify").
+
+// Not stated, because the text read does not confirm it:
+//   turn_begins, inject              it changes the prompt: words are added by a Modify holding the prompt and the words
+//   before_model_call, modify        not read; its plugin may have such a hook
+//   turn_end, keep_going             the turn's end is an event the bridge only sees

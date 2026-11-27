@@ -1,0 +1,137 @@
+module std.routing
+
+import std.hooks as H
+import std.budgets as B
+import std.harness_bump as P
+
+// Placement of agents on accounts: a warm prefix cache keeps its agents and their forks; a fresh agent goes where the
+// most quota would otherwise go unused, spread over the accounts. Nothing loads this text until the owner answers
+// N-1104 p1120 on placement; it is not in the cutover's STD.
+
+// ===== 1. Accounts and their caches ==============================================================================
+
+Fact Account  Identified by String
+Fact Provider Identified by String
+Fact Model-Id Identified by String   // not `Model`: std.comms' Effect has that name
+
+Fact Placer(party: H.Party)                                      // a project says which parties place agents
+Fact Of-Provider(account: Account, provider: Provider)
+Fact Offers(account: Account, model: Model-Id)
+Fact Native-Only(model: Model-Id)                                   // reached only natively, never through a relay
+Fact Cache-Mode(account: Account, mode: String)                  // which of its provider's cache lifetimes it asks for
+Fact Cache-TTL(provider: Provider, mode: String, minutes: Int)   // a prefix lives this long after its last write or read
+Fact Cache-Kept(provider: Provider)                              // a project's rule: its warm sessions are left untouched
+
+// Anthropic's two lifetimes, each renewed by a hit, and Google's explicit cache's default; Google's implicit cache and
+// OpenAI's state no lifetime, so they hold an agent only where a project states Cache-Kept.
++Cache-TTL("anthropic", "5m", 5). +Cache-TTL("anthropic", "1h", 60).
++Cache-TTL("google", "explicit", 60).
+
+Fact On-Account(agent: H.Party, account: Account)
+Fact Runs-Model(agent: H.Party, model: Model-Id)
+Fact Placed-With(agent: H.Party, harness: H.Harness, via: H.Harness, version: H.Version)   // what it was placed to run
+Fact Fork-Of(fork: H.Party, parent: H.Party)
+Fact Warm(agent: H.Party, account: Account, until: Int)
+Fact Kept-Warm(agent: H.Party, account: Account)
+Fact Quota(account: Account, left_permille: Int, resets_at: Int)
+
+// The project's numbers. Below the floor an account takes no new agent, and a warm one may be left. A reading
+// whose reset lies further off than the horizon is refused, so no product below can overflow. An account's rank
+// breaks a tie, the lower first; an account the project gives no rank takes no new agent.
+Fact Reserve-Floor(permille: Int)
+Fact Quota-Horizon(minutes: Int)
+Fact Account-Rank(account: Account, rank: Int)
++Reserve-Floor(50). +Quota-Horizon(527040).
+
+// Its prefix on that account is still cached by the clock driver's minute, never by a time an actor gives.
+Fact Warm-At(agent: H.Party, account: Account)
+  Holds when Warm(agent, account, until) && B.Now(now) && now < until
+  Holds when Kept-Warm(agent, account)
+
+// Above the floor, by a reading whose reset is still to come.
+Fact Healthy(account: Account)
+  Holds when Quota(account, left, resets) && Reserve-Floor(f) && left > f && B.Now(now) && resets > now
+
+// A native-only model never goes through a relaying harness, and no harness runs at a version that is not pinned.
+Fact Fits(account: Account, harness: H.Harness, via: H.Harness, version: H.Version, model: Model-Id)
+  Holds when Offers(account, model) && P.Pinned(harness, via, version)
+             && Not(Native-Only(model) && P.Relayed(harness, via, version))
+
+// Not a shadow price: the quota above the floor that will go unused at the reset, per minute left, divided by one
+// more than the agents already on the account so that spawns at one moment spread out. The highest is taken,
+// cross-multiplied so no division rounds two equal; an equal score goes to the lower rank, so at most one is Best.
+Fact Best(account: Account, harness: H.Harness, via: H.Harness, version: H.Version, model: Model-Id)
+  Holds when Fits(account, harness, via, version, model) && Healthy(account) && Account-Rank(account, k)
+             && Quota(account, left, resets) && Reserve-Floor(f) && B.Now(now)
+             && Not(Exists b, l, r, j : b != account && Fits(b, harness, via, version, model) && Healthy(b)
+                                        && Account-Rank(b, j) && Quota(b, l, r)
+                                        && ((l - f) * (resets - now) * (1 + Count(Foreach x : x When On-Account(x, account)))
+                                              > (left - f) * (r - now) * (1 + Count(Foreach x : x When On-Account(x, b)))
+                                            || ((l - f) * (resets - now) * (1 + Count(Foreach x : x When On-Account(x, account)))
+                                                  == (left - f) * (r - now) * (1 + Count(Foreach x : x When On-Account(x, b)))
+                                                && j <= k)))
+
+// ===== 2. The drivers' lines =====================================================================================
+
+Event Quota-Read(account: Account, left_permille: Int, resets_at: Int)
+  Conditioned by left_permille >= 0 && left_permille <= 1000 && B.Now(now) && Quota-Horizon(h)
+                 && resets_at >= now - h && resets_at <= now + h
+  Terminates     Quota(account, l, r) When Quota(account, l, r)
+  Creates        Quota(account, left_permille, resets_at)
+
+// A model call wrote or read the agent's prefix on the account in the clock's minute, which renews its lifetime.
+Event Cache-Used(agent: H.Party, account: Account)
+  Terminates Warm(agent, account, u) When Warm(agent, account, u)
+  Creates    Warm(agent, account, at + ttl) When B.Now(at) && Of-Provider(account, p) && Cache-Mode(account, m) && Cache-TTL(p, m, ttl),
+             Kept-Warm(agent, account) When Of-Provider(account, p) && Cache-Kept(p)
+
+Event Forked(fork: H.Party, parent: H.Party)
+  Conditioned by fork != parent
+  Creates        Fork-Of(fork, parent)
+
+Event Session-Ended(agent: H.Party)
+  Terminates Warm(agent, a, u) When Warm(agent, a, u), Kept-Warm(agent, a) When Kept-Warm(agent, a),
+             On-Account(agent, a) When On-Account(agent, a), Runs-Model(agent, m) When Runs-Model(agent, m),
+             Placed-With(agent, h, v, n) When Placed-With(agent, h, v, n),
+             Fork-Of(agent, p) When Fork-Of(agent, p), Fork-Of(f, agent) When Fork-Of(f, agent)
+
+// ===== 3. Placement ==============================================================================================
+
+// A fresh agent goes to the best fitting account, unless it is a fork whose parent's prefix is still warm on an
+// account above its floor. The harness, its launcher and the version it is placed with are kept with it.
+Act Place-Fresh(actor: H.Party, agent: H.Party, account: Account, harness: H.Harness, via: H.Harness,
+                version: H.Version, model: Model-Id)
+  Conditioned by Placer(actor) && Not(Exists a : On-Account(agent, a)) && Best(account, harness, via, version, model)
+                 && Not(Exists p, a : Fork-Of(agent, p) && On-Account(p, a) && Warm-At(p, a) && Healthy(a))
+  Creates        On-Account(agent, account), Runs-Model(agent, model), Placed-With(agent, harness, via, version)
+
+// A fork shares its parent's warm prefix, so it goes on the parent's account, if that is above its floor and still
+// fits the parent's model and launcher, and takes the parent's lifetime.
+Act Place-Fork(actor: H.Party, fork: H.Party, account: Account)
+  Conditioned by Placer(actor) && Not(Exists a : On-Account(fork, a)) && Healthy(account)
+                 && Exists p, m, h, via, v : Fork-Of(fork, p) && On-Account(p, account) && Warm-At(p, account)
+                                             && Runs-Model(p, m) && Placed-With(p, h, via, v) && Fits(account, h, via, v, m)
+  Creates        On-Account(fork, account),
+                 Runs-Model(fork, m) When Fork-Of(fork, p) && Runs-Model(p, m),
+                 Placed-With(fork, h, via, v) When Fork-Of(fork, p) && Placed-With(p, h, via, v),
+                 Warm(fork, account, u) When Fork-Of(fork, p) && Warm(p, account, u),
+                 Kept-Warm(fork, account) When Fork-Of(fork, p) && Kept-Warm(p, account)
+
+// A placed agent moves once its prefix has gone cold, or once its account is below its floor (a kept cache too),
+// to the best account for its model and launcher; what it had warm on the old account is dropped.
+Act Move(actor: H.Party, agent: H.Party, account: Account)
+  Conditioned by Placer(actor) && Exists from, m, h, via, v : On-Account(agent, from) && from != account
+                 && (Not(Warm-At(agent, from)) || Not(Healthy(from)))
+                 && Runs-Model(agent, m) && Placed-With(agent, h, via, v) && Best(account, h, via, v, m)
+  Terminates     On-Account(agent, from) When On-Account(agent, from),
+                 Warm(agent, from, u) When On-Account(agent, from) && Warm(agent, from, u),
+                 Kept-Warm(agent, from) When On-Account(agent, from) && Kept-Warm(agent, from)
+  Creates        On-Account(agent, account)
+
+// An agent placed to run one way runs that way: started another way, by the session driver's line, its duty to
+// its placer is violated, where he sees it. A relayed version is its own version, so native-and-relayed shows here.
+Fact Off-Placement(agent: H.Party)
+  Holds when Placed-With(agent, h, via, v) && H.Running-On(agent, h2, v2) && (h2 != h || v2 != v)
+Duty Runs-As-Placed(holder: H.Party, claimant: H.Party)
+  Holds when    Placed-With(holder, h, via, v) && Placer(claimant)
+  Violated when Off-Placement(holder)

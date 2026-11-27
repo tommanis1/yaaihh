@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type open\n-open(\"A\")\nquery successful\n+open(\"A\")\nquery successful\n#7 > "
+ }
+}

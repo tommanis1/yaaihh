@@ -1,0 +1,12 @@
+// A question in the limited form (paper-research m1586, 1): an agent asks, the owner answers it or dismisses it with a
+// reason, as `coord ask` reached him before Docket; no lead in between, so an instance with no lead can ask too. The
+// asker opened it, so it is told once, when it closes, with the answer.
+kind question
+  form ask: Text, context: Text?
+  result Answered(text: Text) | Dismissed(why: Text)
+  pattern
+    o <- step owner ask_owner(ask, context);
+    match o {
+      Answer(text) => return Answered(text)
+      Dismiss(why) => return Dismissed(why)
+    }

@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type f\n+f(1)\n#2 > f(1) = True\n\n#2 > "
+ }
+}

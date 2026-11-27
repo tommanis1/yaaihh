@@ -1,0 +1,84 @@
+// tovrin.ratchet, by hand in the reference eFLINT that eflint-rs reads. A name ending in -f is the rule as the
+// foundation (4b219c61b) has it. Every query below must succeed.
+Fact party Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact case Identified by String
+Fact suite Identified by String
+Fact tool Identified by String
+Fact run Identified by String
+Fact in-suite Identified by case * suite
+Fact red-case Identified by case
+Fact flip-requested Identified by case
+Fact excluded-tool Identified by tool
+Fact suite-of-tool Identified by suite * tool
+Fact excluded-suite Identified by suite
+  Holds when (Exists tool : suite-of-tool(suite, tool) && excluded-tool(tool))
+Fact excluded-case Identified by case
+  Holds when (Exists suite : in-suite(case, suite) && excluded-suite(suite))
+Fact blocked-suite Identified by suite
+  Holds when (Exists case : in-suite(case, suite) && red-case(case) && Not(flip-requested(case)) && Not(excluded-case(case)))
+Fact suite-run Identified by suite * run
+
+Act flip-case-f
+  Actor party
+  Related to case
+  Holds when role(party, "orch") && red-case(case)
+  Creates flip-requested(case)
+Act run-proof-suite-f
+  Actor party
+  Related to case
+  Holds when Not(red-case(case)) || flip-requested(case)
+Act flip-case
+  Actor party
+  Related to case
+  Holds when role(party, "orch") && red-case(case) && Not(flip-requested(case)) && Not(excluded-case(case))
+  Creates flip-requested(case)
+Act run-proof-suite
+  Actor party
+  Related to suite, run
+  Holds when role(party, "runner") && Not(blocked-suite(suite)) && Not(excluded-suite(suite))
+  Creates suite-run(suite, run)
+Event case-went-red
+  Related to case
+  Creates red-case(case)
+Event case-went-green
+  Related to case
+  Terminates red-case(case), flip-requested(case)
+Event case-ran-red
+  Related to case
+  Creates red-case(case)
+  Terminates flip-requested(case)
+.
++party("or1"). +party("rn1"). +party("b1"). +role-name("orch"). +role-name("runner").
++role("or1", "orch"). +role("rn1", "runner").
++case("lemma-3"). +case("quote-1"). +suite("proofs"). +suite("agda-quote"). +tool("agda-quote").
++in-suite("lemma-3", "proofs"). +in-suite("quote-1", "agda-quote").
++excluded-tool("agda-quote"). +suite-of-tool("agda-quote", "agda-quote").
++run("r1"). +run("r2").
+
+// 1. A red case blocks its suite; only orch flips.
+case-went-red("lemma-3").
+?blocked-suite("proofs").
+?!Enabled(run-proof-suite("rn1", "proofs", "r1")).
+?!Enabled(flip-case("b1", "lemma-3")).
+flip-case("or1", "lemma-3").
+?!Enabled(flip-case("or1", "lemma-3")).                        // not twice
+?Enabled(run-proof-suite("rn1", "proofs", "r1")).
+?!Enabled(run-proof-suite("b1", "proofs", "r1")).          // the foundation's act was open to anybody
+?Enabled(run-proof-suite-f("b1", "lemma-3")).
+
+// 2. One flip lets one run.
+run-proof-suite("rn1", "proofs", "r1").
+case-ran-red("lemma-3").                                        // still red after that run
+?!Enabled(run-proof-suite("rn1", "proofs", "r2")).           // now: the flip is used up
+// The foundation: with its own flip standing, the red case can be run again and again.
+flip-case-f("or1", "lemma-3").
+?Enabled(run-proof-suite-f("rn1", "lemma-3")).
+?Enabled(run-proof-suite-f("rn1", "lemma-3")).
+
+// 3. agda-quote is outside.
+case-went-red("quote-1").
+?!blocked-suite("agda-quote").                                  // its red case holds nothing up
+?!Enabled(flip-case("or1", "quote-1")).                        // and is not flipped
+?!Enabled(run-proof-suite("rn1", "agda-quote", "r2")).       // and its suite is not run for proof landing

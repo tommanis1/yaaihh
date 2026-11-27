@@ -1,0 +1,8 @@
+// The owner's `@all` (base.kind's `when owner_post`; consult-lead N-1158 post 1): which of the agents on the ticket is
+// handed it; `tell` informs the others, who see it at their next delivery, and the first answer by any of them is the
+// claim (docket-machine `Machine::taken`). The policy's `Decision claims` answers it (policy/claims.eflint) over
+// AGENTS, every agent on the ticket, those the post names first, and TEXT, his words: coordd supplies among(A, I), A
+// the I-th of them from 0, in-turn(A) for each agent in a turn now, about(A) for each agent whose step a ticket named
+// in TEXT awaits, and wakeable(A) for each agent running and not ended. The answer may be an agent not on the ticket (the project's answerer). A policy that cannot decide (no
+// rule, a tie, a fault) leaves it to the owner, as every decision does.
+decision claims(agents: [Agent], text: Text) -> Agent

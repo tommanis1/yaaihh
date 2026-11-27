@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type a\nNew type b\nNew type c\nNew type d\nNew type e\nNew type f\nNew type query\n-f(\"F\")\n+a(\"A\")\n+b(\"B\")\n+c(\"C\")\n+d(\"D\")\n+e(\"E\")\n+query(\"Query\")\nquery successful\n#3 > "
+ }
+}

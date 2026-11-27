@@ -1,0 +1,11 @@
+#!/bin/bash
+# clerk-model PARTY: coordd-v2's --clerk command: the prompt on stdin once to PARTY's model, in the one pool (Q-1908)
+set -uo pipefail
+# SPAWN_COORD (the coord folder) and SPAWN_PROGS (the release), as cutover.sh's unit gives spawn-v2.sh
+party=${1:?clerk-model PARTY}; COORD=${SPAWN_COORD:?} R=${SPAWN_PROGS:?}
+[[ $party =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "clerk-model: '$party' is no agent's name" >&2; exit 1; }
+# std.comms' Model is "one request to WHO's model": the model of PARTY's session, an effort not passed
+s=$COORD/agents/$party/session.json
+model=$(jq -er '.model // empty' "$s" 2>/dev/null) || { echo "clerk-model: $party has no session with a model in $s" >&2; exit 1; }
+# v1's coordd places it as its own calls, on his accounts, an OpenCode Go account or the gateway; {"answer", "tokens"}
+exec "$R/coordd" call "$COORD" "$R/agent-base" "${model%%:*}"

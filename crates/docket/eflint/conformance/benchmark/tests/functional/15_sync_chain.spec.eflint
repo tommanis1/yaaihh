@@ -1,0 +1,3 @@
+Event x Related to int
+	Syncs with x(int - 1) Where 0 < int
+	Creates int

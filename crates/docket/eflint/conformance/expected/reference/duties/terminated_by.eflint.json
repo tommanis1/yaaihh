@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type creates-duty\nNew type duty\nNew type enforcer\nNew type terminates-duty\n+creates-duty(actor(\"SomeOne\"))\nexecuted transition: \ncreates-duty(actor(\"SomeOne\")) (ENABLED)\n+terminates-duty(actor(\"SomeOne\"))\n+duty(actor(\"SomeOne\"),actor(\"SomeOne\"))\nquery successful\nquery successful\nquery successful\nviolations:\n  violated duty!: duty(actor(\"SomeOne\"),actor(\"SomeOne\"))\n+enforcer(actor(\"SomeOne\"))\nquery successful\nviolations:\n  violated duty!: duty(actor(\"SomeOne\"),actor(\"SomeOne\"))\nexecuted transition: \nterminates-duty(actor(\"SomeOne\")) (ENABLED)\n~terminates-duty(actor(\"SomeOne\"))\n-duty(actor(\"SomeOne\"),actor(\"SomeOne\"))\nquery successful\nexecuted transition: \ncreates-duty(actor(\"SomeOne\")) (ENABLED)\nviolations:\n  violated duty!: duty(actor(\"SomeOne\"),actor(\"SomeOne\"))\n+terminates-duty(actor(\"SomeOne\"))\n+duty(actor(\"SomeOne\"),actor(\"SomeOne\"))\nquery successful\nviolations:\n  violated duty!: duty(actor(\"SomeOne\"),actor(\"SomeOne\"))\n-enforcer(actor(\"SomeOne\"))\nquery successful\n#14 > "
+ }
+}

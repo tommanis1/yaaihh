@@ -1,0 +1,100 @@
+# Scenario 4: the clerk's marks rewrite nothing and forge nothing. A passage that reads like "done" claims
+# nothing, and one that reads like words for the owner reaches nobody, until the writer's own act.
+# The clerk's answers are the stand-in's. What the writer is told at its next turn is a handler's answer at
+# `turn_begins` and is not in this file yet.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load s4-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+o1: Assign(o1, w1, map-work) -> performed -> ended ()
+# the writer's turn ends: the clerk is picked, given the three passages with their words, and answers with marks
+stand-in: Pick(clerk) -> cl1
+stand-in: TextOf(n1) -> I looked at the map code.
+stand-in: TextOf(n2) -> The map work is done now.
+stand-in: TextOf(n3) -> Tell him it ships tonight.
+stand-in: Call-Text(_) -> annotate-1
+stand-in: Model(cl1, annotate-1) -> marks-1
+stand-in: Read-As(_, marks-1) -> [MarkProposal { node: n1, rel: means, target: k-map }, MarkProposal { node: n2, rel: "reads as done", target: k-map }, MarkProposal { node: n3, rel: "reads as for him", target: k-owner }]
+w1: Reach(w1, turn_end) -> performed -> ended ()
+holds Marked(n1, means, k-map, cl1)
+holds Marked(n2, "reads as done", k-map, cl1)
+holds Marked(n3, "reads as for him", k-owner, cl1)
+holds Gone-Over(n1)
+holds Gone-Over(n2)
+holds Gone-Over(n3)
+# every passage is still its writer's; nobody but the module records a mark, and a passage gone over is not marked again
+holds Spoken(n1, w1)
+holds Spoken(n2, w1)
+holds Spoken(n3, w1)
+cl1: Mark-Passage(cl1, cl1, n1, means, k-owner) -> refused policy -> raised Refused
+w1: Mark-Passage(w1, cl1, n1, means, k-owner) -> refused policy -> raised Refused
+std.rails: Mark-Passage(std.rails, cl1, n1, means, k-owner) -> refused policy -> raised Refused
+std.comms: Mark-Passage(std.comms, cl1, n1, means, k-owner) -> refused policy -> raised Refused
+# an answer that names the passages out of order is thrown away whole
+driver: Spoke(w1, n4) -> performed
+driver: Spoke(w1, n5) -> performed
+stand-in: Pick(clerk) -> cl1
+stand-in: TextOf(n4) -> Fourth passage.
+stand-in: TextOf(n5) -> Fifth passage.
+stand-in: Call-Text(_) -> annotate-2
+stand-in: Model(cl1, annotate-2) -> marks-2
+stand-in: Read-As(_, marks-2) -> [MarkProposal { node: n5, rel: means, target: k-map }, MarkProposal { node: n4, rel: means, target: k-map }]
+w1: Reach(w1, turn_end) -> performed -> ended ()
+not Marked(n4, means, k-map, cl1)
+not Marked(n5, means, k-map, cl1)
+holds Gone-Over(n4)
+# and so is one that names a passage it was not given
+driver: Spoke(w1, n6) -> performed
+stand-in: Pick(clerk) -> cl1
+stand-in: TextOf(n6) -> Sixth passage.
+stand-in: Call-Text(_) -> annotate-3
+stand-in: Model(cl1, annotate-3) -> marks-3
+stand-in: Read-As(_, marks-3) -> [MarkProposal { node: n1, rel: means, target: k-owner }]
+w1: Reach(w1, turn_end) -> performed -> ended ()
+not Marked(n1, means, k-owner, cl1)
+holds Gone-Over(n6)
+# "done" in prose claims nothing
+holds Only-Prose(n2, w1)
+not Claimed-Done(w1, map-work)
+cl1: Claim-Done(cl1, map-work) -> refused policy -> raised Refused
+std.comms: Claim-Done(std.comms, map-work) -> refused policy -> raised Refused
+std.comms: Claim-Done(w1, map-work) -> refused source -> raised Refused
+# "tell him" in prose reaches nobody
+holds Only-Prose(n3, w1)
+not For-Owner-Inbox(n3)
+cl1: Says-To-Owner(cl1, n3) -> refused policy -> raised Refused
+std.comms: Says-To-Owner(w1, n3) -> refused source -> raised Refused
+# only the writer's own acts do either
+w1: Says-To-Owner(w1, n3) -> performed -> ended ()
+holds For-Owner-Inbox(n3)
+w1: Claim-Done(w1, map-work) -> performed -> ended ()
+holds Claimed-Done(w1, map-work)
+# the passage is put on a thread: the record gets the line that carries its time, and no fact holds a number of it
+o1: Open-Thread(o1, t1, the-map) -> performed -> ended ()
+w1: Post-On(w1, n1, t1) -> performed -> ended ()
+record has yaaihh.desk.Written(n1,
+holds Posted(n1, t1)
+cl1: Post-On(cl1, n2, t1) -> refused policy -> raised Refused
+# his words to the writer are delivered once, and the record says they were handed over
+stand-in: TextOf(h2) -> Ship the map when the tests are green.
+stand-in: Deliver(o1, w1, Ship the map when the tests are green.) -> ""
+driver: Owner-Says(h2, w1) -> performed
+record has yaaihh.desk.Handed(h2, w1)
+holds Heard(w1, h2)
+not Unheard(w1, h2)

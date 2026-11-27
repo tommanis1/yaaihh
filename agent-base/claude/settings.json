@@ -1,9 +1,23 @@
 {
   "apiKeyHelper": "cat \"$COORD/.proxy-key\"",
   "permissions": {
-    "defaultMode": "bypassPermissions"
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "CronCreate",
+      "CronDelete",
+      "CronList"
+    ],
+    "deny": [
+      "Agent",
+      "Artifact",
+      "AskUserQuestion",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "Workflow"
+    ]
   },
   "skipDangerousModePermissionPrompt": true,
+  "cleanupPeriodDays": 36500,
   "crossSessionInbound": "accept",
   "hooks": {
     "SessionStart": [
@@ -12,7 +26,7 @@
           {
             "type": "command",
             "command": "\"$AGENT_BASE/claude/hook\" start",
-            "timeout": 5
+            "timeout": 600
           }
         ]
       }
@@ -24,7 +38,7 @@
           {
             "type": "command",
             "command": "\"$AGENT_BASE/claude/hook\" pre",
-            "timeout": 5
+            "timeout": 600
           }
         ]
       }
@@ -36,7 +50,7 @@
           {
             "type": "command",
             "command": "\"$AGENT_BASE/claude/hook\" post",
-            "timeout": 5
+            "timeout": 600
           }
         ]
       }
@@ -47,7 +61,7 @@
           {
             "type": "command",
             "command": "\"$AGENT_BASE/claude/hook\" stop",
-            "timeout": 5
+            "timeout": 600
           }
         ]
       }
@@ -58,7 +72,18 @@
           {
             "type": "command",
             "command": "\"$AGENT_BASE/claude/hook\" failed",
-            "timeout": 5
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGENT_BASE/claude/hook\" compact",
+            "timeout": 600
           }
         ]
       }
@@ -69,7 +94,7 @@
           {
             "type": "command",
             "command": "\"$AGENT_BASE/claude/hook\" prompt",
-            "timeout": 5
+            "timeout": 600
           }
         ]
       }
@@ -80,7 +105,7 @@
           {
             "type": "command",
             "command": "\"$AGENT_BASE/claude/hook\" permission",
-            "timeout": 5
+            "timeout": 600
           }
         ]
       }
@@ -106,11 +131,30 @@
   "env": {
     "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
     "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h",
-    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS": "0",
+    "MCP_TOOL_TIMEOUT": "660000"
   },
   "theme": "auto",
   "promptCacheTtl": "1h",
   "skillOverrides": {
-    "auto-mode-setup": "off"
-  }
+    "auto-mode-setup": "off",
+    "design-qa-protocol": "off",
+    "artifact-design": "off",
+    "artifact-diagramming": "off",
+    "update-config": "off",
+    "keybindings-help": "off",
+    "code-review": "off",
+    "simplify": "off",
+    "fewer-permission-prompts": "off",
+    "loop": "off",
+    "claude-api": "off",
+    "workflow-authoring": "off",
+    "run": "off",
+    "plugin-authoring": "off",
+    "init": "off",
+    "security-review": "off"
+  },
+  "tui": "default"
 }

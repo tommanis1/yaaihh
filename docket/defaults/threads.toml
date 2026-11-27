@@ -1,0 +1,56 @@
+# Which declarations of this package make the window's threads; each number is an argument's place, from 0.
+owner = { name = "std.comms.Owner-Seated", who = 0 }
+words = { name = "std.comms.TextOf", passage = 0 }
+# Each rule below is a list: the live act first, then the line that restates it from v1 (`yaaihh.v1`).
+open = [
+  { name = "yaaihh.desk.Open-Thread", by = 0, thread = 1, title = 2 },
+  { name = "yaaihh.v1.Thread-Was", thread = 0, id = 1, kind = 2, by = 3, title = 4, at = 5 },
+]
+end = [
+  { name = "yaaihh.desk.End-Thread", thread = 1, how = 2 },
+  { name = "yaaihh.v1.Ended-Was", thread = 0, how = 1, at = 2 },
+]
+said_to = [
+  { name = "std.comms.Owner-Says", passage = 0, to = 1 },
+  { name = "yaaihh.v1.His-Words-To-Were", passage = 0, to = 1 },
+]
+told = [
+  { name = "std.comms.Says-To-Owner", passage = 1 },
+  { name = "yaaihh.v1.Said-To-Him-Was", passage = 0 },
+  { name = "yaaihh.v1.Asked-Him-Was", passage = 0 },
+]
+
+# His words handed to a party: the line that says the delivery came back.
+handed = { name = "yaaihh.desk.Handed", passage = 0, to = 1 }
+
+# When a passage was written: the line that carries its time, in seconds.
+written = { name = "yaaihh.desk.Written", passage = 0, at = 1 }
+
+# A passage put on a thread; with no `by` it is the owner's; `at`, where an argument gives its time in seconds.
+[[post]]
+name = "yaaihh.desk.Owner-Posts"
+passage = 0
+thread = 1
+
+[[post]]
+name = "yaaihh.desk.Post-On"
+by = 0
+passage = 1
+thread = 2
+
+[[post]]
+name = "yaaihh.v1.Passage-Was"
+by = 1
+passage = 0
+thread = 2
+
+[[post]]
+name = "yaaihh.v1.Said-To-Him-Was"
+by = 1
+passage = 0
+thread = 2
+
+[[post]]
+name = "yaaihh.v1.His-Post-Was"
+passage = 0
+thread = 1

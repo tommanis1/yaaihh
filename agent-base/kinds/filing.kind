@@ -1,0 +1,20 @@
+// The owner's words (tickets-patterns semantics.tex, The owner's words; rule File). No longer opened: the owner's
+// message opens a thread (thread.kind); old filings replay as recorded. Each thing the owner types opens
+// a filing, with no opener; the clerk splits it into pieces, each a span of the text with the ticket it belongs on.
+// When the filing closes, the rule File posts each piece on its ticket as the owner's (or answers the owner's step
+// with it, where the piece names the result). What cannot be placed fails the filing, and the owner is told.
+//
+// An agent's turn is no longer filed (paper-research m952): the rule Reply posts a turn given one post as its reply,
+// in the machine. A filing in an old log with `by` (an agent's turn) is no longer filed when replayed.
+/// the owner's words split by the clerk into pieces, each posted on its ticket; no longer opened
+kind filing
+  letter F
+  form text: Text
+  result Filed(pieces: [Piece])
+  raises Unplaced
+  pattern
+    f <- step clerk file(text);
+    match f {
+      Filed(pieces) => return Filed(pieces)
+      Unplaced(why, left) => raise Unplaced(why)
+    }

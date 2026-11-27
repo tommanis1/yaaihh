@@ -1,0 +1,17 @@
+[package]
+name = "docket-driver-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "std.verify's verifier and E2E runner: plans asked of a model, run on the built window live, Attest only on a sealed pass"
+
+[dependencies]
+docket-v2 = { path = "../../docket/v2" }
+yaaihh-e2e = { path = "../../yaaihh-e2e" }
+serde_json.workspace = true
+
+# std.verify run whole on a built window: the proof's and a person's way to run it
+[[bin]]
+name = "verify-run"
+path = "src/main.rs"
+test = false

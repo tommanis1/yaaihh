@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type sub\nNew type sup\nNew type x\n+sub(actor(\"A\"))\n+sup(actor(\"A\"),int(2))\n+sup(actor(\"A\"),int(4))\n+x(2)\n+x(4)\nquery successful\n+x(5)\nquery successful\n#7 > "
+ }
+}

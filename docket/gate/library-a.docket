@@ -1,0 +1,136 @@
+module gate.a
+
+// Library A of the two-library gate: a change is checked under a cap on cost and lands when another
+// worker accepts it. It declares none of the words the engine may not know, and imports nothing.
+
+Fact Worker  Identified by String
+Fact Change  Identified by String
+Fact Check   Identified by String
+Fact Harness Identified by String
+Fact Version Identified by String
+Fact Point   Identified by String
+Fact Power   Identified by String
+
+Fact Lets(harness: Harness, version: Version, point: Point, power: Power)
++Point("before_check").
++Lets("stand-in", "1", "before_check", "Go").
++Lets("stand-in", "1", "before_check", "Skip").
+
+Fact Submitted(change: Change, by: Worker)
+Fact Reviews(change: Change, by: Worker)
+Fact Wanted(change: Change, check: Check)
+Fact Passed(change: Change, check: Check)
+Fact Reported(change: Change)
+Fact Landed(change: Change)
+Fact Flagged(change: Change)
+Fact Used(change: Change, dim: String, n: Int)
+Fact Cap(dim: String, n: Int)
+
++Worker("w1"). +Worker("w2"). +Worker("gate.a").
++Check("unit"). +Check("lint").
++Cap("tokens", 100).
+
+Fact Green(change: Change)
+  Holds when Submitted(change, w) && Not(Exists k : Wanted(change, k) && Not(Passed(change, k)))
+
+Fact Over(change: Change, dim: String)
+  Holds when Used(change, dim, n) && Cap(dim, m) && n > m
+
+// Held by the worker who submitted, claimed by the one who reviews. A report that is not true violates it.
+Duty Owes-Green(holder: Worker, claimant: Worker, change: Change)
+  Holds when    Submitted(change, holder) && Reviews(change, claimant) && Not(Landed(change))
+  Violated when Reported(change) && Not(Green(change))
+
+Act Submit(by: Worker, change: Change, reviewer: Worker)
+  Conditioned by by != reviewer && Not(Exists w : Submitted(change, w))
+  Creates        Submitted(change, by), Reviews(change, reviewer),
+                 Wanted(change, "unit"), Wanted(change, "lint"), Used(change, "tokens", 0)
+
+Act Report(by: Worker, change: Change)
+  Conditioned by Submitted(change, by)
+  Creates        Reported(change)
+
+// Loads. Refused by the closing rule: it would end the duty its actor holds.
+Act Withdraw(by: Worker, change: Change)
+  Conditioned by Submitted(change, by)
+  Terminates     Submitted(change, by)
+
+Act Land(by: Worker, change: Change)
+  Conditioned by Reviews(change, by) && Reported(change) && Green(change)
+  Creates        Landed(change)
+
+Act Tally(by: Worker, change: Change, dim: String, n: Int)
+  Conditioned by Submitted(change, by) && Used(change, dim, s)
+  Terminates     Used(change, dim, s)
+  Creates        Used(change, dim, s + n) When Used(change, dim, s)
+
+Act Flag(by: Worker, change: Change)
+  Conditioned by by == "gate.a"
+  Creates        Flagged(change)
+
+// Performed by the driver that ran the check, never by a program.
+Event Check-Passed(change: Change, check: Check)
+  Creates Passed(change, check)
+
+type Verdict =
+  | Go                Needs "Go"
+  | Skip(why: String) Needs "Skip"
+  | Stop(why: String) Needs "Stop"
+
+// What to do about a check is asked first, and may be answered by any handler.
+Effect Before(point: Point, change: Change, check: Check) -> Verdict Does { return Go }
+// The driver's. On Go it runs the check and performs Check-Passed if it passes; on Skip it answers true.
+Effect Carry(point: Point, change: Change, check: Check, v: Verdict) -> Bool
+// The driver's: a verdict from outside, used by the gate's script only.
+Effect Advise(point: Point, change: Change, check: Check) -> Verdict
+
+// A root arm: a check that has passed is not run again.
+on Before("before_check", change, check) where Passed(change, check) do {
+  return Skip("passed before")
+}
+
+// A reaction: a report that is not true is flagged, by this module.
+on Report(by, change) where Not(Green(change)) do {
+  Flag(self, change)
+}
+
+// Every cost measured inside p is counted against the change; past the cap the rest of p is dropped.
+fn capped<T>(change: Change, p: Program<T>) -> Program<Option<T>> {
+  handle do p with {
+    return x => return Some(x)
+    | Charge(dim, n), k => {
+        Tally(self, change, dim, n);
+        if Over(change, dim) { return None } else { resume k(()) }
+      }
+  }
+}
+
+fn build(change: Change) -> Program<Bool> {
+  iterate round = 1 up to 3 {
+    todo <- return (Foreach k : k When Wanted(change, k));
+    par k in todo up to 2 {
+      v <- perform Before("before_check", change, k);
+      perform Carry("before_check", change, k, v)
+    };
+    if Green(change) {
+      Report(self, change);
+      return Done(true)
+    } else {
+      more <- ...;
+      if more { return Again(round + 1) } else { return Done(false) }
+    }
+  }
+}
+
+// What a party starts. A run begins only by an Act, so each program a party may run has one.
+Act Build(by: Worker, change: Change) Returns Option<Bool>
+  Conditioned by Submitted(change, by)
+  Does { do capped(change, build(change)) }
+
+// The gate's probe of the boundary: a verdict from outside is carried without being read.
+Act Probe(by: Worker, change: Change) Returns Bool
+  Conditioned by Submitted(change, by)
+  Does {
+    v <- perform Advise("before_check", change, "unit");
+    perform Carry("before_check", change, "unit", v)
+  }

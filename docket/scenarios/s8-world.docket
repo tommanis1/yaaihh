@@ -1,0 +1,7 @@
+module scenario.s8
+
+import std.hooks as H
+import std.comms as C
+
+// Scenario 8's passages: one of the owner's, one of the agent's.
++C.Node("h1"). +C.Node("n1").

@@ -1,0 +1,22 @@
+// A question (tickets-patterns story.tex, A question, escalated): an agent asks, the lead answers, dismisses it with
+// a reason, or passes it up to the owner with why. The asker opened it, so it is told once, when it closes, with the
+// answer. Who answers is policy's (fills for role lead). A project with no lead running (a new one, its first agent
+// asking) passes it up to the owner, saying so: no `NoWorker` stop (the owner, paper-research N-1978 p2).
+/// an agent's question: the lead answers it, dismisses it, or passes it up to the owner
+kind question
+  form ask: Text, context: Text?
+  result Answered(text: Text) | Dismissed(why: Text)
+  pattern
+    a <- try { step role lead answer(ask, context) } handle {
+      NoWorker(w) => return Up("no lead is running in this project")
+    };
+    match a {
+      Answer(text) => return Answered(text)
+      Dismiss(why) => return Dismissed(why)
+      Up(why) =>
+        o <- step owner reply(ask, context, why);
+        match o {
+          Answer(text) => return Answered(text)
+          Dismiss(why) => return Dismissed(why)
+        }
+    }

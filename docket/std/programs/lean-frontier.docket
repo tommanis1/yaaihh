@@ -1,0 +1,22 @@
+module std.programs.lean_frontier
+
+import std.adapt as A
+import std.rails as R
+
+// Lean frontier: the task, its conditions and its files as they are, tools untouched, and a sharp check at the end,
+// so a model that plans its own steps is not held to steps it does not need.
+
++A.Program-Template("lean-frontier", "direct", "minimal", "lean", "medium").
++A.For-Class("lean-frontier", "scoped"). +A.For-Class("lean-frontier", "deep").
++A.For-Autonomy("lean-frontier", "frontier").
++A.For-Context("lean-frontier", "long").   // it is handed the whole spec, not a step of it
++A.Leaner("lean-frontier", "guided-worker").
+
++A.Brief("lean", "Your task, its written conditions and the files are yours to read whole; no steps are laid down for you. The work is done only when a party of another model family has checked each written condition against the thing itself, so when you claim it, say what to check and how, not that it is done.").
+
+// Sharp: with no steps laid down, every piece of work run under it owes, besides its own conditions, that it does
+// what was asked, found so by a looker of another family (std.rails' Owes-Valid-Result).
++R.Condition("does_what_was_asked").
+Extend Fact R.Required
+  Holds when R.Assigned(w, target) && A.Of-Kind(target, k) && A.Selected-Program(w, k, "lean-frontier")
+             && R.Condition(cond) && cond == "does_what_was_asked"

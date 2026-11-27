@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type a\nNew type b\nNew type c\nNew type pythagorean\n+pythagorean(a(3),b(4),c(5))\n+pythagorean(a(4),b(3),c(5))\n+pythagorean(a(5),b(12),c(13))\n+pythagorean(a(6),b(8),c(10))\n+pythagorean(a(8),b(6),c(10))\n+pythagorean(a(8),b(15),c(17))\n+pythagorean(a(9),b(12),c(15))\n+pythagorean(a(12),b(5),c(13))\n+pythagorean(a(12),b(9),c(15))\n+pythagorean(a(12),b(16),c(20))\n+pythagorean(a(15),b(8),c(17))\n+pythagorean(a(16),b(12),c(20))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n#7 > "
+ }
+}

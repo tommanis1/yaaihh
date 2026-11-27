@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type family-of\nNew type family-of-closure\nNew type person\n+family-of(person(\"Alice\"),person(\"Bob\"))\n+family-of-closure(person(\"Alice\"),person(\"Bob\"))\n+family-of-closure(person(\"Bob\"),person(\"Alice\"))\n+family-of-closure(person(\"Alice\"),person(\"Chloe\"))\n+family-of(person(\"Bob\"),person(\"Chloe\"))\n+family-of-closure(person(\"Bob\"),person(\"Chloe\"))\n+family-of-closure(person(\"Chloe\"),person(\"Alice\"))\n+family-of-closure(person(\"Chloe\"),person(\"Bob\"))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n#10 > "
+ }
+}

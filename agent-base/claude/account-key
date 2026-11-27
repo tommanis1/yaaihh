@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# account-key FILE: print the API key in FILE, for Claude Code's `apiKeyHelper` in the settings of a session that
+# runs on one of the owner's key accounts (roster; the file is ROOT/claude/ID/key, written by `coord account key ID`).
+#
+# The key goes from its file to Claude Code's pipe here and nowhere else: FILE is the argument, so the key is in no
+# command line, no environment and no settings file. A file others can read is not used.
+f=${1:?account-key FILE}
+[ -f "$f" ] && [ ! -L "$f" ] || { echo "account-key: no key file at $f (coord account key ID)" >&2; exit 1; }
+[ "$(stat -c %a "$f")" = 600 ] || { echo "account-key: $f is not the owner's alone (mode $(stat -c %a "$f"))" >&2; exit 1; }
+exec cat "$f"

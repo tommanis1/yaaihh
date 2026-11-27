@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type increment\nNew type maintain-odd\nNew type x\n+actor(\"Alice\")\n+increment(actor(\"Alice\"))\n+actor(\"Bob\")\n+maintain-odd(actor(\"Alice\"),actor(\"Bob\"))\n+x(1)\nquery successful\nexecuted transition: \nincrement(actor(\"Alice\")) (ENABLED)\nviolations:\n  violated duty!: maintain-odd(actor(\"Alice\"),actor(\"Bob\"))\n-x(1)\n+x(2)\nquery successful\nviolations:\n  violated duty!: maintain-odd(actor(\"Alice\"),actor(\"Bob\"))\nexecuted transition: \nincrement(actor(\"Alice\")) (ENABLED)\n-x(2)\n+x(3)\nquery successful\nexecuted transition: \nincrement(actor(\"Alice\")) (ENABLED)\nviolations:\n  violated duty!: maintain-odd(actor(\"Alice\"),actor(\"Bob\"))\n-x(3)\n+x(4)\nquery successful\nviolations:\n  violated duty!: maintain-odd(actor(\"Alice\"),actor(\"Bob\"))\n#12 > "
+ }
+}

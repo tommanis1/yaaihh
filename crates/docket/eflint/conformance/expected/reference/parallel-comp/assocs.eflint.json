@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type a\nNew type performed\nNew type b\nNew type c\nexecuted transition: \na() \nexecuted transition: \nb() \nexecuted transition: \nc() \n+performed(\"A\")\nquery successful\nquery successful\nquery successful\nexecuted transition: \na() \nexecuted transition: \nb() \nexecuted transition: \nc() \n-performed(\"A\")\n-performed(\"C\")\n+performed(\"B\")\nquery successful\nquery successful\nquery successful\nexecuted transition: \na() \nexecuted transition: \nb() \nexecuted transition: \nc() \n-performed(\"B\")\n+performed(\"A\")\n+performed(\"C\")\nquery successful\nquery successful\nquery successful\n#15 > "
+ }
+}

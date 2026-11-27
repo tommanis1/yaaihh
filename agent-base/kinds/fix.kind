@@ -1,0 +1,34 @@
+// The fix of an accepted claim: whoever fills the role looks first for what already does part of it, and builds the fix
+// on that (seek.call's `seek`, then `repair` with what it found: the existing piece extended, never a second copy);
+// then reviewed by two short-lived agents at once, revised up to three rounds.
+/// the fix of an accepted claim: built on what exists, reviewed by two agents at once, revised up to three rounds
+kind fix
+  form what: Text, evidence: Text, where: Ref, note: Text?, branch: Ref?
+  result Ref
+  raises NoFix, NeedsDecision, Exhausted, Stalled
+  pattern
+    // no fixer running: told as no fix, in words, and the claim ends with it (N-1978 p2)
+    found <- try { step role fixer seek(what, where, note) } handle {
+      NoWorker(w) => raise NoFix("no fixer is running in this project")
+    };
+    r <- step role fixer repair(what, evidence, where, note, branch, found);
+    match r {
+      Cannot(why) => raise NoFix(why)
+      Commit(first) =>
+        iterate c = first up to 3 {
+          (ok, alt) <- par(step fresh fixes(what, evidence, c, branch), step fresh better(what, evidence, c, branch));
+          match (ok, alt) {
+            (Unclear, _) => raise NeedsDecision(c)
+            (Fixes, Best) => return Done(c)
+            (DoesNot(why), Best) =>
+              n <- step role fixer revise(c, why, none);
+              match n { Commit(next) => return Again(next, 1), Cannot(w) => raise NoFix(w) }
+            (Fixes, Better(how)) =>
+              n <- step role fixer revise(c, none, how);
+              match n { Commit(next) => return Again(next, 1), Cannot(w) => raise NoFix(w) }
+            (DoesNot(why), Better(how)) =>
+              n <- step role fixer revise(c, why, how);
+              match n { Commit(next) => return Again(next, 2), Cannot(w) => raise NoFix(w) }
+          }
+        }
+    }

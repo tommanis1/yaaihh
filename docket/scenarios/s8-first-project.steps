@@ -1,0 +1,47 @@
+# The smallest project (`yaaihh.first`): his words reach an agent and its answer reaches him, with the desk alone.
+# The form of its lines is in the head of docket/gate/script-b.steps. Every line of his window and of the agent's
+# turn is a driver's; the passage's words and the delivery are the stand-in's.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/rails.docket
+load ../std/comms.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../defaults/desk.docket
+load ../defaults/first.docket
+load s8-world.docket
+# all this text asks of drivers beyond the two answered below: a command (the storage rule of std.budgets), and the
+# three of a copy on busy, which this project never performs: no agent is busy where nobody asked for copies
+carries: Agy-Kick, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Join-Back, Model, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Spin-Off
+# he is seated, seats one agent, and opens a thread
+driver: Owner-Seated(o1) -> performed
+o1: Seat(o1, w1, front) -> performed -> ended ()
+o1: Open-Thread(o1, t1, the-outline) -> performed -> ended ()
+# his post, to the agent: delivered once, and the record says it was handed over
+stand-in: TextOf(h1) -> Keep the outline small.
+stand-in: Deliver(o1, w1, Keep the outline small.) -> ""
+driver: Owner-Says(h1, w1) -> performed
+driver: Owner-Posts(h1, t1) -> performed
+driver: Written(h1, 1764000000) -> performed
+record has yaaihh.desk.Written(h1, 1764000000)
+holds Heard(w1, h1)
+holds With-You(w1, h1)
+holds His(h1)
+# the agent answers on the thread and says it to him
+driver: Spoke(w1, n1) -> performed
+w1: Post-On(w1, n1, t1) -> performed -> ended ()
+holds Posted(n1, t1)
+holds Among-Agents(n1)
+w1: Says-To-Owner(w1, n1) -> performed -> ended ()
+holds For-Owner-Inbox(n1)
+holds With-You(w1, n1)
+holds Unseen(n1)
+not Among-Agents(n1)
+not Crossed(n1)
+# he opens it
+o1: Open-Post(o1, n1) -> performed -> ended ()
+not Unseen(n1)

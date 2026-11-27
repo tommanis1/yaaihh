@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+"""machines-sample: the one file of numbers behind the devices on Home (the owner's N-1104 p1070, "add devices";
+docket-edge7's page docs/specs/devices.md, step 1, paper-research N-1446 p2804; extending kpi-data's sampler of
+here-2's N-1136, whose job list and builds left it: the engine reads the runner's job files itself, jobs.rs).
+
+  python3 -I machines-sample      one sample, written and printed: what coordd runs when Home asks and the file is
+                                  older than half a minute (jobs.rs FRESH_SECS; nothing of ours runs or talks to the
+                                  tower while nobody looks, paper-research N-412 p1958). It ends within about 30 s at
+                                  worst (the build machine not answering: ssh gives up after 6 s); coordd waits on it
+                                  with no limit of its own and keeps the last file until this run replaces it.
+
+It writes $MACHINES_OUT (~/agent-coord/machines/machines.json) whole: a temp file beside it, then a rename.
+Reading only; nothing listens; no network but the runner's own ssh link to the build machine named in the runner's
+`machines` file ($MACHINES_RUNNER, ~/agent-coord/build-runner), whose key ssh is given by path and never opened here.
+One read, the same text on each device (READ below): run with `sh -c` on the device the engine runs on, and as the one
+ssh command on the build machine. It reads
+  systemd-detect-virt; /proc/loadavg; nproc; /proc/cpuinfo's first model name; /proc/meminfo's MemTotal and MemAvailable;
+  /sys/class/hwmon/*/temp*_input with its chip's name, its own label and its temp*_crit, else temp*_max, and
+  /sys/class/thermal/thermal_zone*/temp with its type and critical trip point (none in WSL or a VM: left out);
+  nvidia-smi's one query of name, temperature, use and memory, where nvidia-smi is installed;
+  df -Pk of / and of $HOME;
+  systemctl --user list-units of our services: on the engine's device the engines, the gateway, its usage reader, the
+  runner and the relay; on the build machine its runner only;
+  each NVMe drive's model and heat (/sys/class/nvme, its hwmon), and its Health Information log (page 0x02: wear,
+  warnings, media errors, hours) where its /dev node opens for this user; each sd disk's health through the smartctl
+  yaaihh.toml's `[devices] smartctl` names, only when its SHA-256 is `smartctl_sha256` there.
+Each device's physical host: yaaihh.toml's `[[device]] name = …, host = …` (beside the machines folder); else, for
+the engine's own device in WSL or on bare metal, the machine's own hostname (WSL's is the Windows machine's name).
+Nothing else, and nothing of the tower's own system (Proxmox): that needs a login there, which waits for the owner's
+word (p2804, p2807). A number not read is left out, never guessed: a build machine that does not answer has `on`
+false with `asked`, `last_on` and `why`. The Windows row, the projects and their agents, and the jobs come from the
+window and the engine, not from here (N-1446 p2814).
+Not in the file: any command line, path, address, pid or key; no host name but the engine's machine's as its `host`."""
+import json, os, re, shlex, socket, subprocess, sys, time, tomllib
+from datetime import datetime
+
+H = os.path.expanduser("~")
+OUT = os.environ.get("MACHINES_OUT") or H + "/agent-coord/machines/machines.json"
+RUNNER = os.environ.get("MACHINES_RUNNER") or H + "/agent-coord/build-runner"
+SERVER_UNITS = "'coordd-*.service' cpa-core.service cpa-usage.service build-runner.service coord-relay.service"
+JOBS_UNITS = "build-runner.service"
+
+
+def config(path):
+    """yaaihh.toml's `[devices]` and `[[device]]` (the yaaihh-wide folder, beside the machines folder); none: empty."""
+    try:
+        with open(path, "rb") as f:
+            c = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}, {}
+    devices = c.get("devices") if isinstance(c.get("devices"), dict) else {}
+    hosts = {d["name"]: d["host"] for d in c.get("device") or [] if isinstance(d, dict) and isinstance(d.get("name"), str) and isinstance(d.get("host"), str) and d["host"].strip()}
+    return devices, hosts
+
+
+DEVICES, HOSTS = config(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(OUT))), "yaaihh.toml"))
+# the SATA fallback: a smartctl run only where its file's SHA-256 is the pinned one, on each sd disk
+SMARTCTL, SMARTCTL_SHA = str(DEVICES.get("smartctl") or ""), str(DEVICES.get("smartctl_sha256") or "").lower()
+SMART = ("[ -x %s ] && echo %s | sha256sum -c --status 2>/dev/null && for d in /sys/block/sd*; do [ -e \"$d\" ] && "
+         "%s --json=c -H -A \"/dev/${d##*/}\" 2>/dev/null; done; " % (shlex.quote(SMARTCTL), shlex.quote(SMARTCTL_SHA + "  " + SMARTCTL), shlex.quote(SMARTCTL))
+         if SMARTCTL and re.fullmatch(r"[0-9a-f]{64}", SMARTCTL_SHA) else "")
+# each NVMe drive: model and hwmon heat from sysfs; its Health Information log (0x02) by NVME_IOCTL_ADMIN_CMD when its
+# /dev node opens (offsets as disk_health.rs `from_log`); one JSON line each
+NVME = r"""
+import ctypes, fcntl, glob, json, os, struct
+for n in sorted(glob.glob("/sys/class/nvme/nvme*")):
+    try:
+        h = {"name": open(n + "/model").read().strip()}
+    except OSError:
+        continue
+    for t in glob.glob(n + "/hwmon*/temp1_input")[:1]:
+        try:
+            h["temp_c"] = round(int(open(t).read()) / 1000, 1)
+        except (OSError, ValueError):
+            pass
+    try:
+        b = ctypes.create_string_buffer(512)
+        cmd = bytearray(struct.pack("<BBHIIIQQII6III", 2, 0, 0, 0xFFFFFFFF, 0, 0, 0, ctypes.addressof(b), 0, 512, 0x7F0002, 0, 0, 0, 0, 0, 0, 0))
+        fd = os.open("/dev/" + os.path.basename(n), os.O_RDONLY)
+        try:
+            ok = fcntl.ioctl(fd, 0xC0484E41, cmd, True) == 0
+        finally:
+            os.close(fd)
+        r = b.raw
+        if ok:
+            k = int.from_bytes(r[1:3], "little")
+            h.update(critical=r[0], wear_pct=r[5], power_on_hours=int.from_bytes(r[128:144], "little"), media_errors=int.from_bytes(r[160:176], "little"))
+            if k:
+                h["temp_c"] = round(k - 273.15, 1)
+    except OSError:
+        pass
+    print(json.dumps(h))
+"""
+WHAT = {"cpa-core": "gateway", "cpa-usage": "usage reader", "build-runner": "runner", "coord-relay": "relay"}
+READ = ("export XDG_RUNTIME_DIR=/run/user/$(id -u); "
+        "echo ==virt; systemd-detect-virt 2>/dev/null; "
+        "echo ==load; cat /proc/loadavg; echo ==cores; nproc; echo ==cpu; grep -m1 '^model name' /proc/cpuinfo; "
+        "echo ==mem; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; "
+        "echo ==temps; for f in /sys/class/hwmon/hwmon*/temp*_input; do [ -r \"$f\" ] || continue; b=${f%%_input}; "
+        "l=$(cat \"${b}_label\" 2>/dev/null); printf '%%s|%%s|%%s\\n' \"$(cat \"${f%%/*}/name\" 2>/dev/null)${l:+ $l}\" \"$(cat \"$f\")\" "
+        "\"$(cat \"${b}_crit\" 2>/dev/null || cat \"${b}_max\" 2>/dev/null)\"; done; "
+        "for z in /sys/class/thermal/thermal_zone*; do [ -r \"$z/temp\" ] || continue; c=; "
+        "for t in \"$z\"/trip_point_*_type; do [ \"$(cat \"$t\" 2>/dev/null)\" = critical ] && c=$(cat \"${t%%_type}_temp\" 2>/dev/null) && break; done; "
+        "printf '%%s|%%s|%%s\\n' \"$(cat \"$z/type\" 2>/dev/null)\" \"$(cat \"$z/temp\")\" \"$c\"; done; "
+        "echo ==gpu; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi "
+        "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null; "
+        "echo ==disks; df -Pk / \"$HOME\" 2>/dev/null; "
+        "echo ==units; systemctl --user list-units --all --plain --no-legend --type=service %s 2>/dev/null; "
+        "echo ==nvme; python3 -I -c " + shlex.quote(NVME).replace("%", "%%") + " 2>/dev/null; "
+        "echo ==smart; " + SMART.replace("%", "%%") +
+        "echo ==end")
+
+
+def iso(t=None):
+    return datetime.fromtimestamp(time.time() if t is None else t).astimezone().isoformat(timespec="seconds")
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def number(s):
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def load_mem(loadavg, meminfo):
+    """load1, mem_total_gb, mem_used_gb from the two /proc texts; only what parses."""
+    out = {}
+    try:
+        out["load1"] = round(float(loadavg.split()[0]), 1)
+    except (AttributeError, ValueError, IndexError):
+        pass
+    m = dict(re.findall(r"^(MemTotal|MemAvailable):\s+(\d+) kB", meminfo or "", re.M))
+    if "MemTotal" in m and "MemAvailable" in m:
+        out["mem_total_gb"] = round(int(m["MemTotal"]) / 2**20, 1)
+        out["mem_used_gb"] = round((int(m["MemTotal"]) - int(m["MemAvailable"])) / 2**20, 1)
+    return out
+
+
+# At most this many sensors in `temps`, the hottest: a card says three (paper-research N-1446 p3058).
+TEMPS = 8
+
+
+def temps(text):
+    """Every sensor READ found, `NAME|MILLIDEGREES|CRIT` a line: hwmon's (its chip's name and its own label, its crit
+    else max) and the thermal zones' (their type, their critical trip point). {temp_c, temp_crit_c} of the hottest, as
+    before, and `temps`: [{name, c, crit_c}], hottest first, a sensor seen twice (a zone that hwmon also gives) once, at
+    most TEMPS; nothing when none reads (WSL, a VM: no sensor)."""
+    seen, out = set(), []
+    for line in (text or "").splitlines():
+        w = line.split("|")
+        if len(w) != 3:
+            continue
+        t, crit = number(w[1]), number(w[2])
+        if t is None or t <= 0:
+            continue
+        e = {"name": w[0].strip() or "sensor", "c": round(t / 1000, 1)}
+        if crit is not None and crit > 0:
+            e["crit_c"] = round(crit / 1000, 1)
+        # a zone that hwmon gives too: the same chip's first word ("acpitz", "acpitz temp1"), heat and crit
+        key = (e["name"].split()[0], e["c"], e.get("crit_c"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    if not out:
+        return {}
+    out.sort(key=lambda e: -e["c"])
+    best = {"temp_c": out[0]["c"]}
+    if "crit_c" in out[0]:
+        best["temp_crit_c"] = out[0]["crit_c"]
+    best["temps"] = out[:TEMPS]
+    return best
+
+
+def gpu(text):
+    """nvidia-smi's first card: {name, temp_c, busy_pct, mem_used_gb, mem_total_gb}, each only when it reads."""
+    line = next((l for l in (text or "").splitlines() if l.strip()), None)
+    if line is None:
+        return None
+    w = [x.strip() for x in line.split(",")]
+    if len(w) < 5 or not w[0]:
+        return None
+    out = {"name": w[0]}
+    for key, s, scale in (("temp_c", w[1], 1), ("busy_pct", w[2], 1), ("mem_used_gb", w[3], 1024), ("mem_total_gb", w[4], 1024)):
+        v = number(s)
+        if v is not None:
+            out[key] = round(v / scale, 1)
+    return out
+
+
+def disks(text):
+    """df -Pk's lines: [{name (where it is mounted), free_gb, total_gb}], one per mount."""
+    out, seen = [], set()
+    for line in (text or "").splitlines():
+        w = line.split()
+        if len(w) < 6 or not w[1].isdigit() or not w[3].isdigit():
+            continue
+        mount = " ".join(w[5:])
+        if mount in seen:
+            continue
+        seen.add(mount)
+        out.append({"name": mount, "free_gb": round(int(w[3]) / 2**20, 1), "total_gb": round(int(w[1]) / 2**20, 1)})
+    return out
+
+
+def services(text):
+    """systemctl's lines: [{unit, what, on}]; `what` is the word the window shows."""
+    out = []
+    for line in (text or "").splitlines():
+        w = [x for x in line.split() if x != "●"]
+        if len(w) < 3 or not w[0].endswith(".service"):
+            continue
+        unit = w[0][:-len(".service")]
+        what = "engine " + unit[len("coordd-"):] if unit.startswith("coordd-") else WHAT.get(unit)
+        if what:
+            out.append({"unit": unit, "what": what, "on": w[2] == "active"})
+    return out
+
+
+def health(nvme_text, smart_text):
+    """Each disk's health: an NVMe drive's (`NVME`'s lines); a SATA disk's through the pinned smartctl."""
+    out = []
+    keys = {"name": str, "temp_c": (int, float), "wear_pct": int, "critical": int, "media_errors": int, "power_on_hours": int}
+    for line in (nvme_text or "").splitlines():
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        h = {k: v for k, v in j.items() if k in keys and isinstance(v, keys[k]) and not isinstance(v, bool)} if isinstance(j, dict) else {}
+        if h:
+            out.append(h)
+    for line in (smart_text or "").splitlines():
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        attrs = {a.get("id"): a for a in (j.get("ata_smart_attributes") or {}).get("table") or [] if isinstance(a, dict)}
+        h = {}
+        if isinstance(j.get("model_name"), str):
+            h["name"] = j["model_name"]
+        passed = (j.get("smart_status") or {}).get("passed")
+        if isinstance(passed, bool):
+            h["critical"] = 0 if passed else 4
+        for key, val in (("temp_c", (j.get("temperature") or {}).get("current")), ("power_on_hours", (j.get("power_on_time") or {}).get("hours"))):
+            if isinstance(val, (int, float)):
+                h[key] = val
+        bad = [(attrs[i].get("raw") or {}).get("value") for i in (5, 197, 198) if i in attrs]
+        if bad and all(isinstance(b, int) for b in bad):
+            h["media_errors"] = sum(bad)
+        life = next((attrs[i].get("value") for i in (177, 231, 233) if i in attrs), None)
+        if isinstance(life, (int, float)):
+            h["wear_pct"] = max(0, 100 - life)
+        if h:
+            out.append(h)
+    return out
+
+
+def device(parts):
+    """One device's numbers from its READ answer ({section: text})."""
+    d = {}
+    virt = (parts.get("virt") or "").strip()
+    if virt:
+        d["virt"] = virt
+    if (parts.get("cores") or "").strip().isdigit():
+        d["cores"] = int(parts["cores"])
+    model = (parts.get("cpu") or "").partition(":")[2].strip()
+    if model:
+        d["cpu_model"] = model
+    d.update(load_mem(parts.get("load"), parts.get("mem")))
+    d.update(temps(parts.get("temps")))
+    g = gpu(parts.get("gpu"))
+    if g:
+        d["gpu"] = g
+    ds = disks(parts.get("disks"))
+    if ds:
+        d["disks"] = ds
+    hs = health(parts.get("nvme"), parts.get("smart"))
+    if hs:
+        d["health"] = hs
+    ss = services(parts.get("units"))
+    if ss:
+        d["services"] = ss
+    return d
+
+
+def sections(out):
+    """READ's answer as {section: text}, or None when it did not reach `==end`."""
+    if "==end" not in (out or ""):
+        return None
+    parts, name = {}, None
+    for line in out.splitlines():
+        if line.startswith("=="):
+            name = line[2:]
+            parts[name] = []
+        elif name:
+            parts[name].append(line)
+    return {k: "\n".join(v) for k, v in parts.items()}
+
+
+def here():
+    """READ on this device, the engine's own."""
+    try:
+        r = subprocess.run(["sh", "-c", READ % SERVER_UNITS], capture_output=True, text=True, timeout=25, stdin=subprocess.DEVNULL)
+        return sections(r.stdout) or {}
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+
+
+def machine():
+    """(NAME, USER@HOST) of the build machine, as the runner reads its `machines` file; else None."""
+    for line in (read(RUNNER + "/machines") or "").splitlines():
+        w = line.split("#", 1)[0].split()
+        if len(w) >= 2 and re.fullmatch(r"[A-Za-z0-9_.-]+", w[0]) and re.fullmatch(r"[a-z_][a-z0-9_-]*@[A-Za-z0-9_.-]+", w[1]):
+            return w[0], w[1]
+    return None
+
+
+def ask(host):
+    """READ on the build machine as {section: text}, or None when it does not answer. The runner's own ssh line."""
+    argv = ["ssh", "-F", "none", "-i", RUNNER + "/machine-key", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
+            "-o", "ForwardAgent=no", "-o", "UserKnownHostsFile=" + RUNNER + "/known_hosts", "-o", "StrictHostKeyChecking=yes",
+            "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", host, READ % JOBS_UNITS]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=25, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return sections(r.stdout) if r.returncode == 0 else None
+
+
+def last_on_before():
+    """When the build machine last answered, from the sample this one replaces."""
+    try:
+        b = json.loads(read(OUT) or "").get("build_machine") or {}
+    except (ValueError, AttributeError):
+        return None
+    return b.get("asked") if b.get("on") else b.get("last_on")
+
+
+def sample():
+    now = iso()
+    server = device(here())
+    server = {"name": "WSL" if server.get("virt") == "wsl" else "server", "here": True, "roles": ["server"], "on": True, "asked": now, **server}
+    doc = {"read": now, "devices": [server]}
+    m = machine()
+    if m:
+        a = ask(m[1])
+        jobs = {"name": m[0], "roles": ["jobs"], "on": a is not None, "asked": now}
+        if a is None:
+            last = last_on_before()
+            if last:
+                jobs["last_on"] = last
+            jobs["why"] = "no answer"
+        else:
+            jobs.update(device(a))
+            jobs["runner"] = any(s["unit"] == "build-runner" and s["on"] for s in jobs.get("services", []))
+        doc["devices"].append(jobs)
+        # the engine's jobs reader (jobs.rs `machine`) reads this one
+        doc["build_machine"] = {k: jobs[k] for k in ("name", "on", "asked", "last_on") if k in jobs}
+    for d in doc["devices"]:
+        if HOSTS.get(d["name"]):
+            d["host"] = HOSTS[d["name"]]
+        elif d.get("here") and d.get("virt") in ("wsl", "none"):
+            # WSL's hostname is its Windows machine's name, the window's COMPUTERNAME: one host
+            d["host"] = socket.gethostname()
+    return doc
+
+
+def write(doc):
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    tmp = OUT + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(doc, f, indent=1)
+        f.write("\n")
+    os.replace(tmp, OUT)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:]:
+        sys.stdout.write(__doc__ + "\n")
+        sys.exit(2)
+    d = sample()
+    write(d)
+    json.dump(d, sys.stdout, indent=1)
+    print()

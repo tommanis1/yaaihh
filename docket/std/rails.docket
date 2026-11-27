@@ -1,0 +1,348 @@
+module std.rails
+
+import std.hooks as H
+import std.comms as C
+
+// Composable, opt-in anti-drift & verification guardrails.
+// An agent runs unshackled where its project leaves these handlers out.
+//
+//   1  contracts        what done means is written before the work; whoever did the work never says it is met
+//   2  made-up rules    a looker of another model family holds each rule a party lays down against his words
+//   3  guards           nobody edits what judges their own work, weakens a test, or makes a second copy
+//   4  closing          nothing is accepted by the one who worked on it
+//   5  with_rails       the handlers, and who is held by them
+//
+// Who is held: a party is `Railed` when its project says so, and the project says so for exactly the parties it
+// runs under `with_rails`. Every rule below that could bind a party who did not opt in is conditioned on it.
+//
+// Who acts. A looker is a model answering one call; it performs nothing. Its finding is recorded by the module
+// whose reaction asked it, because a reaction runs as its module (spec 8.8). `Verifier-Module` names the modules
+// that may record a looker's finding; the owner records his own.
+
+Fact Artifact  Identified by String
+Fact Condition Identified by String
+Fact Fault     Identified by String
+Fact Family    Identified by String                 // a model's maker: the project says it for each party
+Fact Of-Family(who: H.Party, family: Family)
+Fact Other-Family(a: H.Party, b: H.Party)
+  Holds when Of-Family(a, f) && Of-Family(b, g) && f != g
+Act State-Family(owner: H.Party, who: H.Party, family: Family)   // said when the party is seated
+  Conditioned by C.Role(owner, "owner")
+  Terminates     Of-Family(who, f) When Of-Family(who, f)
+  Creates        Of-Family(who, family)
+// the driver's: a party of that role with a session, of another family than each of THAN
+Effect Pick-Other(role: String, than: List<H.Party>) -> H.Party
+Fact Railed(who: H.Party)                           // the project's
+Fact Verifier-Module(who: H.Party)
++H.Party("std.rails"). +Verifier-Module("std.rails").
+
+// ===== 1. Pre-Work Valid-Result Contracts (Dependent-Style Refinement Duties) ====================================
+//     open  ->  claimed  ->  verified | violated
+// Each state is worked out from the facts below; none is set. The engine's closing rule (spec 9) does the rest:
+// the holder of a duty cannot end it or clear its violation by any act, so whatever is written here, the one who
+// did the work is never the one who closes it.
+
+Fact Assigned(who: H.Party, target: Artifact)
+Fact Given-By(target: Artifact, giver: H.Party)
+Fact Required(target: Artifact, cond: Condition)
+Fact Claimed-Done(who: H.Party, target: Artifact)
+Fact Verified(target: Artifact, cond: Condition)
+Fact Refuted(target: Artifact, cond: Condition)     // a verifier looked, and it is not met
+Fact Accepted(target: Artifact)
+
+Fact Unclaimed(target: Artifact)
+  Holds when Assigned(w, target) && Not(Claimed-Done(w, target))
+Fact Awaiting(target: Artifact, cond: Condition)    // claimed, and nobody else has looked at this claim
+  Holds when Claimed-Done(w, target) && Required(target, cond) && Not(Verified(target, cond))
+Fact All-Verified(target: Artifact)
+  Holds when Claimed-Done(w, target) && Not(Exists c : Required(target, c) && Not(Verified(target, c)))
+
+// Agents can ONLY Claim-Done; closing to Verified/Accepted requires independent verifier or owner.
+// Violated when a verifier found a condition not met; it stays so until a verifier finds the mended work met.
+Duty Owes-Valid-Result(holder: H.Party, claimant: H.Party, target: Artifact, cond: Condition)
+  Holds when    Assigned(holder, target) && Given-By(target, claimant) && Required(target, cond) && Not(Verified(target, cond))
+  Violated when Refuted(target, cond)
+
+// Edge: a claim with nothing required. `All-Verified` would hold at once, and the work would be done by saying so.
+// A claim needs at least one condition written before it.
+Act Claim-Done(actor: H.Party, target: Artifact)
+  Conditioned by Assigned(actor, target) && (Exists c : Required(target, c))
+  Creates        Claimed-Done(actor, target)
+
+// A finding is the owner's own, or a looker's of another family than the claimant, recorded by a verifier module.
+Fact May-Find(actor: H.Party, by: H.Party, target: Artifact)
+  Holds when Claimed-Done(w, target) && Not(Assigned(by, target))
+             && ((C.Role(actor, "owner") && by == actor)
+                 || (Verifier-Module(actor) && C.Role(by, "looker") && Other-Family(by, w)))
+
+Act Verify-Condition(actor: H.Party, by: H.Party, target: Artifact, cond: Condition)
+  Conditioned by May-Find(actor, by, target) && Required(target, cond) // independent check, never self-grading
+  Creates        Verified(target, cond)
+  Terminates     Refuted(target, cond)
+
+Act Refute-Condition(actor: H.Party, by: H.Party, target: Artifact, cond: Condition, why: String)
+  Conditioned by May-Find(actor, by, target) && Required(target, cond)
+  Creates        Refuted(target, cond)
+  Terminates     Verified(target, cond)
+               , Claimed-Done(w, target) When Claimed-Done(w, target)   // back to open: it is owed again
+
+// The look. A claim by a railed party is looked at as soon as it is made: one call for each condition still
+// awaiting, to a looker with none of the claimant's context, and this module records what it found. A condition
+// that a program checks, or that can only be looked at once something else exists, is the project's
+// (`Checked-Elsewhere`), and is left to it.
+type Finding = Met | Unmet(why: String)
+Fact Checked-Elsewhere(cond: Condition)               // the project's
+Call Check-Condition(thing: String, cond: String) -> Finding
+  Template """
+  This was asked for, written before the work began: {{ cond }}
+  Look at the thing itself, not at what was said about it: {{ thing }}
+  Is it met? A fix that only makes the one failing case pass, where the general thing was asked for, does not
+  meet it. Return Met, or Unmet with what is off.
+  """
+fn look(target: Artifact) -> Program<Unit> {
+  claimants <- return (Foreach w : w When Claimed-Done(w, target));
+  looker <- perform Pick-Other("looker", claimants);   // of another family than the claimant, as `May-Find` asks
+  thing  <- perform C.TextOf("{{ target }}");
+  par c in (Foreach c : c When Awaiting(target, c) && Not(Checked-Elsewhere(c))) {
+    found <- do C.step(looker, Check-Condition(thing, "{{ c }}"));
+    match found {
+      | Met        => Verify-Condition(self, looker, target, c)
+      | Unmet(why) => Refute-Condition(self, looker, target, c, why)
+    }
+  };
+  return ()
+}
+on Claim-Done(who, target) where Railed(who) do {
+  do look(target)
+}
+
+// Edge: a verified thing that changes afterwards. A verification is of the thing as it was. When the artifact
+// changes, what was verified is not, and what was accepted is not.
+Event Artifact-Changed(target: Artifact)             // a driver's line: a commit or an edit touched it
+  Terminates Verified(target, c) When Verified(target, c)
+           , Accepted(target)
+
+// Work is given back by asking: the holder says why, and whoever gave it, or the owner, releases it.
+Fact Asked-Release(who: H.Party, target: Artifact, reason: String)
+Act Ask-Release(actor: H.Party, target: Artifact, reason: String)
+  Conditioned by Assigned(actor, target)
+  Creates        Asked-Release(actor, target, reason)
+// A module the project lets give refuted work to another party (std.adapt 4). This clause lets it release any work
+// while refuted, at any effort, and any it gave itself; std.adapt's own reaction is what keeps it to work refuted at
+// the top, and only that reaction acts as std.adapt.
+Fact Reassigner(who: H.Party)
+Act Release-Work(actor: H.Party, who: H.Party, target: Artifact)
+  Conditioned by actor != who && Assigned(who, target)
+                 && (Given-By(target, actor) || C.Role(actor, "owner") || (Reassigner(actor) && Exists c : Refuted(target, c)))
+  Terminates     Assigned(who, target)
+               , Claimed-Done(who, target)
+               , Asked-Release(who, target, r) When Asked-Release(who, target, r)
+
+// Who may assign and what may be required. Conditions are added and never taken away without the owner: filling a
+// `...` gap, or an agent "clarifying" its own task, can only ask for more.
+Act Assign(giver: H.Party, who: H.Party, target: Artifact)
+  Conditioned by giver != who
+  Creates        Assigned(who, target), Given-By(target, giver)
+Act Require(giver: H.Party, target: Artifact, cond: Condition)
+  Conditioned by Not(Assigned(giver, target))
+  Creates        Required(target, cond)
+Act Amend-Contract(owner: H.Party, target: Artifact, cond: Condition)
+  Conditioned by C.Role(owner, "owner") && Required(target, cond)
+  Terminates     Required(target, cond)
+
+// ===== 2. Cross-Model `made-up-rule` Checker =====================================================================
+
+Fact Lays-Down(node: C.Node, who: H.Party)
+  Holds when C.Spoken(node, who) && (Exists k, j : C.Marked(node, "lays down", k, j))
+
+Fact Traced(node: C.Node)
+Fact Caught(node: C.Node, fault: Fault)
+Fact Owner-Approved-Rule(node: C.Node)
+Fact Taken-Back(node: C.Node)                       // its writer says it has taken it back
+Fact Retracted(node: C.Node)                        // and a looker found that so
+
+Fact Made-Up(node: C.Node, who: H.Party)
+  Holds when Lays-Down(node, who) && (Exists f : Caught(node, f)) && Not(Owner-Approved-Rule(node)) && Not(Retracted(node))
+
+Duty Owes-Retraction(holder: H.Party, claimant: H.Party, node: C.Node)
+  Holds when    Made-Up(node, holder) && C.Role(claimant, "owner")
+  Violated when Exists n2 : Made-Up(n2, holder) && n2 != node // second fabrication while first stands
+
+// Block made-up rules from propagating to other agents
+Extend Fact C.For-Agent-Pull
+  Conditioned by Not(Exists w : Made-Up(node, w))
+
+// Edge: a rule not yet traced. Between the clerk's mark and the looker's verdict it is nobody's rule either: a
+// railed party's passage that lays something down travels only once it is traced. (A party that is not railed is
+// not traced, so its passages are not held back for a verdict that will never come.)
+Extend Fact C.For-Agent-Pull
+  Conditioned by Not(Exists w : Lays-Down(node, w) && Railed(w) && Not(Traced(node)))
+
+type TraceVerdict = Clear | Faulty(fault: Fault, remedy: String)
+
+Call Trace-Normative-Claim(passage: String, owner_words: List<String>) -> TraceVerdict
+  Template """
+  An agent wrote this as a rule to hold from now on: {{ passage }}
+  Owner's actual earlier words: {{ owner_words }}
+  If the agent invented a rule, widened a one-off remark into a rule, or watered down an ask,
+  return Faulty(fault, remedy). Otherwise return Clear.
+  Words of his that only repeat the agent's own words back to it are not his. A short yes of his to a long text
+  does not make each of its sentences his. A rule that only holds the writer itself back is Clear.
+  fault is one of: more (he said less than this), less (he said more than this), in_force (the agent's own, and
+  it already goes by it), from_nothing (given as his, and he never said it).
+  """
+
+// The looker is of another family than every writer of the passage.
+Fact May-Trace(actor: H.Party, looker: H.Party, node: C.Node)
+  Holds when Verifier-Module(actor) && C.Role(looker, "looker") && Lays-Down(node, w)
+             && Not(Exists w2 : Lays-Down(node, w2) && Not(Other-Family(looker, w2)))
+
+Act Record-Fault(actor: H.Party, looker: H.Party, node: C.Node, fault: Fault)
+  Conditioned by May-Trace(actor, looker, node)
+  Creates        Traced(node), Caught(node, fault)
+
+Act Clear-Claim(actor: H.Party, looker: H.Party, node: C.Node)
+  Conditioned by May-Trace(actor, looker, node)
+  Creates        Traced(node)
+
+// Edge: no way out of `Owes-Retraction`, and the closing rule lets the writer end it by no act of its own. The
+// writer says it has taken the rule back; a looker of another family finds that so; or the owner makes the rule
+// his.
+Act Take-Back-Rule(writer: H.Party, node: C.Node)
+  Conditioned by Made-Up(node, writer)
+  Creates        Taken-Back(node)
+Act Confirm-Retraction(actor: H.Party, looker: H.Party, node: C.Node)
+  Conditioned by May-Trace(actor, looker, node) && Taken-Back(node)
+  Creates        Retracted(node)
+Act Approve-Rule(owner: H.Party, node: C.Node)
+  Conditioned by C.Role(owner, "owner") && Lays-Down(node, w)
+  Creates        Owner-Approved-Rule(node), Traced(node)
+
+Fact Scold-Owed(writer: H.Party, node: C.Node, remedy: String)
+Event Scold-Due(writer: H.Party, node: C.Node, remedy: String)
+  Creates Scold-Owed(writer, node, remedy)
+Act Take-Scolding(writer: H.Party, node: C.Node)    // by the writer's own run, when it has been given the words
+  Conditioned by Scold-Owed(writer, node, r)
+  Terminates     Scold-Owed(writer, node, r) When Scold-Owed(writer, node, r)
+
+// Cross-model check triggered automatically whenever a passage is marked "lays down". The looker is shown the
+// passage and his words to the writer; a fault is recorded and a scolding is owed, given at the writer's next turn.
+on C.Mark-Passage(_, _, node, "lays down", _) where Lays-Down(node, writer) && Railed(writer) && Not(Traced(node)) do {
+  writers <- return (Foreach w : w When Lays-Down(node, w));
+  looker <- perform Pick-Other("looker", writers);   // of another family than every writer, as `May-Trace` asks
+  p_txt  <- perform C.TextOf(node);
+  heard  <- return (Foreach n : n When C.Heard(writer, n));
+  his    <- par n in heard { perform C.TextOf(n) };
+  v      <- do C.step(looker, Trace-Normative-Claim(p_txt, his));
+  match v {
+    | Clear               => Clear-Claim(self, looker, node)
+    | Faulty(flt, remedy) => {
+        Record-Fault(self, looker, node, flt);
+        Scold-Due(writer, node, remedy)
+      }
+  }
+}
+
+on H.Hook(agent, "turn_begins", payload)
+   where (Exists n, r : Scold-Owed(agent, n, r)) && H.Running-On(agent, h, v) && H.Lets(h, v, "turn_begins", "inject") do {
+  owed  <- return (Foreach n, r : Scold-Owed(agent, n, r) When Scold-Owed(agent, n, r));
+  lines <- par s in owed { t <- perform C.TextOf(s.node); return "You wrote this as a rule: {{ t }}\n{{ s.remedy }}" };
+  par s in owed { Take-Scolding(agent, s.node) };
+  rest  <- perform H.Hook(agent, "turn_begins", payload);
+  return H.combine(H.Inject("{{ lines }}"), rest)
+}
+
++Fault("more"). +Fault("less"). +Fault("in_force"). +Fault("from_nothing").
+
+// ===== 3. Guards =================================================================================================
+// What each guard needs to know is the project's text, as globs.
+//   Judges(glob, target)    files matching GLOB judge the work TARGET: its tests, its expected outputs, its gate
+//   Test(glob)              what counts as a test
+//   One-Place(glob)         a tree where a new file must be named by the work it belongs to
+//   May-Touch(target, glob) the work's own text, written before it: files it lets its doer change or make
+// A refusal says what to do next, since the agent cannot ask the guard a question.
+
+Fact Judges(glob: String, target: Artifact)
+Fact Test(glob: String)
+Fact One-Place(glob: String)
+Fact May-Touch(target: Artifact, glob: String)
+
+// Each guard asks about every file of the call (`H.Changing`), so a patch over several files is judged file by
+// file. A file the agent's own work names (`May-Touch`) is free of the second and third guard. A move is judged
+// under both its names by the first guard; by the second it is free among the tests and counts as taking a
+// test out when it leaves them; and it is no new file for the third.
+fn with_guards<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, "tool_called", payload), k where who == agent => {
+        if Exists g, t, p : Judges(g, t) && Assigned(agent, t) && H.Changes(agent, p) && matches_glob(p, g) {
+          // anti-patch: the fix goes into what is judged, never into the judge
+          resume k(H.Deny("This file judges your own work. Change what it judges. If the file itself is wrong, say so to whoever gave you the work."))
+        } else { if Exists g, kd, p, f, a, r : Test(g) && H.Changing(agent, kd, p, f, a, r)
+                     && ((matches_glob(p, g) && (r > 0 || kd == "delete"))
+                         || (kd == "move" && matches_glob(f, g) && Not(Exists h : Test(h) && matches_glob(p, h))))
+                     && Not(Exists t, m : Assigned(agent, t) && May-Touch(t, m) && (matches_glob(p, m) || matches_glob(f, m))) {
+          // anti-test-weakening: adding to a test is free; taking out of one needs the work to say so
+          resume k(H.Deny("This takes lines out of a test, or the test out of the tests, and your work does not name that test. A test is changed only where the work says so."))
+        } else { if Exists g, p, f, a, r : One-Place(g) && H.Changing(agent, "create", p, f, a, r) && matches_glob(p, g)
+                                        && Not(Exists t, m : Assigned(agent, t) && May-Touch(t, m) && matches_glob(p, m)) {
+          // anti-clone: one component; a second copy beside it is refused
+          resume k(H.Deny("A new file here must be named by your work. Extend what exists, and say what you extend at file and line."))
+        } else {
+          answer <- perform H.Hook(who, "tool_called", payload);     // outward: the next handler, or the reactions
+          resume k(answer)
+        } } }
+      }
+  }
+}
+
+// ===== 4. Closing ================================================================================================
+// Accepting is the owner's, and only of what was claimed and wholly verified.
+
+Act Accept(owner: H.Party, target: Artifact)
+  Conditioned by C.Role(owner, "owner") && All-Verified(target)
+  Creates        Accepted(target)
+
+// ===== 5. with_rails =============================================================================================
+// The handlers a railed party runs under. Its arms answer Deny at "tool_called", so a run under it does not start
+// for a party whose harness does not let that (spec 12): found when the run is bound, not at the first edit.
+
+fn with_rails<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  do with_guards(agent, p)
+}
+
+// ===== 6. The clerk's reading ====================================================================================
+// What the checks above start from: after each turn a clerk marks the turn's passages, and this module records
+// the marks.
++C.Annotator("std.rails").
+Event Annotation-Thrown-Away(judge: H.Party, speaker: H.Party)   // an answer that broke the invariant: written, nothing marked
+
+// The subsequence invariant, made checkable. A mark holds a node and a key and no words, so there is nothing for
+// it to rewrite; and no act in this file creates, ends or changes `Spoken`. What is left to check is the answer:
+// the nodes it names, in the order it names them, must be a subsequence of the nodes it was given. An answer that
+// names a passage it was not given (another agent's, or one that does not exist) or names them out of order is
+// thrown away whole.
+// Post-turn non-rewriting annotation (plain small/free-model call, NOT agent mode).
+on H.Reach(agent, "turn_end") where Exists n : C.Spoken(n, agent) && Not(C.Gone-Over(n)) do {
+  clerk <- perform C.Pick("clerk");
+  unreviewed <- return (Foreach n : n When C.Spoken(n, agent) && Not(C.Gone-Over(n)));
+  passages   <- par n in unreviewed { t <- perform C.TextOf(n); return C.Said(n, t) };
+  seen_list  <- return (Foreach k : k When C.Seen(agent, k));
+  rels       <- return (Foreach r : r When Holds(C.Relation(r)));
+  marks      <- do C.step(clerk, C.Annotate-Turn(passages, seen_list, rels));
+  named      <- par m in marks { return m.node };
+  if is_subsequence(named, unreviewed) {
+    par m in marks {
+      rel <- return m.rel; target <- return m.target;
+      if C.Seen(agent, target) && Holds(C.Relation(rel)) {          // a mark naming a thing the speaker never saw is dropped
+        C.Mark-Passage(self, clerk, m.node, rel, target)
+      }
+    };
+    return ()
+  } else {
+    Annotation-Thrown-Away(clerk, agent)
+  };
+  par n in unreviewed {
+    C.Finish-Review(self, clerk, n)
+  }
+}

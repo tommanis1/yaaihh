@@ -6,34 +6,64 @@
 #   hook start | prompt | pre | post | stop     SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop
 #   hook permission                              PermissionRequest: Claude Code would ask; see below
 #   hook failed                                  StopFailure: the turn ended on an API error (Stop does not run then)
+#   hook notification                            Notification, only for an agent on one of the owner's accounts (roster):
+#                                                Claude Code's quota notices say whether the account is out
+#   hook compact                                 PreCompact: a compaction begins (auto or /compact); its SessionStart
+#                                                (source compact) says it is over
 #
 # Apart from the refusal below, the hook only tells coordd to look: coordd reads a Claude Code agent's turns and the mail
 # it got from its transcript, and hands it held mail through its channel after a turn. It never blocks a session:
-# with coordd down it does nothing.
+# with coordd down it does nothing, except while a coord-switch runs (release.sh's mark beside the socket, naming the
+# switch's process, which lives): then it waits for the new coordd, so no event, a turn's Stop above all, is lost at a
+# switch (N-560). Its timeout in settings.json (600 s) is Claude Code's bound to kill it, not how long it tries.
 set -u
 event=${1:-}
 # The Bash tool's PATH is the box's own: a resumed session's shell snapshot carries the PATH of the shell it began in
 # (on the host: the box's host-side shims first, unreachable here), and CLAUDE_ENV_FILE is sourced after the snapshot. In a
-# project without a box (its coordd at COORDD_SOCK on the host, bin/host-coordd) it is the agent's own PATH, which
-# roster gave it.
+# project without a box (its coordd at COORDD_SOCK on the host, bin/host-coordd) it is the PATH the hook was given with
+# AGENT_BASE/bin put first: that PATH is not the one roster gave the session. Claude Code 2.1.331 hands its hook the
+# shell's PATH, the lanes box's host-side shims first and no AGENT_BASE/bin, though the session's process has it first
+# (every research agent's env file on 24 Nov, holder-1's fresh agents f1643-1 and f1673-1 too, which then had no
+# `coord`: paper-research N-1446 p3192).
 if [ "$event" = start ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-  if [ -n "${COORDD_SOCK:-}" ]; then path=$PATH; else
+  if [ -n "${COORDD_SOCK:-}" ]; then path=${AGENT_BASE:+$AGENT_BASE/bin:}$PATH; else
     path=${TOOL_PATH:+$TOOL_PATH:}${AGENT_BASE:+$AGENT_BASE/bin:}/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin
   fi
   printf 'export PATH=%q\n' "$path" >>"$CLAUDE_ENV_FILE"
 fi
-# The one refusal (the owner's wish of 10 Nov 2026): an agent runs under bypassPermissions, so Claude Code asks only
-# when its own safety checks stop a call (a dangerous removal such as rm -rf *, a write to its config). Nobody is there
-# to answer, so the ask becomes a refusal the agent reads. Claude Code's detection decides what is dangerous; this
-# only turns its prompt into a no. A question to the user (AskUserQuestion, ExitPlanMode) is not a safety check and
-# is left alone, as is any prompt in another mode.
+# No question from an agent's permission check reaches the owner as a popup, in any mode (his wish of 10 Nov 2026 for
+# bypassPermissions; then of the popup that blocked fresh, yaaihh N-1.p121; yaaihh/fresh N-1729 p20, paper-research
+# N-1446 p3535). A read outside its folders under Safe goes to coordd (read_ask.rs): let through when the project's
+# read folders hold it, else one card in the agent's chat whose answer is the call's (N-1989). Everything else, and a
+# read coordd does not answer (coordd down, an older coordd), becomes a refusal the agent reads, and it does the thing
+# another way. A question to the user (AskUserQuestion, ExitPlanMode) is not a permission check and is left alone
+# (settings.json denies AskUserQuestion itself).
 if [ "$event" = permission ]; then
   exec python3 -I -c '
-import json, sys
-call = json.load(sys.stdin)
-if call.get("permission_mode") == "bypassPermissions" and call.get("tool_name") not in ("AskUserQuestion", "ExitPlanMode"):
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny",
-        "message": "denied: Claude Code'"'"'s safety check stopped this call (for rm: a dangerous * expansion), and an "
-                   "agent has no one to approve it. Do it another way: name the paths, anchor globs at an absolute path."}}}))'
+import json, os, subprocess, sys
+raw = sys.stdin.read()
+call = json.loads(raw)
+tool = call.get("tool_name")
+if tool in ("AskUserQuestion", "ExitPlanMode"):
+    sys.exit(0)
+bypass = call.get("permission_mode") == "bypassPermissions"
+coordc = os.path.join(os.environ.get("AGENT_BASE", ""), "bin", "coordc")
+if not bypass and tool in ("Read", "NotebookRead", "Glob", "Grep", "LS") and os.access(coordc, os.X_OK):
+    try:
+        out = subprocess.run([coordc, "hook", "permission"], input=raw, capture_output=True, text=True, timeout=590).stdout.strip()
+    except Exception:
+        out = ""
+    if out:
+        print(out)
+        sys.exit(0)
+if bypass:
+    why = ("denied: Claude Code'"'"'s safety check stopped this call (for rm: a dangerous * expansion), and an "
+           "agent has no one to approve it. Do it another way: name the paths, anchor globs at an absolute path.")
+else:
+    why = ("denied: this call would wait for a person to allow it, and no agent'"'"'s call goes to the owner as a "
+           "popup. Do it another way: inside your project'"'"'s folders (its repositories are your working folders). "
+           "To read a file outside them, use the Read tool on its whole path: the owner is asked once, in your chat. "
+           "For anything else only a person may allow, ask your lead.")
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", "message": why}}}))'
 fi
 exec "${AGENT_BASE:?}/bin/coordc" hook "$event"

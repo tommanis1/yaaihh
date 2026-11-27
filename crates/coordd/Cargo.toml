@@ -1,0 +1,52 @@
+[package]
+name = "coordd"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coordd"
+path = "src/main.rs"
+
+[[bin]]
+name = "coordc"
+path = "src/client.rs"
+
+[dependencies]
+coord-types = { path = "../coord-types" }
+usage-rollup = { path = "../usage-rollup" }
+# the machine readers Home's Store, Machines and RepoState answer from, shared with the v2 window's reader
+machine-state = { path = "../machine-state" }
+proxylog = { path = "../usage/proxylog" }
+docket-machine = { path = "../docket/machine" }
+cold-store = { path = "../cold-store" }
+# the long-context threshold of a model, as the Usage page's cost() takes it (accounts/usage.rs hour sums)
+prices = { path = "../usage/prices" }
+# the duties of a project's policy/duties.eflint, asked at a step's answer (N-101, ticket/violated.rs; the owner on
+# Q-156: "efling for duties yes fine"); paper-research2's eFLINT, no dependencies of its own
+# pinned to a commit of the local repository (file://, nothing online): a release builds exactly it, never its working tree
+eflint-rs = { git = "file:///home/t/Documents/papers/eflint-rs", rev = "59633112" }
+serde.workspace = true
+base64.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+# the owner's Add a repository writes one key of his project file and keeps the rest of its text (project.rs
+# `with_repo`); the version Cargo.lock has already (proc-macro-crate's)
+toml_edit = "0.25"
+libc.workspace = true
+chrono = "0.4"
+# the policy engine (vault designs/policy-language-draft-2026-11-08.md): clingo, built from source and linked in, so
+# the box needs no library of its own
+clingo = { version = "0.8", features = ["static-linking"] }
+# the policy's LLM calls go to the proxy over plain HTTP
+ureq = { version = "3", default-features = false, features = ["json"] }
+# the pinned opencode's sha256, checked before every run (accounts/opencode.rs `program`; docket-core3, N-946 post 8)
+sha2 = "0.10"
+# a start's replay saved at a cut (ticket/replay_state.rs, I-1509): MessagePack, the version already in Cargo.lock. The
+# machine holds JSON values and maps keyed by tuples, which need a format that names its types as it goes (bincode
+# does not, JSON keys only strings)
+rmp-serde = "1.3"
+# a text's next version in words, on its `became` edge (follow::difference; paper-research N-1446 p1458: no LCS of our
+# own), the crate the lock had through pretty_assertions
+diff = "0.1"

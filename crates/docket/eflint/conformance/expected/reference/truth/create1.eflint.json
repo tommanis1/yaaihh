@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type x\n+x(int(10))\nquery successful\nquery successful\n-x(int(10))\nquery successful\nquery successful\nNew type make\nexecuted transition: \nmake(int(10)) \n+x(int(10))\nquery successful\nquery successful\n-x(int(5))\nquery successful\nquery successful\n-x(int(10))\nquery successful\nquery successful\n#18 > "
+ }
+}

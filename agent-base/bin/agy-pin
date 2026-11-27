@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# agy-pin COORD: the two pinned programs of the coord's agy accounts, so they sign in and its agents run on agy in every
+# project (the owner, N-1104 p880 and p886; plans N-1446 p2038, read Right in p2039 and p2043):
+#   t3code 0.1.11  COORD/opt/t3/0.1.11, its `t3` beside its client, lib and node_modules as the release ships them:
+#                  the sign-in accounts' server (agy-rpc `server`, `signin`, `check`, and their agents' threads). Its
+#                  own agy is the runtime t3code manages and fetches itself; nothing of it is pinned here
+#   agy 1.5.18     COORD/opt/agy/1.5.18/bin/antigravity: the key accounts' ACP server (agy-rpc's own ACP client)
+# Each place becomes a link to the machine's one copy, ~/agent-coord/opt/NAME/VERSION, fetched once as opencode-pin
+# fetches opencode (the owner's yes, N-616 posts 22 and 23): the release's own archive into a new empty folder beside
+# it, checked against the release's digest (t3code's SHA256SUMS line; agy's sha512 from its updater's manifest), then
+# the program against the pinned sha256, nothing run, no installer, read-only, SOURCE kept beside it, and for t3code
+# its MIT notice (LICENSE). A place that is there already has its program checked against the pinned sha256 again at
+# every run; one that is not the pinned program is refused, not taken. `t3 update` is never run: the version moves only when this pin does.
+#
+# host-coordd start runs it for its coord, in the background (its log: COORD/agy-pin.log). The last line of each pin
+# says what was done; a failure, why, on stderr, and its exit code is not 0. AGY_PIN_HOME (tests) is where the
+# machine's copies are kept instead of ~/agent-coord/opt.
+# Way back: rm COORD/opt/t3/0.1.11 and COORD/opt/agy/1.5.18 (links) and, once no coord links to them,
+# ~/agent-coord/opt/t3 and ~/agent-coord/opt/agy.
+set -euo pipefail
+# the pins, as agy-rpc's T3_VERSION, T3_SHA256, AGY_VERSION and AGY_SHA256 (tests/agy-pin-test.sh)
+T3_VERSION=0.1.11
+T3_SHA256=f13dd1f37eb2f719b41f45219b3800412799c80f724b022839b8a133e21aced1
+T3_ARCHIVE=t3-$T3_VERSION-linux-x64.tar.gz
+T3_URL=https://github.com/pingdotgg/t3code/releases/download/v$T3_VERSION/$T3_ARCHIVE
+# the release's SHA256SUMS line for it
+T3_ARCHIVE_SHA256=2b691c07f5bcb5adea4a863d5324aae7db21bd6d82280cec7787836dcaa013e1
+AGY_VERSION=1.5.18
+AGY_SHA256=7c96ad8c944c1a8d195ca34d2041a3d74d5166c96662b52183b748a3c455d52f
+AGY_ARCHIVE=cli_linux_x64.tar.gz
+# Google's own release for linux x64, as its updater's manifest names it
+# (https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json, version 1.5.18)
+AGY_URL=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.18-6386224290725888/linux-x64/$AGY_ARCHIVE
+AGY_ARCHIVE_SHA512=ef379ec869719112f696e8c7cfddf776618712e58fc38e53df80801d6528abb4677782c7c8778f9c09c9123fa44c2c32675d228c06f2a8f7a8f4214e75f5bb26
+
+fail() { echo "agy-pin: $*" >&2; exit 1; }
+[ $# = 1 ] || { echo "usage: agy-pin COORD" >&2; exit 2; }
+coord=$1
+[ -d "$coord" ] || fail "no coord folder $coord"
+home=${AGY_PIN_HOME:-$HOME/agent-coord/opt}
+
+# t3code's licence, word for word (its repository's LICENSE at v0.1.11), kept beside the copy
+t3_licence() {
+  cat <<'EOF'
+MIT License
+
+Copyright (c) 2026 T3 Tools Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+EOF
+}
+
+# pin NAME VERSION PROGRAM SHA256 URL ARCHIVE DIGEST-TOOL DIGEST WHAT: the coord's place COORD/opt/NAME/VERSION, a link
+# to the machine's copy, fetched when there is none: ARCHIVE from URL checked by DIGEST-TOOL (sha256sum, sha512sum)
+# against DIGEST, unpacked (its one top folder taken off), PROGRAM (a path in it) checked against SHA256. A place there
+# already is taken only when its PROGRAM is checked against SHA256 again, now. An interrupt or a TERM ends the run as a
+# failure does: the fetch's folder is removed and nothing is kept
+pin() {
+  local name=$1 version=$2 program=$3 sha=$4 url=$5 archive=$6 tool=$7 digest=$8 what=$9
+  local place=$coord/opt/$name/$version machine=$home/$name/$version new got
+  if [ -e "$place/$program" ]; then
+    got=$(sha256sum "$place/$program" | cut -d' ' -f1)
+    [ "$got" = "$sha" ] || fail "$place/$program is not the pinned $name (its sha256 is $got, not $sha); it is left as it is and not taken"
+    echo "agy-pin: $place is there already, its $program the pinned one"
+    return 0
+  fi
+  [ ! -e "$place" ] && [ ! -L "$place" ] || fail "$place is there but holds no $program; it is left as it is"
+  if [ ! -e "$machine/$program" ]; then
+    mkdir -p "$(dirname "$machine")"
+    new=$(mktemp -d "$(dirname "$machine")/.fetch-$version.XXXXXX")
+    trap 'chmod -R u+w "$new" 2>/dev/null || true; rm -rf "$new"' EXIT
+    trap 'exit 1' INT TERM
+    curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --output "$new/$archive" "$url" \
+      || fail "the fetch of $url failed; nothing is kept"
+    got=$($tool "$new/$archive" | cut -d' ' -f1)
+    [ "$got" = "$digest" ] || fail "$url is not the release's archive (its ${tool%sum} is $got, not $digest); nothing is kept"
+    mkdir "$new/x"
+    tar -xzf "$new/$archive" -C "$new/x" --no-same-owner || fail "$archive does not unpack; nothing is kept"
+    # t3code's archive holds one folder, t3-VERSION-linux-x64; agy's holds the program alone
+    local top
+    top=$(find "$new/x" -mindepth 1 -maxdepth 1)
+    if [ "$(printf '%s\n' "$top" | wc -l)" = 1 ] && [ -d "$top" ]; then
+      mv -T "$top" "$new/tree"
+      rmdir "$new/x"
+    else
+      mv -T "$new/x" "$new/tree"
+    fi
+    if [ "$program" = bin/antigravity ]; then
+      mkdir "$new/tree/bin"
+      mv "$new/tree/antigravity" "$new/tree/bin/antigravity" 2>/dev/null || fail "$archive holds no antigravity; nothing is kept"
+    fi
+    [ -f "$new/tree/$program" ] || fail "$archive holds no $program; nothing is kept"
+    got=$(sha256sum "$new/tree/$program" | cut -d' ' -f1)
+    [ "$got" = "$sha" ] || fail "the $program in $archive is not the pinned one (its sha256 is $got, not $sha); nothing is kept"
+    mv "$new/$archive" "$new/tree/$archive"
+    printf '%s  %s\n' "$digest" "$archive" >"$new/tree/$archive.${tool%sum}"
+    printf '%s  %s\n' "$sha" "$program" >"$new/tree/$program.sha256"
+    printf '%s\nfrom %s\nrelease digest %s:%s\nfetched %s by agy-pin for %s; not run\n' \
+      "$what" "$url" "${tool%sum}" "$digest" "$(date -u +%FT%TZ)" "$coord" >"$new/tree/SOURCE"
+    [ "$name" != t3 ] || t3_licence >"$new/tree/LICENSE"
+    chmod 0555 "$new/tree/$program"
+    chmod 0755 "$new/tree"
+    chmod -R a-w "$new/tree"
+    # its own top stays writable until it is in place: a folder moved to another parent has its `..` rewritten
+    chmod u+w "$new/tree"
+    # another coord's start may have put it there meanwhile: then that one is taken, and this fetch dropped
+    if mv -T "$new/tree" "$machine" 2>/dev/null; then
+      chmod a-w "$machine"
+      rm -rf "$new"
+    else
+      [ -e "$machine/$program" ] || fail "cannot put the fetched $name at $machine"
+      chmod -R u+w "$new" 2>/dev/null || true
+      rm -rf "$new"
+    fi
+    trap - EXIT INT TERM
+  fi
+  got=$(sha256sum "$machine/$program" | cut -d' ' -f1)
+  [ "$got" = "$sha" ] || fail "$machine/$program is not the pinned $name (its sha256 is $got, not $sha); $place is not linked to it"
+  mkdir -p "$coord/opt/$name"
+  ln -sT "$machine" "$place" || fail "cannot link $place to $machine"
+  echo "agy-pin: $place is $machine"
+}
+
+pin t3 "$T3_VERSION" t3 "$T3_SHA256" "$T3_URL" "$T3_ARCHIVE" sha256sum "$T3_ARCHIVE_SHA256" "t3code v$T3_VERSION linux x64 (MIT, LICENSE)"
+pin agy "$AGY_VERSION" bin/antigravity "$AGY_SHA256" "$AGY_URL" "$AGY_ARCHIVE" sha512sum "$AGY_ARCHIVE_SHA512" "Antigravity CLI $AGY_VERSION linux x64 (Google)"

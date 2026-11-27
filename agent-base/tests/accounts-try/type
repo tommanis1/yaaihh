@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""type COMMAND...: run COMMAND on a terminal of its own, type $KEY and Enter when it asks "(not shown): ", and print
+what the terminal showed. accounts-try.sh's stand-in for the owner typing a key into `coord account key ID`."""
+import os, pty, sys
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+shown, typed = b"", False
+while True:
+    try:
+        got = os.read(fd, 4096)
+    except OSError:  # the terminal closed: COMMAND ended
+        break
+    if not got:
+        break
+    shown += got
+    if not typed and b"(not shown): " in shown:
+        os.write(fd, os.environ["KEY"].encode() + b"\r")
+        typed = True
+os.waitpid(pid, 0)
+sys.stdout.write(shown.decode(errors="replace").replace("\r", ""))

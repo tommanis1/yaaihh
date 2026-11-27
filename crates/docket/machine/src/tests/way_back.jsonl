@@ -1,0 +1,62 @@
+{"ev":"open","at":"2026-11-20T09:00:01Z","t":200,"kind":"talk","opener":"owner","form":{"to":"w1"},"names":["w1"],"program":"kind talk\n  letter N\n  form to: Agent\n  pattern\n    ...\n  when owner_post(p) do\n    tell p.naming p"}
+{"ev":"rests","at":"2026-11-20T09:00:01Z","t":200}
+{"ev":"open","at":"2026-11-20T09:00:02Z","t":201,"kind":"talk","opener":"owner","form":{"to":"w1"},"names":["w1"],"program":"kind talk\n  letter N\n  form to: Agent\n  pattern\n    ...\n  when owner_post(p) do\n    tell p.naming p"}
+{"ev":"rests","at":"2026-11-20T09:00:02Z","t":201}
+{"ev":"open","at":"2026-11-20T09:00:03Z","t":202,"kind":"talk","opener":"owner","form":{"to":"w2"},"names":["w2"],"program":"kind talk\n  letter N\n  form to: Agent\n  pattern\n    ...\n  when owner_post(p) do\n    tell p.naming p"}
+{"ev":"rests","at":"2026-11-20T09:00:03Z","t":202}
+{"ev":"post","at":"2026-11-20T09:00:04Z","t":200,"by":"x","text":"@w1 the build is green","names":["w1"]}
+{"ev":"post","at":"2026-11-20T09:00:05Z","t":201,"by":"owner","text":"@w1 stop and look at the median","names":["w1"]}
+{"ev":"opened","at":"2026-11-20T09:00:05Z","t":1099511627776,"kind":"owner_post","parent":201,"program":"tell p.naming p"}
+{"ev":"told","at":"2026-11-20T09:00:05Z","t":201,"n":1,"to":["w1"]}
+{"ev":"closed","at":"2026-11-20T09:00:05Z","t":1099511627776,"result":[]}
+{"ev":"event","at":"2026-11-20T09:00:06Z","name":"free","value":{"agent":"w1","doing":"N-1 · the median"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:06Z","name":"delivery_opened","value":{"agent":"w1","calls":{"next":{"blind":false,"head":{"Variant":[["Give",[["now",{"List":"Text"}],["rest",{"List":"Text"}]]],["Rest",[["why","Text"]]]]},"name":"next","params":[["doing","Text"],["waiting",{"List":{"Record":[["id","Text"],["thread","Ticket"],["label","Text"],["from","Agent"],["owner","Bool"],["names","Bool"],["inform","Bool"],["lead","Bool"],["answers",{"Opt":"Text"}],["text","Text"],["what","Text"],["kept",{"Opt":"Text"}],["waits","Bool"],["raised","Bool"],["about_turn","Bool"],["into_turn","Bool"]]}}]]}},"program":"kind delivery\n  form agent: Agent\n  pattern\n    ...\n  when arrived(e) do\n    match e.hold {\n      none =>\n        match e.item {\n          i where i.owner and i.waits == false => deliver e.agent [i]\n          i where i.what == \"taken_back\" => deliver e.agent [i]\n          i where i.lead and i.names => deliver e.agent [i]\n          i where i.what == \"step\" and i.raised and i.from == e.agent => deliver e.agent [i]\n          i where i.inform and i.into_turn and i.about_turn => deliver e.agent [i]\n          i => keep [i] \"comes when its turn ends\"\n        }\n      why => keep [e.item] why\n    }\n  when free(e) do\n    _ <- match e.hold {\n      none => return ()\n      why => keep e.held why\n    };\n    match e.owner {\n      [] where e.waiting == [] => return ()\n      [] where e.writing => keep e.waiting \"the owner is writing to it\"\n      [] =>\n        match e.raised {\n          [] =>\n            d <- step watcher next(e.doing, e.waiting);\n            match d {\n              Give(now, rest) => deliver e.agent now listing rest\n              Rest(why) => keep e.waiting why\n            }\n          own => deliver e.agent own listing e.waiting\n        }\n      his => deliver e.agent his listing e.waiting\n    }\n  when stopped(e) do\n    report [e.item] e.why","t":1649267441664},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:06Z","name":"delivery_acted","value":{"act":"deliver","agent":"w1","items":["N-201.p1"],"rest":["N-200.p1"]},"fired":[]}
+{"ev":"given","at":"2026-11-20T09:00:07Z","t":201,"to":"w1","delivery":"N-201.p1","upto":1,"where":{"file":"w.jsonl","offset":10,"len":5}}
+{"ev":"post","at":"2026-11-20T09:00:08Z","t":201,"by":"y","text":"@w1 which branch?","names":["w1"]}
+{"ev":"event","at":"2026-11-20T09:00:09Z","name":"free","value":{"agent":"w1","doing":"N-1 · the median"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:10Z","name":"delivery_decided","value":{"agent":"w1","by":"watcher","head":{"head":"Give","now":["N-201.p2"],"rest":["N-200.p1"]},"run":1649267441666,"text":""},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:10Z","name":"delivery_acted","value":{"act":"deliver","agent":"w1","items":["N-201.p2"],"rest":["N-200.p1"]},"fired":[]}
+{"ev":"given","at":"2026-11-20T09:00:11Z","t":201,"to":"w1","delivery":"N-201.p2","upto":2,"where":{"file":"w.jsonl","offset":20,"len":5}}
+{"ev":"turn_ended","at":"2026-11-20T09:00:12Z","agent":"w1","delivery":"N-201.p2","text":{"file":"w.jsonl","offset":500,"len":40},"tools":{"Bash":1,"mcp__coord__reply":1},"model":"claude-opus-5-5"}
+{"ev":"replied","at":"2026-11-20T09:00:12Z","t":201,"n":3,"by":"w1","names":["owner","y"],"answering":["owner","y"]}
+{"ev":"event","at":"2026-11-20T09:00:13Z","name":"free","value":{"agent":"w1","doing":"N-1 · the median"},"fired":[]}
+{"ev":"post","at":"2026-11-20T09:00:14Z","t":200,"by":"z","text":"@w1 one more","names":["w1"]}
+{"ev":"event","at":"2026-11-20T09:00:15Z","name":"arrived","value":{"agent":"w1","item":"N-200.p2"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:16Z","name":"delivery_decided","value":{"agent":"w1","by":"watcher","head":{"head":"Rest","why":"it reads the log first"},"run":1649267441667,"text":""},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:16Z","name":"delivery_acted","value":{"act":"keep","agent":"w1","items":["N-200.p1"],"why":"it reads the log first"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:16Z","name":"delivery_acted","value":{"act":"keep","agent":"w1","items":["N-200.p2"],"why":"comes when its turn ends"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:17Z","name":"free","value":{"agent":"w1","doing":"N-1 · the median"},"fired":[]}
+{"ev":"post","at":"2026-11-20T09:00:18Z","t":201,"by":"owner","text":"@w1 the release is tonight","names":["w1"]}
+{"ev":"opened","at":"2026-11-20T09:00:18Z","t":1099511627777,"kind":"owner_post","parent":201,"program":"tell p.naming p"}
+{"ev":"told","at":"2026-11-20T09:00:18Z","t":201,"n":4,"to":["w1"],"inform":["y"]}
+{"ev":"closed","at":"2026-11-20T09:00:18Z","t":1099511627777,"result":[]}
+{"ev":"event","at":"2026-11-20T09:00:19Z","name":"free","value":{"agent":"w1","doing":"N-1 · the median"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:19Z","name":"delivery_acted","value":{"act":"deliver","agent":"w1","items":["N-201.p4"],"rest":["N-200.p1","N-200.p2"]},"fired":[]}
+{"ev":"given","at":"2026-11-20T09:00:20Z","t":201,"to":"w1","delivery":"N-201.p4","upto":4,"where":{"file":"w.jsonl","offset":40,"len":5}}
+{"ev":"turn_ended","at":"2026-11-20T09:00:21Z","agent":"w1","delivery":"N-201.p4","text":{"file":"w.jsonl","offset":600,"len":40}}
+{"ev":"replied","at":"2026-11-20T09:00:21Z","t":201,"n":5,"by":"w1","names":["owner"],"answering":["owner"]}
+{"ev":"post","at":"2026-11-20T09:00:22Z","t":200,"by":"owner","text":"@w1 and the median?","names":["w1"]}
+{"ev":"opened","at":"2026-11-20T09:00:22Z","t":1099511627778,"kind":"owner_post","parent":200,"program":"tell p.naming p"}
+{"ev":"told","at":"2026-11-20T09:00:22Z","t":200,"n":3,"to":["w1"],"inform":["x","z"]}
+{"ev":"closed","at":"2026-11-20T09:00:22Z","t":1099511627778,"result":[]}
+{"ev":"event","at":"2026-11-20T09:00:23Z","name":"free","value":{"agent":"w1","doing":"N-1 · the median"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:23Z","name":"delivery_acted","value":{"act":"deliver","agent":"w1","items":["N-200.p3"],"rest":["N-200.p1","N-200.p2"]},"fired":[]}
+{"ev":"given","at":"2026-11-20T09:00:24Z","t":200,"to":"w1","delivery":"N-200.p3","upto":3,"where":{"file":"w.jsonl","offset":30,"len":5}}
+{"ev":"turn_ended","at":"2026-11-20T09:00:25Z","agent":"w1","delivery":"N-200.p3","text":{"file":"w.jsonl","offset":700,"len":40}}
+{"ev":"replied","at":"2026-11-20T09:00:25Z","t":200,"n":4,"by":"w1","names":["owner"],"answering":["owner"]}
+{"ev":"handling","at":"2026-11-20T09:00:25Z","t":200,"event":"hole","program":"try {\n  k <- step role minder shape(this);\n  continue k\n} handle {\n  NoWorker(w) =>\n    ...\n}"}
+{"ev":"asked","at":"2026-11-20T09:00:25Z","t":200,"step":1,"question":"fills","role":"minder"}
+{"ev":"event","at":"2026-11-20T09:00:26Z","name":"free","value":{"agent":"w1","doing":"N-1 · the median"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:27Z","name":"delivery_decided","value":{"agent":"w1","by":"watcher","head":{"head":"Give","now":["N-200.p1","N-200.p2"],"rest":[]},"run":1649267441672,"text":""},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:27Z","name":"delivery_acted","value":{"act":"deliver","agent":"w1","items":["N-200.p1","N-200.p2"]},"fired":[]}
+{"ev":"given","at":"2026-11-20T09:00:28Z","t":200,"to":"w1","delivery":"N-200.p2","upto":2,"where":{"file":"w.jsonl","offset":20,"len":5}}
+{"ev":"post","at":"2026-11-20T09:00:29Z","t":200,"by":"w1","text":{"loc":{"file":"w.jsonl","offset":800,"len":40}},"names":["x","z"],"answers":2,"answering":["x","z"]}
+{"ev":"turn_ended","at":"2026-11-20T09:00:29Z","agent":"w1","delivery":"N-200.p2","text":{"file":"w.jsonl","offset":800,"len":40}}
+{"ev":"post","at":"2026-11-20T09:00:30Z","t":202,"by":"owner","text":"@w2 are you there?","names":["w2"]}
+{"ev":"opened","at":"2026-11-20T09:00:30Z","t":1099511627779,"kind":"owner_post","parent":202,"program":"tell p.naming p"}
+{"ev":"told","at":"2026-11-20T09:00:30Z","t":202,"n":1,"to":["w2"]}
+{"ev":"closed","at":"2026-11-20T09:00:30Z","t":1099511627779,"result":[]}
+{"ev":"event","at":"2026-11-20T09:00:31Z","name":"stopped","value":{"agent":"w2","item":"N-202.p1","why":"w2 is stopped"},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:31Z","name":"delivery_opened","value":{"agent":"w2","calls":{"next":{"blind":false,"head":{"Variant":[["Give",[["now",{"List":"Text"}],["rest",{"List":"Text"}]]],["Rest",[["why","Text"]]]]},"name":"next","params":[["doing","Text"],["waiting",{"List":{"Record":[["id","Text"],["thread","Ticket"],["label","Text"],["from","Agent"],["owner","Bool"],["names","Bool"],["inform","Bool"],["lead","Bool"],["answers",{"Opt":"Text"}],["text","Text"],["what","Text"],["kept",{"Opt":"Text"}],["waits","Bool"],["raised","Bool"],["about_turn","Bool"],["into_turn","Bool"]]}}]]}},"program":"kind delivery\n  form agent: Agent\n  pattern\n    ...\n  when arrived(e) do\n    match e.hold {\n      none =>\n        match e.item {\n          i where i.owner and i.waits == false => deliver e.agent [i]\n          i where i.what == \"taken_back\" => deliver e.agent [i]\n          i where i.lead and i.names => deliver e.agent [i]\n          i where i.what == \"step\" and i.raised and i.from == e.agent => deliver e.agent [i]\n          i where i.inform and i.into_turn and i.about_turn => deliver e.agent [i]\n          i => keep [i] \"comes when its turn ends\"\n        }\n      why => keep [e.item] why\n    }\n  when free(e) do\n    _ <- match e.hold {\n      none => return ()\n      why => keep e.held why\n    };\n    match e.owner {\n      [] where e.waiting == [] => return ()\n      [] where e.writing => keep e.waiting \"the owner is writing to it\"\n      [] =>\n        match e.raised {\n          [] =>\n            d <- step watcher next(e.doing, e.waiting);\n            match d {\n              Give(now, rest) => deliver e.agent now listing rest\n              Rest(why) => keep e.waiting why\n            }\n          own => deliver e.agent own listing e.waiting\n        }\n      his => deliver e.agent his listing e.waiting\n    }\n  when stopped(e) do\n    report [e.item] e.why","t":1649267441673},"fired":[]}
+{"ev":"event","at":"2026-11-20T09:00:31Z","name":"delivery_acted","value":{"act":"report","agent":"w2","items":["N-202.p1"],"why":"w2 is stopped"},"fired":[]}

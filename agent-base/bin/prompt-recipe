@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""prompt-recipe HARNESS MODEL STANDING|- OUT [--version V] [--config-dir D --cwd C | --memory off] [--with PACK]...:
+an agent's system prompt, composed at its start from what is written by hand (owner's Stream 4A, N-1979):
+
+    [the harness's own text] - [the recipe's cuts] + [the packs of MODEL, then each PACK] + [STANDING, the standing text]
+
+The harness's own text is agent-base/prompts/base/HARNESS-V.md, read on the wire for version V (a placeholder,
+{{memory_dir}}, where the session fills in its memory folder); the cuts are prompts/recipes/HARNESS.toml; the packs
+prompts/packs/packs.toml. OUT gets the text and OUT.diff.json each part of it as a segment, for the window's diff:
+
+    {"harness","version","model","how","packs":[..],"notes":[..],
+     "segments":[{"kind":"kept"|"stripped"|"added"|"missing","label","text","tokens","source"}],
+     "tokens":{"kept","stripped","added"}}
+
+The first line out says how the harness takes OUT: `replace` (the whole system text, Claude Code's
+--system-prompt-file) when a base for V exists, else `append`; each later line is a note for the start's record: a cut
+that matches nothing (an update reworded it), a missing base, a model with no pack. Tokens are estimated as bytes / 4.
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+import tomllib
+
+PROMPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts")
+
+
+SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def plain(name, what):
+    """NAME, refused unless it is a plain name: no path separator, no '..'."""
+    if not SAFE.match(name) or ".." in name:
+        raise ValueError(f"{name!r} is not a plain name for {what}")
+    return name
+
+
+def prompt_file(folder, name, ext):
+    """PROMPTS/FOLDER/NAME.EXT for a plain NAME, refused if it would lie outside PROMPTS."""
+    plain(name, f"a file of prompts/{folder}")
+    path = os.path.realpath(os.path.join(PROMPTS, folder, f"{name}{ext}"))
+    if os.path.commonpath([path, os.path.realpath(PROMPTS)]) != os.path.realpath(PROMPTS):
+        raise ValueError(f"prompts/{folder}/{name}{ext} lies outside prompts")
+    return path
+
+
+def tokens(text):
+    """An estimate of TEXT's tokens: a quarter of its bytes, rounded up."""
+    return (len(text.encode()) + 3) // 4
+
+
+def paragraphs(text):
+    """TEXT as its paragraphs: the pieces between blank lines."""
+    return text.strip("\n").split("\n\n")
+
+
+def heading(p):
+    return p.startswith("# ")
+
+
+def cut_spans(paras, cut):
+    """The paragraph ranges CUT takes: each opening with its words (a section up to the next heading) that holds the rest."""
+    spans = []
+    for i, p in enumerate(paras):
+        if not p.startswith(cut["opens"]):
+            continue
+        j = i + 1
+        if cut.get("section"):
+            while j < len(paras) and not heading(paras[j]):
+                j += 1
+        if cut.get("holds", "") in "\n\n".join(paras[i:j]):
+            spans.append((i, j))
+    return spans
+
+
+def packs_for(model):
+    """The pack names for MODEL: the first entry of packs.toml whose model starts match it."""
+    with open(os.path.join(PROMPTS, "packs", "packs.toml"), "rb") as f:
+        table = tomllib.load(f)
+    for entry in table.get("pack", []):
+        if any(model.startswith(m) for m in entry["models"]):
+            return entry["packs"]
+    return []
+
+
+def memory_dir(config_dir, cwd):
+    """Claude Code's memory folder for a session in CWD: each non-alphanumeric character a '-' (2.1.332, on the wire)."""
+    return os.path.join(config_dir, "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), "memory") + "/"
+
+
+def compose(harness, model, standing, version=None, memory=None, extra=()):
+    """The composed text, its diff, how the harness takes it and the notes; MEMORY None means memory is off."""
+    segments, notes, kept = [], [], []
+    plain(harness, "a harness")
+    if version:
+        plain(version, "a version")
+    base_file = prompt_file("base", f"{harness}-{version}", ".md") if version else None
+    how = "replace" if base_file and os.path.isfile(base_file) else "append"
+    if how == "replace":
+        with open(prompt_file("recipes", harness, ".toml"), "rb") as f:
+            recipe = tomllib.load(f)
+        with open(base_file) as f:
+            text = f.read()
+        if memory is not None:
+            text = text.replace("{{memory_dir}}", memory)
+        paras = paragraphs(text)
+        taken, missing = {}, []
+        for cut in recipe.get("cut", []):
+            if cut.get("when") == "memory off" and memory is not None:
+                continue
+            spans = cut_spans(paras, cut)
+            if not spans:
+                missing.append({"kind": "missing", "label": cut["label"], "text": "", "tokens": 0, "source": os.path.relpath(base_file, PROMPTS)})
+                notes.append(f"cut {cut['label']} matches nothing in {harness} {version}'s text: not cut")
+            for i, j in spans:
+                for k in range(i, j):
+                    taken.setdefault(k, cut["label"])
+        if memory is not None and "{{memory_dir}}" in text:
+            raise ValueError("the memory folder was not filled in")
+        source = os.path.relpath(base_file, PROMPTS)
+        for k, p in enumerate(paras):
+            label = taken.get(k)
+            kind = "stripped" if label else "kept"
+            if not label:
+                kept.append(p)
+            seg = {"kind": kind, "label": label or (p.splitlines()[0] if heading(p) else ""), "text": p, "tokens": tokens(p), "source": source}
+            last = segments[-1] if segments else None
+            same = last and last["kind"] == kind and (last["label"] == seg["label"] if label else not heading(p))
+            if same:
+                segments[-1]["text"] += "\n\n" + p
+                segments[-1]["tokens"] = tokens(segments[-1]["text"])
+            else:
+                segments.append(seg)
+        segments += missing
+    elif version:
+        notes.append(f"no base text for {harness} {version}: its own text is kept and the rest appended")
+    names = packs_for(model)
+    if not names:
+        notes.append(f"no pack for model {model}")
+    names += [n for n in extra if n not in names]
+    added = []
+    for name in names:
+        path = prompt_file("packs", name, ".md")
+        with open(path) as f:
+            body = f.read().strip("\n")
+        added.append(body)
+        segments.append({"kind": "added", "label": f"pack {name}", "text": body, "tokens": tokens(body), "source": os.path.relpath(path, PROMPTS)})
+    if standing.strip():
+        added.append(standing.strip("\n"))
+        segments.append({"kind": "added", "label": "standing text", "text": standing.strip("\n"), "tokens": tokens(standing.strip("\n")), "source": "standing"})
+    out = "\n\n".join(kept + added) + "\n"
+    total = {k: sum(s["tokens"] for s in segments if s["kind"] == k) for k in ("kept", "stripped", "added")}
+    # system_sha: sha256 of the text as roster's record hashes it (`$(cat FILE)`, its newlines at the end dropped)
+    sha = hashlib.sha256(out.rstrip("\n").encode()).hexdigest()
+    diff = {"harness": harness, "version": version, "model": model, "how": how, "system_sha": sha, "packs": names, "notes": notes, "segments": segments, "tokens": total}
+    return out, diff, how, notes
+
+
+def main(argv):
+    args, opts, extra = [], {}, []
+    it = iter(argv)
+    for a in it:
+        if a == "--with":
+            extra.append(next(it, None))
+        elif a.startswith("--"):
+            opts[a[2:]] = next(it, None)
+        else:
+            args.append(a)
+    if len(args) != 4 or None in opts.values() or None in extra:
+        print(__doc__.split("\n\n")[0], file=sys.stderr)
+        return 2
+    harness, model, standing_file, out = args
+    if standing_file == "-":
+        standing = sys.stdin.read()
+    else:
+        with open(standing_file) as f:
+            standing = f.read()
+    if opts.get("memory") == "off":
+        memory = None
+    elif "config-dir" in opts and "cwd" in opts:
+        memory = memory_dir(opts["config-dir"], opts["cwd"])
+    elif harness == "claude-code" and "version" in opts:
+        print("prompt-recipe: a Claude Code base needs --config-dir and --cwd, or --memory off", file=sys.stderr)
+        return 2
+    else:
+        memory = None
+    try:
+        text, diff, how, notes = compose(harness, model, standing, opts.get("version"), memory, extra)
+    except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError) as e:
+        print(f"prompt-recipe: {e}", file=sys.stderr)
+        return 1
+    try:
+        for path, body in ((out, text), (out + ".diff.json", json.dumps(diff, ensure_ascii=False, indent=1) + "\n")):
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".prompt-recipe.")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(body)
+                os.replace(tmp, path)
+            except OSError:
+                os.unlink(tmp)
+                raise
+    except OSError as e:
+        print(f"prompt-recipe: {e}", file=sys.stderr)
+        return 1
+    print(how)
+    for n in notes:
+        print(n)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

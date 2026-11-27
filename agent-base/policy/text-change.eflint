@@ -1,0 +1,43 @@
+// A change to the project's own text (kinds/text-change.kind, paper-research N-865): whether it goes live at once or
+// is read first, and who reads it (below). A project's policy/text-change.eflint replaces this file; who may open one
+// at all is the project's `Act open`. The `//` line above each rule is the why its decision gives.
+
+Fact text-read-option Identified by String
++text-read-option("Go").
++text-read-option("Read").
++text-read-option("No").
+
+Decision text-read
+  Options text-read-option
+
+// Who reads it: whoever `fills` the kind's step's role `text-reader`, which the lead holds (text-reader.eflint, so
+// that a project's file in this one's place keeps it); a project's file may give it to others and rule on `fills` for
+// it.
+
+// The owner's own change (his window's Save): live once it checks.
+Only for text-read When call.by == "owner":
+  option == "Go"
+
+// An agent's change to the project's kinds, calls, renderings and views: live once it checks.
+Only for text-read When call.by != "owner" and call.policy-count == 0 and call.library-count == 0 and call.shadows-count == 0 and call.bindings-count == 0 and call.handlers-count == 0:
+  option == "Go"
+
+// An agent's change to the project's policy files: the lead reads it first.
+Only for text-read When call.by != "owner" and call.policy-count > 0:
+  option == "Read"
+
+// An agent's change to the project's library: the lead reads it first.
+Only for text-read When call.by != "owner" and call.library-count > 0:
+  option == "Read"
+
+// An agent's kind in the place of one of agent-base's (a thread, a question): the lead reads it first.
+Only for text-read When call.by != "owner" and call.shadows-count > 0:
+  option == "Read"
+
+// An agent's change to what opens tickets by itself (`on EVENT open`, `every`): the lead reads it first.
+Only for text-read When call.by != "owner" and call.bindings-count > 0:
+  option == "Read"
+
+// An agent's change to what a kind does with the owner's words (`when owner_...`): the lead reads it first.
+Only for text-read When call.by != "owner" and call.handlers-count > 0:
+  option == "Read"

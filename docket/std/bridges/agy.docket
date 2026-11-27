@@ -1,0 +1,239 @@
+module std.bridges.agy
+
+import std.hooks as H
+import std.comms as C
+import std.delivery as D
+import std.budgets as B
+import std.rails as R
+
+// agy (Google's Antigravity CLI), as read. It is run in one of two ways, and the version says which:
+//   t3code-0.1.11   through t3code 0.1.11, which runs agy and tells what it does as its events
+//   agy-1.5.18      agy 1.5.18 itself, over ACP
+// Read from our bridge agy-rpc, which follows both, and from t3code 0.1.11's program text. A model that runs on
+// agy, and an agent that runs it, are named by the project and never here.
+
+// The names agy-rpc runs the relay under: each moment by its own name.
++H.Native-Hook("agy", "turn_begins", "turn_begins").   +H.Native-Hook("agy", "tool_called", "tool_called").
++H.Native-Hook("agy", "tool_result", "tool_result").   +H.Native-Hook("agy", "permission_asked", "permission_asked").
++H.Native-Hook("agy", "turn_end", "turn_end").         +H.Native-Hook("agy", "overloaded", "overloaded").
+
+// Reached however the session was started: a turn's begin and end, a tool call done, a turn that failed.
++H.Reaches("agy", "t3code-0.1.11", "turn_begins").   +H.Reaches("agy", "t3code-0.1.11", "tool_result").
++H.Reaches("agy", "t3code-0.1.11", "turn_end").      +H.Reaches("agy", "t3code-0.1.11", "overloaded").
++H.Reaches("agy", "agy-1.5.18", "turn_begins").      +H.Reaches("agy", "agy-1.5.18", "tool_result").
++H.Reaches("agy", "agy-1.5.18", "turn_end").         +H.Reaches("agy", "agy-1.5.18", "overloaded").
+// before_model_call, compacting: neither way of running it tells of either.
+
+// A call before it runs is reached only where the session was started to ask first.
+//   t3code, `approval-required` (its Supervised): it asks before each command and each file change. An action
+//     that only reads it approves itself; that one comes as `tool_result` alone.
+//   t3code, `full-access`: it asks nobody. Neither moment below comes, so no guard on a tool call holds there.
+//   agy over ACP, `strict`: it asks before every tool call.
+//   agy over ACP, bare (`--dangerously-skip-permissions`): it asks nobody. Neither moment below comes, as in t3code's
+//     `full-access`.
+// The one question is two moments, in this order: `tool_called`, where a guard may refuse the call, and, if none
+// did, `permission_asked`, where the question itself is answered (once for this call, or declined). Unanswered,
+// or answered in words agy-rpc does not read, it is declined: nobody is at agy's own form.
++H.Mode("approval-required"). +H.Mode("full-access"). +H.Mode("strict").
++H.Reaches-In("agy", "t3code-0.1.11", "approval-required", "tool_called").
++H.Reaches-In("agy", "t3code-0.1.11", "approval-required", "permission_asked").
++H.Reaches-In("agy", "agy-1.5.18", "strict", "tool_called").
++H.Reaches-In("agy", "agy-1.5.18", "strict", "permission_asked").
+
++H.Lets("agy", "t3code-0.1.11", "tool_called", "deny").   +H.Lets("agy", "t3code-0.1.11", "permission_asked", "answer").
++H.Lets("agy", "agy-1.5.18", "tool_called", "deny").      +H.Lets("agy", "agy-1.5.18", "permission_asked", "answer").
+
+// Not let, because the text read shows no way to do it:
+//   tool_called, modify              the question is answered yes or no; the call's input is not ours to change
+//   turn_begins, inject              words reach it only as its next prompt, which is our own delivery
+//   turn_end, keep_going             a turn's end is told after it; the next turn is our own delivery of words
+//   overloaded, suspend              the moment is watched; no answer was read
+// A file change comes with its file (std.hooks 4), once for each file it names, whichever of agy's tools makes it:
+// agy-rpc gives every call that writes, deletes or moves a file, or that names one and is no read, as an edit.
+// Not seen even by watching, through t3code: its own text around the words sent, usage for each request, agy's
+// system text and its list of tools.
+
+
+// ===== Delivery: pulled ==========================================================================================
+// An agy session runs on its own timer, and nothing is pushed into it but the owner's own words (`Agy-Kick`, below):
+// no other Effect of this text reaches its session.
+// It pulls what std.delivery holds for it (`Pull-Brain`, the tool `read_brain`, `coord read-brain`), works, hands the
+// work in (std.delivery's `Report-Work`, the tool `report_work`, `coord report-work`), and sets its timer to the
+// minutes its last briefing suggested. Time is the clock driver's minute (std.budgets' `Now`, from `Tick`).
+//   kicked off         by the project when its session starts, or by him (agy-rpc's line); its first pull is due
+//                      within the grace
+//   a pull             what its last briefing handed is read; whatever waits now is handed and told; the mode is
+//                      "work" while anything waits or an item of its own is unclaimed, "sleep" when nothing does,
+//                      "stop" when it is paused or finished, and no timer is set then
+//   the wake           the work and sleep minutes of its phase, else of the project, else of the default 10 and
+//                      20; "watching" a build or a gate, the watch minutes (3)
+//   his own word      once it has pulled since its session was kicked off, and while no turn runs and it is neither
+//                      paused nor finished, typed in at once as a turn of its own (`Agy-Kick`); else it waits for
+//                      a pull like any word (N-1998 p3, point 1; v1 the same since docket-edge4's cfb0ed2e9)
+//   a missed check-in  a minute past its last pull, its wake and the grace, the owner is told once, softly (an
+//                      `Anomaly` fact for his window): the session is never woken, stopped or written into
+// Only an agent the project delivers to by "agy" (D.Agent) is briefed.
++H.Party("std.bridges.agy"). +D.Carrier("std.bridges.agy").
+
+Fact Agy-Active(agent: H.Party)
+Fact Agy-Paused(agent: H.Party)
+Fact Agy-Finished(agent: H.Party)
+Fact Kicked-Off(agent: H.Party, by_human: Bool)
+Fact Last-Pulled(agent: H.Party, minute: Int)
+Fact Told-Wake(agent: H.Party, minutes: Int)
+Fact Status-Note(agent: H.Party, note: String)
+Fact Has-Pulled(agent: H.Party)                             // since its session was kicked off
+Fact Agy-Kicked(agent: H.Party)                             // his word typed in, its turn not yet over nor pulled
+
+Fact Pull-Grace(minutes: Int)
++Pull-Grace(5).
+Fact Default-Wake(work: Int, sleep: Int)
++Default-Wake(10, 20).
+Fact Project-Wake(work: Int, sleep: Int)                    // the project's, in place of the default
+Fact Phase-Wake(agent: H.Party, work: Int, sleep: Int)      // a phase's, for one agent, in place of both
+Fact Watching(agent: H.Party, what: String)                 // a build or a gate it waits on
+Fact Watch-Wake(minutes: Int)
++Watch-Wake(3).
+Fact Wake-Range(agent: H.Party, work: Int, sleep: Int)
+  Holds when Agy-Active(agent) && Phase-Wake(agent, work, sleep)
+  Holds when Agy-Active(agent) && Not(Exists a, b : Phase-Wake(agent, a, b)) && Project-Wake(work, sleep)
+  Holds when Agy-Active(agent) && Not(Exists a, b : Phase-Wake(agent, a, b)) && Not(Exists a, b : Project-Wake(a, b))
+             && Default-Wake(work, sleep)
+
+Fact Next-Expected-Pull(agent: H.Party, due: Int)
+  Holds when Agy-Active(agent) && Last-Pulled(agent, t) && Told-Wake(agent, w) && Pull-Grace(g) && due == t + w + g
+Fact Anomaly(kind: String, agent: H.Party, due: Int)
+
+Event Session-Kicked-Off(agent: H.Party, by_human: Bool, minute: Int)      // agy-rpc's line: a session begun
+  Terminates Last-Pulled(agent, m) When Last-Pulled(agent, m),
+             Told-Wake(agent, w) When Told-Wake(agent, w),
+             Kicked-Off(agent, b) When Kicked-Off(agent, b),
+             Agy-Paused(agent) When Agy-Paused(agent),
+             Agy-Finished(agent) When Agy-Finished(agent),
+             Has-Pulled(agent) When Has-Pulled(agent),
+             Agy-Kicked(agent) When Agy-Kicked(agent)
+  Creates    Agy-Active(agent), Kicked-Off(agent, by_human), Last-Pulled(agent, minute), Told-Wake(agent, 0)
+Event Pulse-Anomaly(kind: String, agent: H.Party, due: Int)
+  Creates    Anomaly(kind, agent, due)
+
+Act Pause(by: H.Party, agent: H.Party)
+  Conditioned by D.Director(by) && Agy-Active(agent) && Not(Agy-Paused(agent))
+  Creates        Agy-Paused(agent)
+// unpaused, its next pull is due within the grace, as at a kick-off: a pause longer than its wake is no missed
+// check-in (N-1978 p5, point 4)
+Act Unpause(by: H.Party, agent: H.Party)
+  Conditioned by D.Director(by) && Agy-Paused(agent)
+  Terminates     Agy-Paused(agent) When Agy-Paused(agent)
+  Does {
+    now <- do minute_now();
+    Rearmed(agent, now)
+  }
+Event Rearmed(agent: H.Party, minute: Int)
+  Terminates Last-Pulled(agent, m) When Last-Pulled(agent, m),
+             Told-Wake(agent, w) When Told-Wake(agent, w)
+  Creates    Last-Pulled(agent, minute), Told-Wake(agent, 0)
+Act Finish(by: H.Party, agent: H.Party)
+  Conditioned by D.Director(by) && Agy-Active(agent) && Not(Agy-Finished(agent))
+  Creates        Agy-Finished(agent)
+
+// A build or a gate it waits on, said by itself or a director; a phase's wake for it, by a director.
+Act Watch(by: H.Party, agent: H.Party, what: String)
+  Conditioned by (by == agent || D.Director(by)) && Agy-Active(agent) && Not(Watching(agent, what))
+  Creates        Watching(agent, what)
+Act Unwatch(by: H.Party, agent: H.Party, what: String)
+  Conditioned by (by == agent || D.Director(by)) && Watching(agent, what)
+  Terminates     Watching(agent, what) When Watching(agent, what)
+Act Set-Phase-Wake(by: H.Party, agent: H.Party, work: Int, sleep: Int)
+  Conditioned by D.Director(by) && Agy-Active(agent) && work > 0 && sleep >= work
+  Terminates     Phase-Wake(agent, a, b) When Phase-Wake(agent, a, b)
+  Creates        Phase-Wake(agent, work, sleep)
+
+// The pull's line: when, the wake it was told, and its own word on where it is.
+Act Note-Pull(agent: H.Party, minute: Int, wake: Int, note: String)
+  Conditioned by Agy-Active(agent)
+  Terminates     Last-Pulled(agent, m) When Last-Pulled(agent, m),
+                 Told-Wake(agent, w) When Told-Wake(agent, w),
+                 Status-Note(agent, n) When Status-Note(agent, n),
+                 Agy-Kicked(agent) When Agy-Kicked(agent)
+  Creates        Last-Pulled(agent, minute), Told-Wake(agent, wake), Status-Note(agent, note), Has-Pulled(agent)
+
+// What a pull answers. `new_directives`, each directive this pull tells it for the first time (the first among
+// them too, if new), is more than the owner's form named: without it a directive below the first is never told.
+type Briefing { mode: String, priority_directive: String, new_directives: List<String>, unread_messages: List<String>,
+                assigned_items: List<R.Artifact>, suggested_wake_mins: Int, wake_hint: String }
+
+fn minute_now() -> Program<Int> {
+  match first(Foreach m : m When B.Now(m)) {
+    | Some(m) => return m
+    | None    => return 0
+  }
+}
+
+fn wake_for(agent: H.Party, mode: String) -> Program<Int> {
+  if mode == "stop" {
+    return 0
+  } else {
+    if Exists w : Watching(agent, w) {
+      match first(Foreach m : m When Watch-Wake(m)) { | Some(m) => return m | None => return 3 }
+    } else {
+      if mode == "work" {
+        match first(Foreach a, b : a When Wake-Range(agent, a, b)) { | Some(m) => return m | None => return 10 }
+      } else {
+        match first(Foreach b, a : b When Wake-Range(agent, a, b)) { | Some(m) => return m | None => return 20 }
+      }
+    }
+  }
+}
+
+// AGENT's own pull: only the agent itself asks it (its first field is the caller), and only while it is active.
+Act Pull-Brain(agent: H.Party, note: String) Returns Briefing
+  Conditioned by Agy-Active(agent) && D.Agent(agent, "agy", r)
+  Does {
+    now <- do minute_now();
+    D.Settle(agent, agent);
+    // paused or finished: nothing handed, so nothing counts as read; told when it works again (N-1978 p5, point 4)
+    if Holds(Agy-Paused(agent)) || Holds(Agy-Finished(agent)) {
+      Note-Pull(agent, now, 0, note);
+      return Briefing("stop", "", [], [], [], 0, "set no timer: the session is paused or finished; it is started again by him")
+    } else {
+      w <- do D.waiting(agent);
+      do D.hand(agent, w);
+      own <- return (Foreach t : t When R.Assigned(agent, t) && Not(R.Claimed-Done(agent, t)));
+      mode <- if w.lines != [] || w.directives != [] || own != [] { return "work" } else { return "sleep" };
+      wake <- do wake_for(agent, mode);
+      Note-Pull(agent, now, wake, note);
+      return Briefing(mode, w.top, w.directives, w.lines, own, wake, "pull again in {{ wake }} min (read_brain); a pull later than minute {{ now + wake }} and the grace is told to the owner")
+    }
+  }
+
+// A session the project starts (the session driver's `Session-Started`) is kicked off by the project; one he starts
+// by hand is told by agy-rpc's own line, with `by_human` true.
+on H.Session-Started(agent, "agy", v) where D.Agent(agent, "agy", r) do {
+  now <- do minute_now();
+  Session-Kicked-Off(agent, false, now)
+}
+
+// His own word to it (only the owner's: a director's or another agent's waits for a pull), once it has pulled since
+// its session was kicked off and while no turn runs: before that pull, the kick-off itself carries what waits, and in
+// a turn, or paused or finished, it waits for the next pull. Typed in, it is not handed: the pull that turn begins
+// with tells it, so that pull says "work" and Report-Work can answer it (the owner, N-1998 p7, point 1: handed at the
+// kick, the pull counted it read and said "sleep"). One word typed in is one turn: a second before that turn's hook, its end or a pull waits too (`Agy-Kicked`), so two
+// quick words are never two turns typed over each other.
+Effect Agy-Kick(agent: H.Party, text: String) -> Unit      // the turns driver's: typed when no turn runs
+Event Kicked(agent: H.Party)
+  Creates    Agy-Kicked(agent)
+Event Kick-Over(agent: H.Party)
+  Terminates Agy-Kicked(agent) When Agy-Kicked(agent)
+on D.Post(by, to, msg, text, u) where D.Agent(to, "agy", r) && C.Role(by, "owner") && Agy-Active(to) && Has-Pulled(to)
+   && Not(H.In-Turn(to)) && Not(Agy-Kicked(to)) && Not(Agy-Paused(to)) && Not(Agy-Finished(to)) do {
+  perform Agy-Kick(to, "[coord delivery, from the owner] [{{ msg }} from {{ by }}] {{ text }}");
+  Kicked(to)
+}
+on H.Reach(agent, "turn_end") where D.Agent(agent, "agy", r) && Agy-Kicked(agent) do { Kick-Over(agent) }
+on H.Reach(agent, "overloaded") where D.Agent(agent, "agy", r) && Agy-Kicked(agent) do { Kick-Over(agent) }
+
+// A missed check-in, told once for each pull it was due after; never while paused or finished.
+on B.Tick(now) where Agy-Active(agent) && Not(Agy-Paused(agent)) && Not(Agy-Finished(agent))
+   && Next-Expected-Pull(agent, due) && now > due && Not(Anomaly("agy_missed_checkin", agent, due)) do {
+  Pulse-Anomaly("agy_missed_checkin", agent, due)
+}

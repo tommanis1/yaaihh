@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type even\nNew type expand\nexecuted transition: \nexpand() \n+even(2)\nexecuted transition: \nexpand() \n+even(4)\nexecuted transition: \nexpand() \n+even(6)\n+even(8)\nexecuted transition: \nexpand() \n+even(10)\n+even(12)\n+even(16)\nexecuted transition: \nexpand() \n+even(14)\n+even(18)\n+even(20)\n+even(24)\n+even(32)\nexecuted transition: \nexpand() \n+even(22)\n+even(26)\n+even(28)\n+even(34)\n+even(36)\n+even(40)\n+even(48)\n+even(64)\nquery successful\nquery successful\nquery successful\n#11 > "
+ }
+}

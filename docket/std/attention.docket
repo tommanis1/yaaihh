@@ -1,0 +1,229 @@
+module std.attention
+
+import std.hooks as H
+import std.comms as C
+import std.budgets as B
+import std.control as Ctrl
+
+// Three levels of work in progress: only the owner parks or drops, nothing rots unseen, and no message is ever refused.
+// This module's reactions run as the party "std.attention" (spec 8.8); no party is seated under that name.
+
+Fact Ref  Identified by String                 // an initiative, a work item, a discussion or a thread, by its id
+Fact Mode Identified by String
++Mode("Active"). +Mode("Parked"). +Mode("Done").
+
+// The soft limits, a project's to restate: active initiatives, items per initiative, discussions per item, minutes.
+Fact Cap(kind: String, n: Int)
++Cap("initiatives", 5). +Cap("items", 7). +Cap("discussions", 2). +Cap("discussion_mins", 120). +Cap("file_mins", 15).
+
+// The clock driver's line, once a minute: minutes since its epoch.
+Fact Clock(now: Int)
+Event Tick(now: Int)
+  Conditioned by Not(Exists t : Clock(t) && t >= now)
+  Terminates     Clock(t)
+  Creates        Clock(now)
+
+// ===== The three levels ==========================================================================================
+
+Fact Initiative(id: Ref, title: String, state: Mode)
+Fact Work-Item(id: Ref, initiative: Ref, title: String, state: Mode)
+Fact Local-Discussion(id: Ref, item: Ref, opened_at: Int, state: Mode)
+Fact Stale-After(target: Ref, mins: Int)
+Fact Progress(target: Ref, at: Int)            // the last push on TARGET
+Fact Paused(initiative: Ref, reason: String)
+Fact Dropped(initiative: Ref, reason: String)
+Fact Bucket-For(bucket: B.Bucket, target: Ref)   // bound by whoever starts the run that spends it, at its start
+
+// Frozen: under an initiative that is not active, so no work or spend goes on there.
+Fact Frozen(target: Ref)
+  Holds when (Initiative(target, x, m) && m != "Active")
+             || (Work-Item(target, i, x, s) && Initiative(i, y, m) && m != "Active")
+             || (Local-Discussion(target, w, a, s) && Work-Item(w, i, x, z) && Initiative(i, y, m) && m != "Active")
+
+Fact Known(id: Ref)
+  Holds when Initiative(id, x, m) || Work-Item(id, i, x, m) || Local-Discussion(id, w, a, m)
+
+Act Open-Initiative(by: H.Party, id: Ref, title: String, stale_after_mins: Int)
+  Conditioned by Not(Known(id))
+  Creates        Initiative(id, title, "Active"), Stale-After(id, stale_after_mins), Progress(id, now) When Clock(now)
+
+// Never refused for being over a cap: past it the pulse says so.
+Act Open-Item(by: H.Party, id: Ref, initiative: Ref, title: String, stale_after_mins: Int)
+  Conditioned by Not(Known(id)) && (Exists t : Initiative(initiative, t, "Active"))
+  Creates        Work-Item(id, initiative, title, "Active"), Stale-After(id, stale_after_mins),
+                 Progress(id, now) When Clock(now)
+
+Act Open-Discussion(by: H.Party, id: Ref, item: Ref)
+  Conditioned by Not(Known(id)) && (Exists i, t : Work-Item(item, i, t, "Active")) && Not(Frozen(item))
+  Creates        Local-Discussion(id, item, now, "Active") When Clock(now)
+
+Act Spend-For(by: H.Party, bucket: B.Bucket, target: Ref)
+  Conditioned by Known(target) && Not(Frozen(target)) && Not(Exists t : Bucket-For(bucket, t))
+  Creates        Bucket-For(bucket, target)
+
+Act Push(by: H.Party, target: Ref)
+  Conditioned by Known(target) && Not(Frozen(target))
+  Terminates     Progress(target, t)
+  Creates        Progress(target, now) When Clock(now)
+
+Act Finish-Item(by: H.Party, item: Ref)
+  Conditioned by (Exists i, t : Work-Item(item, i, t, "Active")) && Not(Frozen(item))
+  Terminates     Work-Item(item, i, t, "Active")
+  Creates        Work-Item(item, i, t, "Done") When Work-Item(item, i, t, "Active")
+
+Act Close-Discussion(by: H.Party, id: Ref)
+  Conditioned by Exists w, a : Local-Discussion(id, w, a, "Active")
+  Terminates     Local-Discussion(id, w, a, "Active")
+  Creates        Local-Discussion(id, w, a, "Done") When Local-Discussion(id, w, a, "Active")
+
+// Nothing more is spent from a bucket for a frozen target; other spends go on.
+Extend Act B.Spend
+  Conditioned by Not(Exists t : Bucket-For(bucket, t) && Frozen(t))
+
+// The name the reactions run as is no party's to be seated under.
+Extend Act C.Seat
+  Conditioned by who != "std.attention"
+Extend Event C.Owner-Seated
+  Conditioned by who != "std.attention"
+
+// ===== Hard rule 1: only the owner parks, drops and resumes =====================================================
+
+Act Owner-Pause(owner: H.Party, initiative: Ref, reason: String)
+  Conditioned by C.Role(owner, "owner") && (Exists t : Initiative(initiative, t, "Active"))
+  Terminates     Initiative(initiative, t, "Active")
+  Creates        Paused(initiative, reason), Initiative(initiative, t, "Parked") When Initiative(initiative, t, "Active")
+
+// Resuming restarts the clocks of the initiative and of its active items, so none is neglected for the pause.
+Act Owner-Resume(owner: H.Party, initiative: Ref)
+  Conditioned by C.Role(owner, "owner") && (Exists t : Initiative(initiative, t, "Parked"))
+  Terminates     Initiative(initiative, t, "Parked"), Paused(initiative, r), Progress(initiative, p),
+                 Progress(w, q) When Work-Item(w, initiative, x, "Active")
+  Creates        Initiative(initiative, t, "Active") When Initiative(initiative, t, "Parked"),
+                 Progress(initiative, now) When Clock(now),
+                 Progress(w, now) When Clock(now) && Work-Item(w, initiative, x, "Active")
+
+Act Owner-Drop(owner: H.Party, initiative: Ref, reason: String)
+  Conditioned by C.Role(owner, "owner") && (Exists t, m : Initiative(initiative, t, m) && m != "Done")
+  Terminates     Initiative(initiative, t, m)
+  Creates        Dropped(initiative, reason), Initiative(initiative, t, "Done") When Initiative(initiative, t, m)
+
+// ===== Hard rule 2: nothing active rots unseen ==================================================================
+
+Fact Neglected(target: Ref)
+  Holds when ((Exists t : Initiative(target, t, "Active")) || (Exists i, t : Work-Item(target, i, t, "Active")))
+             && Not(Frozen(target)) && Progress(target, at) && Stale-After(target, m) && Clock(now) && now - at > m
+
+// Held by this module's name, owed to the owner; a push, a pause or a drop ends it.
+Duty Surface-Neglected(holder: H.Party, claimant: H.Party, target: Ref)
+  Holds when Neglected(target) && holder == "std.attention" && C.Role(claimant, "owner")
+
+// ===== Soft signals: never a refusal ============================================================================
+
+Fact Active-Initiatives(n: Int)
+  Holds when n == Count(Foreach i : i When Exists t : Initiative(i, t, "Active"))
+Fact Active-Items(initiative: Ref, n: Int)
+  Holds when Initiative(initiative, t, "Active") && n == Count(Foreach w : w When Exists x : Work-Item(w, initiative, x, "Active"))
+// An active item of an active initiative: only its discussions spin, so frozen or finished work never does.
+Fact Live-Item(item: Ref)
+  Holds when Work-Item(item, i, t, "Active") && Initiative(i, y, "Active")
+Fact Active-Discussions(item: Ref, n: Int)
+  Holds when Live-Item(item) && n == Count(Foreach d : d When Exists a : Local-Discussion(d, item, a, "Active"))
+
+Fact Pulse-Anomaly(kind: String, target: Ref)
+  Holds when (kind == "too_many_initiatives" && target == "initiatives" && Active-Initiatives(n) && Cap("initiatives", c) && n > c)
+             || (kind == "wip_bloat" && Active-Items(target, n) && Cap("items", c) && n > c)
+             || (kind == "spinning_discussion" && Active-Discussions(target, n) && Cap("discussions", c) && n > c)
+             || (kind == "spinning_discussion" && Local-Discussion(d, target, a, "Active") && Live-Item(target) && Clock(now)
+                 && Cap("discussion_mins", c) && now - a > c)
+
+// Threads: an agent may open one tied to nothing; it waits in the lead's Unfiled inbox, off the owner's head.
+Fact Thread(id: Ref, by: H.Party)
+Fact Opened-At(id: Ref, at: Int)
+Fact Tied(thread: Ref, initiative: Ref)
+
+Act Open-Thread(by: H.Party, id: Ref)
+  Conditioned by Not(Exists w : Thread(id, w))
+  Creates        Thread(id, by), Opened-At(id, now) When Clock(now)
+
+Act File-Under(by: H.Party, thread: Ref, initiative: Ref)
+  Conditioned by (Exists w : Thread(thread, w)) && (Exists t, m : Initiative(initiative, t, m))
+  Creates        Tied(thread, initiative)
+
+Fact Unfiled(thread: Ref)
+  Holds when Thread(thread, by) && Not(C.Role(by, "owner")) && Not(Exists i : Tied(thread, i))
+
+Fact Overdue(thread: Ref)
+  Holds when Unfiled(thread) && Opened-At(thread, at) && Clock(now) && Cap("file_mins", c) && now - at > c
+
+// What a soft duty is owed for; this module raises and lowers it, so the duty's holder never ends it by its own act (spec 9).
+Fact Signal(kind: String, target: Ref)
+  Holds when Pulse-Anomaly(kind, target) || (kind == "unfiled" && Unfiled(target))
+Fact Raised(kind: String, target: Ref)
+
+// Events: only this module's own text performs them (spec 8.2).
+Event Raise(kind: String, target: Ref)
+  Conditioned by Signal(kind, target) && Not(Raised(kind, target))
+  Creates        Raised(kind, target)
+Event Lower(kind: String, target: Ref)
+  Conditioned by Raised(kind, target) && Not(Signal(kind, target))
+  Terminates     Raised(kind, target)
+
+Duty Trim-Scope(holder: H.Party, claimant: H.Party, initiative: Ref)
+  Holds when Raised("wip_bloat", initiative) && C.Role(holder, "lead") && C.Role(claimant, "owner")
+Duty Resolve-Or-Escalate(holder: H.Party, claimant: H.Party, item: Ref)
+  Holds when Raised("spinning_discussion", item) && C.Role(holder, "brain") && C.Role(claimant, "owner")
+Duty File-Under-Initiative(holder: H.Party, claimant: H.Party, thread: Ref)
+  Holds when    Raised("unfiled", thread) && C.Role(holder, "lead") && C.Role(claimant, "owner")
+  Violated when Opened-At(thread, at) && Clock(now) && Cap("file_mins", c) && now - at > c
+
+fn sweep() -> Program<Unit> {
+  up <- return (Foreach k, t : Signal(k, t) When Signal(k, t) && Not(Raised(k, t)));
+  par s in up { Raise(s.kind, s.target) };
+  down <- return (Foreach k, t : Raised(k, t) When Raised(k, t) && Not(Signal(k, t)));
+  par s in down { Lower(s.kind, s.target) };
+  return ()
+}
+
+on Tick(_) do { do sweep() }
+on Open-Initiative(_, _, _, _) do { do sweep() }
+on Open-Item(_, _, _, _, _) do { do sweep() }
+on Open-Discussion(_, _, _) do { do sweep() }
+on Finish-Item(_, _) do { do sweep() }
+on Close-Discussion(_, _) do { do sweep() }
+on Open-Thread(_, _) do { do sweep() }
+on File-Under(_, _, _) do { do sweep() }
+on Owner-Pause(_, _, _) do { do sweep() }
+on Owner-Resume(_, _) do { do sweep() }
+on Owner-Drop(_, _, _) do { do sweep() }
+
+// ===== The two views =============================================================================================
+
+// An Await-Approval in flight, by its run: ended on an answer or a fault; on a cancel, Ctrl.Await-Approval's driver performs Answered-Owner (in its events()).
+Fact Awaiting-Approval(run: Ref, who: H.Party, payload: String)
+Event Asked-Owner(run: Ref, who: H.Party, payload: String)
+  Creates        Awaiting-Approval(run, who, payload)
+Event Answered-Owner(run: Ref)
+  Terminates     Awaiting-Approval(run, w, p)
+
+on Ctrl.Await-Approval(who, payload) do {
+  Asked-Owner(Ref(this), who, payload);
+  handle { perform Ctrl.Await-Approval(who, payload) } with {
+    return ans => { Answered-Owner(Ref(this)); return ans }
+    | Fault(why), k => { Answered-Owner(Ref(this)); perform Fault(why) }
+  }
+}
+
+Fact Neglect-Owed(target: Ref)
+  Holds when Surface-Neglected(h, o, target)
+Fact Asked(target: Ref)
+  Holds when Awaiting-Approval(target, w, p) && C.Role(w, "owner")
+
+// Needs-Owner: each thing only the owner can move, once.
+Fact Needs-Owner(kind: String, target: Ref)
+  Holds when (kind == "neglected" && Neglect-Owed(target)) || (kind == "approval" && Asked(target))
+             || (kind == "unfiled_overdue" && Overdue(target))
+
+// System-Pulse: Healthy with no anomaly; the anomalies themselves are the Pulse-Anomaly facts.
+Fact System-Pulse(state: String, anomalies: Int)
+  Holds when anomalies == Count(Foreach k, t : Pulse-Anomaly(k, t) When Pulse-Anomaly(k, t))
+             && ((state == "Healthy" && Not(Exists k, t : Pulse-Anomaly(k, t))) || (state == "Anomalous" && Exists k, t : Pulse-Anomaly(k, t)))

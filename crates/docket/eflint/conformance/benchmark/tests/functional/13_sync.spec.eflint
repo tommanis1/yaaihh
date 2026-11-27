@@ -1,0 +1,2 @@
+Act go Actor string
+	Syncs with go(string("x")) Where string != string("x")

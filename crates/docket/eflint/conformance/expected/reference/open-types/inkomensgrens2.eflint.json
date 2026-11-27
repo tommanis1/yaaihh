@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type below\nNew type grens\nNew type inkomen\nNew type inkomensgrens\n-grens(\"Hoog\")\n+grens(\"Laag\")\n+inkomensgrens(10)\n+inkomen(20)\nquery successful\nquery successful\n~inkomensgrens(10)\n-grens(\"Laag\")\n+grens(\"Hoog\")\n+inkomensgrens(1000)\n+below()\nquery successful\n#6 > "
+ }
+}

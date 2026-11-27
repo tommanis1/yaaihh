@@ -1,0 +1,125 @@
+module std.control
+
+import std.hooks as H
+import std.comms as C
+import std.budgets as B
+
+// Pause/Slow Mode, Fork-on-Busy, and Time-Travel Replay as pure 15-25 line Effect Handlers.
+// Zero hardcoded engine flags.
+
+Fact Slow-Mode(who: H.Party)
+Fact Busy(who: H.Party)              // the project's: this file gives it no meaning, on purpose (see 2)
+
+type Approval = Approved(edited: String) | Lapsed | Rejected(reason: String)
+type Outcome<T> = Finished(value: T) | Stopped(reason: String)
+
+Effect Await-Approval(who: H.Party, payload: String) -> Approval
+Effect Notify(who: H.Party, msg: String)             -> Unit
+Effect Deliver(from: H.Party, to: H.Party, msg: String) -> String
+Effect Spin-Off(parent: H.Party)                     -> H.Party
+Effect Join-Back(fork: H.Party, parent: H.Party, summary: String) -> Unit
+Effect Delete-Fork(fork: H.Party)                    -> Unit
+Effect Git-Head()                                    -> String
+Effect Sleep(seconds: Int)                           -> Unit
+
+// 1. Pause & Slow Mode: suspends delimited continuation `k` until approved, edited, or rejected.
+// A rejection tells the sender and ends its program with `Stopped`. A lapse delivers: slow mode sets a pace, it is
+// not a gate.
+fn with_slow_mode<T>(p: Program<T>) -> Program<Outcome<T>> {
+  handle do p with {
+    return x => return Finished(x)
+    | Deliver(from, to, msg), k => {
+        if Holds(Slow-Mode(to)) {
+          ans <- perform Await-Approval(to, msg);
+          match ans {
+            | Approved(edited) => { out <- perform Deliver(from, to, edited); resume k(out) }
+            | Lapsed           => { out <- perform Deliver(from, to, msg);    resume k(out) }
+            | Rejected(why)    => { perform Notify(from, why); return Stopped(why) } // drops k cleanly — real Reject!
+          }
+        } else {
+          out <- perform Deliver(from, to, msg);
+          resume k(out)
+        }
+      }
+  }
+}
+
+// The same pace for a burning agent's own calls (std.budgets `Burning`): a pause before each request to the
+// provider where the harness has that moment and can wait there, else before each tool call.
+fn with_pace<T>(agent: H.Party, seconds: Int, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, moment, payload), k
+        where who == agent && Holds(B.Burning(agent))
+              && (moment == "before_model_call"
+                  || (moment == "tool_called" && Not(Exists h, v : H.Running-On(agent, h, v) && H.Reaches(h, v, "before_model_call")))) => {
+        perform Sleep(seconds);
+        answer <- perform H.Hook(who, moment, payload);
+        resume k(answer)
+      }
+  }
+}
+
+// 2. Fork-and-Join ONLY when the specific target agent is busy (never cloning every busy agent).
+// Two words are not this file's to decide, and it does not decide them: a message is RECEIVED by the one party
+// `Deliver` names as `to`, and that party is BUSY when the project's fact `Busy` says so. There is no default.
+// One fork at a time for a target; where none can be made, the message waits for the target's next turn.
+Fact Forked(target: H.Party, fork: H.Party)
+Act Note-Fork(actor: H.Party, target: H.Party, fork: H.Party)       // by the run that made the fork
+  Conditioned by Not(Exists f : Forked(target, f))
+  Creates        Forked(target, fork)
+Act Note-Fork-Gone(actor: H.Party, target: H.Party, fork: H.Party)
+  Conditioned by Forked(target, fork)
+  Terminates     Forked(target, fork)
+
+fn with_fork_on_busy<T>(target: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | Deliver(from, to, msg), k
+        where to == target && Holds(Busy(target)) && Not(Exists f : Forked(target, f))
+              && Not(Exists b, d : B.Bucket-Of(target, b) && B.Over-Budget(b, d)) => {
+        fork <- perform Spin-Off(target);
+        Note-Fork(self, target, fork);
+        ans  <- perform Deliver(from, fork, msg);
+        perform Join-Back(fork, target, ans);
+        perform Delete-Fork(fork);
+        Note-Fork-Gone(self, target, fork);
+        resume k(ans)
+      }
+  }
+}
+
+// 3. Deterministic Time-Travel & Structural Prefix Replay.
+// The replay itself is the engine's (spec 11): every answer a driver gives is keyed by (op, args, git_head,
+// state_hash), a changed program reuses the answers of its old run up to the first operation that differs, and
+// goes live there. A handler cannot be that replay: it would itself have to be replayed, and a run cannot compute
+// its own state hash.
+// What a library may still decide is which answers are reused. This handler reuses the model answers of the run
+// named LABEL while the calls are the same text; at the first call that differs it leaves the label for this
+// attempt, and everything after is asked for real. It keeps the model's text (`C.Model`), so it serves a call of
+// any answer type: the text is read into the type after it, as on the first run.
+Fact Answered(label: String, call_text: String, answer: String)
+Fact Left(label: String, attempt: String)            // this attempt at the label has gone live
+Act Note-Answer(actor: H.Party, label: String, call_text: String, answer: String)
+  Conditioned by Not(Exists a : Answered(label, call_text, a))
+  Creates        Answered(label, call_text, answer)
+Act Leave-Label(actor: H.Party, label: String, attempt: String)
+  Creates        Left(label, attempt)
+
+fn with_replay<T>(label: String, attempt: String, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | C.Model(who, text), k => {
+        old  <- return (Foreach a : a When Answered(label, text, a) && Not(Left(label, attempt)));
+        match old {
+          | [answer] => resume k(answer)
+          | _ => {
+              Leave-Label(self, label, attempt);
+              out <- perform C.Model(who, text);
+              Note-Answer(self, label, text, out);
+              resume k(out)
+            }
+        }
+      }
+  }
+}

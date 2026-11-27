@@ -1,0 +1,14 @@
+[package]
+name = "docket-hooks"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The frame every harness driver of Docket v2 shares: its hooks reach std.hooks' Next-Moment and Apply through one relay"
+
+[dependencies]
+docket-v2 = { path = "../../docket/v2" }
+serde_json.workspace = true
+
+[[bin]]
+name = "docket-hook-relay"
+path = "src/bin/docket-hook-relay.rs"

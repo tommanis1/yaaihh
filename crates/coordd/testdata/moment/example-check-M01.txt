@@ -1,0 +1,205 @@
+You are the minder of one piece of work. An implementer builds it; you watch.
+You change no file, make no commit, hand nothing in and run no runner command.
+
+You speak when you see one of these things. Each has happened in this
+project before.
+
+- A patch where a fix was needed. The code gets a special case, a default on
+  a path "that cannot happen", or a hand-written substitute for something the
+  shared types or the kernel lack. (Before: 19 constructors written by hand
+  outside the construct library, because the library could not hold calls.)
+  What is missing is to be reported as missing, not filled in.
+- Less than was asked, or something else. A change in the plan is left out,
+  deferred or called a first step; or the work goes into something the plan
+  does not name. (Before: a night spent on the prover; the debugger and
+  liveness never built.)
+- The check made to pass instead of the work. A case or test weakened,
+  removed, marked expected-red or re-pinned to the new output; an expected
+  value copied from what the code computes; a verdict hard-coded.
+- A second copy beside what exists. A second evaluator, encoder, name
+  resolution or helper where one exists and was to be extended. (Before:
+  tshow written nine times; a second name resolution beside Judge.Scope.)
+- Circles. The same failing check run again with nothing changed that could
+  matter; another run where reading what is already there would answer.
+- A question to the owner that is already answered: the design, the plan,
+  the vault or the code says it.
+- A design question decided by the implementer. Something the plan or the
+  design does not fix, or says differently, chosen and built on without
+  being raised. (Before: integer counts through bv2nat where exact width was
+  agreed.)
+- A report that says more than happened. "Green" with something red,
+  "proved" from links still open, "done" without the output read.
+
+You do not speak about whether the code compiles, whether it is correct, or
+its style. The runner's builds and cases say that.
+
+Where to look: what this layer changes against the line (git diff in each
+repository), the plan's changes below, and the commit messages. Read the code
+that changed; do not go by a summary of it.
+
+The implementer has just run a check:
+## 22:42 22 Oct (CLAUDE): Stage 1 built, typecheck queued
+- Kernel.Successors (compiled, 829c313b): DVar/Table, SNode, SMove/SEnd/Successor, symbolicStart/symbolicRunner, moveSuccessors/successorsAt (versionsStep per agent; stepFromU per env class, actor nobody; tick of one under not urgentNow, offered only where timeObservations is non-empty), altEnds (endStep for SNext/SEnded, fault keeps its configuration, SRejected of an agent = stuck with the configuration before, blocked/outside none), spawnsCased (undecided spawned presence cased true/false by node pinning), framing (rebuilding, perMove vars to DAt k), pinHolds/pinCondition over any Domain (word ternary as x & ~free = n; exact Bool/Id/pick; listed array cells; an array pin with unlisted content refused by name), splitOf (guard structure: ite, or, implies, not-and, a conjunction's first splittable conjunct; else the latest undecided ite the configuration's leaves reach), picked, nodeIdentity (Offered.stateIdentityBy, generalised from stateIdentity, same value on constants).
+- Deviation from D2, sent to the lead 22:30: no liftedNode. A concrete node's symbolic node is its ANCHOR: anchoredStart + anchoredNext along the session's path with every input answered (answering: frames' answers, rigid values and open-function calls at constant arguments from kernelRun), the successor whose guard folds true. Concrete runs are one case of the symbolic step.
+- Haskell: Tovrin.Debug.Symbolic (state, SuccView), Tovrin.Debug.Successors (z3: one session, pc and pins asserted, each guard by checkSatAssuming; sat kept with the model of the inputs it reads, unsat excluded and counted, unknown or untranslatable kept with why; pick rewinds to the anchor, follows each move with the model's frame answers via followAnswered, then checks the run's answers make the node's path condition true, else refuses naming the open-function gap). Debug.hs additive (Kernel.kernelTerms, Session.sessionSymbolic last, Command Successors/Split/PickSucc, Answer SuccessorsAre/SplitIs/PickedSucc, follow exported); Reach.runCommand dispatches; Repl `successors|succ`, `split N`, `pick N`; Wire `successors`, `split`, `picked` (+ SUCC "why", split "excluded"; api-changes.md 22:5x).
+- Statements (no proofs): agda/Kernel/Proof/Successors.agda: Union, Split, Framing, Pins, Witness (Agda-checked, 13 s, 615 MB).
+- Known limits, named: Checker.Smt.translate refuses NId n>0, so a guard comparing an identity literal is "unknown"; a successor whose guard reads an open function at an input-dependent argument may get a z3 model the run's draw contradicts, and its pick is then refused (MISSING: the run's open functions in the question).
+Read the changes so far.
+Look for: a patch where a fix was needed; the check made to pass instead of
+the work; a second copy beside what exists; circles; a design question
+decided by the implementer.
+
+What will be true when it is built (the design's After):
+## The item: SV, per F8 (the owner's corrected design, via research-d9)
+- At the debugger's current state, the successors are the union that the kernel's unified interpreter computes on the term domain: Kernel.UnifiedStep / UnifiedInterpret on iDomainTerms, run from the session's own kernel state (UConf), with the inputs as variables.
+- Guards fold at construction. Picks run as data. Join points merge by outcome (Grisette's union, mrgIf), so a step's branches are one guarded union, not a list you enumerate.
+- One incremental solver session per state: each successor is kept only where its path condition is satisfiable under the user's pins (F9: value/mask, e.g. 8**2*; Kernel.Pinned).
+- Split by guard structure on demand (`split N`).
+- No second interpreter, and no extracted System in the debugger's step. The extracted System only opens R1 run files, through Kernel/ExtractCorrespond.agda.
+- It replaces Tovrin.Debug's seed and 1-bit menu of concrete answers: `successors` lists steps with their path conditions, and picking one moves the session.
+- Probabilities attach to the same steps later (plan.md roadmap item 1). Leave room for that, but build nothing for it now.
+
+Rules: logic in Agda (agda2hs), never hand-written Haskell; written once for every Tovrin language, never for P4 alone; exact widths; no stopgaps; commit as you go; log with `date` times in lanes/eager/log-debug-sv.md. Write a DESIGN at the top of that log and send it to the lead BEFORE you implement. Step back first: say what the state of the art is (symbolic debuggers such as KLEE-based ones, and Grisette's unions) and why this design is that.
+Checks (cell requests for the train): basic.p4 (p4check2/examples/basic) at the start shows every enabled step with its condition. With a pin on the destination address, only the matching branch remains. TV1 (bfs) likewise.
+
+The changes it is making, in order:
+### D1 The debugger's variables (new `Kernel.Successors`, compiled)
+The kernel names a step's input by its site only (`VInput site sort`, `VPick site n`), so two
+moves of one path reading one site would share a variable. As BMC unrolls frames
+(`Interface.FiniteTerms`' `FiniteAt`), a taken move's inputs are renamed to its frame:
+`data DVar = DNow Var | DAt Nat Var` (`DAt k v`: input or pick `v` of the k-th move of the path;
+`DNow`: rigid values and open functions' calls, run-wide, and the inputs of the step being
+asked). Eq/Ord/Key derived, `Variables DVar` (inputVariable = DNow, cellVariable = DNow ∘ VCell),
+Show/Read. One term table `TermsOver DVar` per session; it only grows (the domain's D1), so every
+node's references stay valid and hash-consed.
+
+### D2 A symbolic node
+`record SNode = { snConf : UConf Ref ; snPath : Ref ; snMoves : Nat }` (configuration, path
+condition without the pins, moves on its path). The start, `symbolicStart`: `boot` on terms
+(identities literals): open places and frozen inputs are the rigid variables `DNow (VRigid i s)`,
+open functions uninterpreted calls, path true. This replaces the seed. A concrete configuration
+is one case: `liftedNode` puts a `UConf Value`'s state into the table as literals (`constantD`
+per leaf, each store by its strategy; the step record fresh, as every step starts:
+`freshStep`), path true; used where the session reaches a concrete node by another command (D8).
+
+### D3 The successors: the kernel's own union (`successorsAt`)
+`successorsAt : Linked → Runner (TermsOver DVar) Ref → List (Name × ArrayFacts) → SNode → Grow (TermsOver DVar) (List Successor)`
+- Candidates: only the agents' current nodes run: each agent in the store (every version under its
+  presence, `versionsStep`, as `agentStep`), each environment class (actor nobody, `classStep`'s
+  entry); the environment `envFor` on terms (identity n ↦ `LitId n`, the timestamp literal,
+  `frozenNumber`), i.e. `constantsEnv` written for any domain.
+- Each alternative of the union (presence = its guard; guards that read no input folded at
+  construction, so a step the state alone disables is no alternative at all): `SNext m`/`SEnded`
+  → a move, settled by `endStep`; `SFaulted f` → a fault ending (its configuration kept);
+  `SRejected` of an agent → a stuck ending; `SBlocked`, `SOutside` → no successor (no move).
+  A spawned child whose presence is a term (`promoted` leaves it in the record, since
+  `stateNextId` is a number) is cased: present / absent, its presence or its negation conjoined.
+- The tick: one unit (`tickConf l 1`) under `¬ urgentNow` (§17.1 U2, the kernel's premise, as
+  the system's tick; today's debugger ticks only where no move fires, the random runner's
+  schedule, which hides runs the verifier can return). A tick of d is d ticks of one (timers and
+  ages saturate).
+- `record Successor = { succMove : SMove (agent a | class i | tick) ; succEnd : SEnd (next m |
+  ended | fault f | stuck) ; succWhen : Ref ; succConf : UConf Ref ; succInputs : List DVar }`,
+  this move's inputs and picks renamed `DNow v ↦ DAt k v` (k = snMoves) in guard and
+  configuration (`framed`: `Interface.Domain.rebuilding` over the strategy's leaves; rigid values
+  and calls stay `DNow`). The step's record stays in `succConf` (points, F10's node sequence when
+  debug-view lands it). Picks run as data (the carrier's `pinnedAlts` per word, merged); join
+  points merged by outcome: the list is the union's entries, not paths.
+
+### D4 Pins as constraints (F9)
+`pinCondition : List (String × Pin) → List DVar → Grow (TermsOver DVar) Ref`: the conjunction,
+over every input and pick variable given (any frame) whose site's name is pinned, of what fits the
+pin (Kernel.Pinned's rule: word `x & ~free = n`, exact Boolean/identity/pick, listed array cells);
+a frozen input's rigid value by its site (`bootFrozen`). `pinsFit … : Either String ⊤` refuses by
+name a pin not of its input's shape (and an array pin with unlisted content, as Kernel.Pinned).
+Written over the `Domain` class, so Kernel.Pinned (debug-reach's, on the system's graph) can call
+the same definition (to agree; not edited now). Pins are not folded into a node's path: they are
+applied at each question, so `answer`/`unanswer` re-filter every node, and a node whose path no
+longer fits says so.
+
+### D5 One solver session per state (Haskell, `Tovrin.Debug.Symbolic`, Checker.Smt)
+At a node's question: one z3 session; `pc ∧ pins(inputs pc and the configuration read)` asserted
+once; each successor's `guard ∧ pins(its new inputs)` asked under assumption
+(`checkSatAssuming`, so the shared part is z3's incremental state). Sat: kept, with its model;
+unsat: excluded (counted: "k excluded by the pins"); unknown: kept and marked undecided (never
+taken as false). Results cached on the node until the pins change. Variables declared lazily,
+named `SITE@k`, `rigid N`, as the condition's printed text (z3's own SMT-LIB printer of the
+translated term, `printTerm`). pc ∧ pins unsat at the node itself: "the path here does not fit the
+pins" (as reach refuses).
+
+### D6 `split N`: by guard structure, on demand (`splitOf`)
+One level per request:
+- the guard's Boolean structure: `ite(c,a,b)` → c∧a | ¬c∧b (the carrier's merge of two presences
+  is this ite); `or(g1…gn)` → g1 | ¬g1∧g2 | …; `implies(a,b)` as ¬a∨b; `not(and …)` by De Morgan;
+  `and(…)` with a splittable conjunct → that conjunct split, the rest conjoined;
+- else the first `ite` condition that reads a variable, in the configuration's leaves (the
+  strategy's leaf order, outermost first): c | ¬c. That is where the carrier merged two branches of
+  the same outcome (the guard is then the same on both sides, the state an ite).
+Each part's configuration is the successor's with the split condition's node put to its literal
+(`Interface.Domain.nodePinning`, which rebuilds and folds): the branch's own state, not re-run.
+The parts partition the guard (pairwise disjoint, their disjunction the guard), so probabilities
+can attach to them later (roadmap item 1; nothing built for it). Each part is asked as in D5;
+the satisfiable ones replace N. A guard and a configuration with no branch: refused by name.
+
+### D7 `pick N`: the session moves
+To `SNode (succConf, pc ∧ succWhen, k + 1)`. The symbolic multiverse is hash-consed by the
+configuration's shape and leaves (references in the one table: Kernel.Offered's
+`stateIdentity` written for any domain, with the agents' shape keys) and the path condition.
+`back`, `goto`, `path`, `untaken`, `nodes` read this multiverse.
+
+### D8 Witnesses: concrete runs are one case of this
+A node's model (pc ∧ pins) answers every input of its path: each frame's inputs and picks, the
+rigid values, the open functions at the calls made. Replayed by the kernel on the constants
+(`kernelOf` with the given rigid and call answers, each move by `followAnswered` with its frame's
+answers), it is the node's concrete configuration. Every reader of a concrete configuration that
+is not yet symbolic reads the current node's witness, never a second state: `where`'s text,
+`diff`, `state` (debug-view's view), breakpoints and `continue` (debug-reach's BL, to move onto
+the successor union, spec §5), `reach` (its path's answers), `packet`, `--run`. Pin every input
+exactly and the path has one model: today's concrete debugger. An R1 run file is a witness
+(boot answers + moves): opening one is following the symbolic successors with the run's answers.
+
+### Staging (lead to rule, Q1)
+- **Stage 1 (this lane, now):** D1–D8 in Agda + `Tovrin.Debug.Symbolic`; the session gains the
+  symbolic multiverse (one field) and `successors`, `split N`, `pick N`; `pick` moves the concrete
+  layer to the witness (so every existing command reads it unchanged); a concrete move (`take`,
+  `continue`, `goto` on a concrete node, `--run`) re-anchors the symbolic cursor there
+  (`liftedNode`). Additive to Debug.hs (debug-reach's): one Session field, Command/Answer
+  constructors.
+- **Stage 2 (with debug-reach and debug-view):** `choices`/`take`/`step`, the menu
+  (`set words|tries`) and the seed removed; breakpoints and `reach` over the successor union and
+  the path condition; `state` on the symbolic configuration (debug-view's `Kernel.StateView` is
+  domain-generic; symbolic leaves by the known bits, its Q1).
+
+What each change serves:
+### State of the art, and why this design is it
+- **KLEE** (Cadar, Dunbar, Engler, OSDI 2008): a state is a symbolic store and a path condition;
+  it forks at each branch on a symbolic condition, keeps a fork only where the solver finds its
+  path condition satisfiable, and gives every path a concrete test case (ktest) replayed on the
+  native program. Debugger front ends over symbolic execution show that tree interactively: the
+  Symbolic Execution Debugger (Hentschel, Bubel, Hähnle, iFM 2016 / STTT 2019: each node with its
+  path condition, branch nodes, merged nodes), angr-management (states with their constraints,
+  stashes split and stepped by hand). Concolic replay of a path's model: DART (Godefroid, Klarlund,
+  Sen, PLDI 2005), CUTE (Sen, Marinov, Agha, FSE 2005).
+- Path-per-branch explodes; the remedy is **state merging**: Kuznetsov, Kinder, Bucur, Candea
+  (PLDI 2012), veritesting (Avgerinos et al., ICSE 2014), and in solver-aided languages
+  **symbolic unions with type-driven merging**: Rosette (Torlak, Bodík, PLDI 2014), **Grisette**
+  (Lu, Bodík, POPL 2023): a value is a guarded union merged at every join by its type's mergeable
+  strategy (`mrgIf`), so a computation's result is one union, never a list of paths; a merged
+  value is split back by reading its guards.
+- **Multiverse debugging** (Torres Lopez et al. 2019; Pasquier et al., SLE 2022/2023; Frölich et
+  al., SLE 2025): debugging is moving through the program's state graph. A symbolic multiverse
+  has symbolic nodes (a configuration and a path condition) and symbolic edges.
+- **Tovrin already has the Grisette half.** The kernel's carrier ("Interface.Carrier", "Interface.Merge")
+  is a guarded shared forest with merge strategies made by six combinators, merging at every
+  join off what each branch wrote, folding at construction (D6). `Kernel.UnifiedStep.stepFromU` on
+  the term domain is the union of a configuration's successors: one alternative per key (the
+  step's end and the state's shape), each under its presence. Extraction runs exactly this per view.
+  So SV is: run that one definition at the session's own configuration (KLEE's state, F8), keep
+  each alternative where pc ∧ guard ∧ pins is satisfiable (KLEE's feasibility check, one z3
+  session per state), split a merged alternative by its guard structure on demand (undoing
+  Kuznetsov's merge, never enumerating ahead), and give each node a model as its concrete run
+  (KLEE's test case), replayed by the same kernel on the constants. No second interpreter, no
+  extracted System.
+
+Give the file and line or the sentence that shows it, and what the
+implementer should do instead, in at most five sentences.

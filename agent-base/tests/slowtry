@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+# slowtry: moves-try.sh's MCP server for step W: one tool, wait(seconds), answering after that long with the client's
+# limit on a tool call as the server was given it (MCP_TOOL_TIMEOUT)
+import json, os, sys, time
+def out(m):
+    sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+tool = {"name": "wait", "description": "Answers after the given number of seconds.",
+        "inputSchema": {"type": "object", "properties": {"seconds": {"type": "integer"}}, "required": ["seconds"]}}
+for line in sys.stdin:
+    m = json.loads(line)
+    i, how = m.get("id"), m.get("method")
+    if i is None:
+        continue
+    if how == "initialize":
+        out({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": m["params"].get("protocolVersion", "2025-06-18"),
+             "capabilities": {"tools": {}}, "serverInfo": {"name": "slowtry", "version": "1"}}})
+    elif how == "tools/list":
+        out({"jsonrpc": "2.0", "id": i, "result": {"tools": [tool]}})
+    elif how == "tools/call":
+        n = int(m["params"].get("arguments", {}).get("seconds", 0))
+        time.sleep(n)
+        t = "waited %d s; MCP_TOOL_TIMEOUT=%s" % (n, os.environ.get("MCP_TOOL_TIMEOUT", "unset"))
+        out({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": t}]}})
+    else:
+        out({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": how}})

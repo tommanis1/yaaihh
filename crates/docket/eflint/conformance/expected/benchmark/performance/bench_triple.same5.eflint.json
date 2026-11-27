@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout_sha256": "f93c4c90b1003aaba17d8abf50f64f49d105df88624fc7232155ca732a338154"
+ }
+}

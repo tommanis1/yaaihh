@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type a\nNew type b\nNew type comp\n+a(\"A\")\n+comp(string(\"A\"))\nquery successful\n#4 > "
+ }
+}

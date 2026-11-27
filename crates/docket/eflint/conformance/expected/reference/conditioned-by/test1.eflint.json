@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "+int(0)\n+int(2)\n+int(4)\nquery successful\nquery successful\nquery successful\n~int(0)\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\n#11 > "
+ }
+}

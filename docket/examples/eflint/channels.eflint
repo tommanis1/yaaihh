@@ -1,0 +1,111 @@
+// std.comms 2 and 3 and std.rails 2, by hand in the reference eFLINT that eflint-rs reads. Every query below must
+// succeed.
+Fact party Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact family Identified by String
+Fact of-family Identified by party * family
+Fact other-family Identified by party * party'
+  Holds when (Exists family, family' : of-family(party, family) && of-family(party', family') && family != family')
+Fact key Identified by String
+Fact node Identified by String
+Fact relation Identified by String
+Fact fault Identified by String
+Fact seen Identified by party * key
+Fact spoken Identified by node * party
+Fact gone-over Identified by node
+Fact marked Identified by node * relation * key * party
+Fact key-of Identified by party * key
+Fact may-speak Identified by party
+Fact for-owner-inbox Identified by node
+Fact traced Identified by node
+Fact caught Identified by node * fault
+Fact owner-approved-rule Identified by node
+Fact retracted Identified by node
+Fact lays-down Identified by node * party
+  Holds when spoken(node, party) && (Exists key, party' : marked(node, "lays down", key, party'))
+Fact made-up Identified by node * party
+  Holds when lays-down(node, party) && (Exists fault : caught(node, fault)) && Not(owner-approved-rule(node)) && Not(retracted(node))
+Fact for-agent-pull Identified by node * party
+  Holds when (Exists key, party' : marked(node, "for", key, party') && key-of(party, key)) && Not(for-owner-inbox(node))
+  Conditioned by Not(Exists party' : made-up(node, party'))
+  Conditioned by Not(Exists party' : lays-down(node, party') && Not(traced(node)))
+Fact leak Identified by node
+  Holds when for-owner-inbox(node) && (Exists party : for-agent-pull(node, party))
+
+Act mark-passage                                        // ACTOR, the module, records the mark of the judge PARTY'
+  Actor party
+  Related to party', node, relation, key
+  Holds when party == party("std.comms") && role(party', "clerk") && Not(gone-over(node))
+             && (Exists party'' : spoken(node, party'') && seen(party'', key) && party'' != party')
+  Creates marked(node, relation, key, party')
+Act says-to-owner
+  Actor party
+  Related to node
+  Holds when spoken(node, party) && may-speak(party) && Not(Exists relation, key, party' : marked(node, "for", key, party'))
+  Creates for-owner-inbox(node)
+Fact verifier-module Identified by party
+Fact taken-back Identified by node
+Fact may-trace Identified by party * party' * node
+  Holds when verifier-module(party) && role(party', "looker") && (Exists party'' : lays-down(node, party''))
+             && Not(Exists party'' : lays-down(node, party'') && Not(other-family(party', party'')))
+Act record-fault
+  Actor party
+  Related to party', node, fault
+  Holds when may-trace(party, party', node)
+  Creates traced(node), caught(node, fault)
+Act take-back-rule
+  Actor party
+  Related to node
+  Holds when made-up(node, party)
+  Creates taken-back(node)
+Act confirm-retraction
+  Actor party
+  Related to party', node
+  Holds when may-trace(party, party', node) && taken-back(node)
+  Creates retracted(node)
+.
++party("w1"). +party("w2"). +party("cl1"). +party("lk1"). +party("lk2").
++party("std.comms"). +party("std.rails"). +verifier-module("std.rails").
++role-name("clerk"). +role-name("looker"). +role("cl1", "clerk"). +role("lk1", "looker"). +role("lk2", "looker").
++family("a"). +family("b"). +of-family("w1", "a"). +of-family("lk2", "a"). +of-family("lk1", "b").
++key("k-worker"). +key("k-thing"). +key-of("w2", "k-worker").
++relation("for"). +relation("lays down"). +relation("means").
++fault("from_nothing").
++node("n1"). +node("n2"). +node("n3"). +node("c1").
++spoken("n1", "w1"). +spoken("n2", "w1"). +spoken("n3", "w1"). +spoken("c1", "cl1").
++seen("w1", "k-worker"). +seen("w1", "k-thing"). +seen("cl1", "k-thing").
++may-speak("w1").
+
+// 1. Only the module records a mark; a clerk's own words are not marked, nor a thing the speaker never saw.
+?!Enabled(mark-passage("cl1", "cl1", "n1", "means", "k-thing")).      // the clerk performs nothing itself
+?!Enabled(mark-passage("w1", "cl1", "n1", "for", "k-worker")).       // nor does the speaker, in the clerk's name
+?!Enabled(mark-passage("std.comms", "cl1", "c1", "means", "k-thing")).  // the clerk's own words
+?!Enabled(mark-passage("std.comms", "cl1", "n1", "means", "k-nobody")). // a thing the speaker never saw
+
+// 2. One passage, one channel.
+mark-passage("std.comms", "cl1", "n1", "for", "k-worker").
+?for-agent-pull("n1", "w2").
+?!Enabled(says-to-owner("w1", "n1")).                        // already for an agent: it cannot also go to him
+says-to-owner("w1", "n2").
+?for-owner-inbox("n2").
+?!leak("n1"). ?!leak("n2").
+
+// 3. A rule laid down travels only once it is traced, and never when it is made up.
+mark-passage("std.comms", "cl1", "n3", "for", "k-worker").
+mark-passage("std.comms", "cl1", "n3", "lays down", "k-thing").
+?lays-down("n3", "w1").
+?!for-agent-pull("n3", "w2").                               // not yet traced: it is nobody's rule
+?!Enabled(record-fault("std.rails", "lk2", "n3", "from_nothing")).  // a looker of the writer's own family does not judge it
+?!Enabled(record-fault("lk1", "lk1", "n3", "from_nothing")).          // a looker performs nothing itself
+record-fault("std.rails", "lk1", "n3", "from_nothing").
+?made-up("n3", "w1").
+?!for-agent-pull("n3", "w2").                               // traced, and made up: it does not travel
+
+// 4. Out of it: the writer says so, and somebody else finds that so.
+take-back-rule("w1", "n3").
+?made-up("n3", "w1").                                        // its own word does not end it
+?!Enabled(confirm-retraction("w1", "lk1", "n3")).
+confirm-retraction("std.rails", "lk1", "n3").
+?!made-up("n3", "w1").
+?for-agent-pull("n3", "w2").                                // an ordinary passage again

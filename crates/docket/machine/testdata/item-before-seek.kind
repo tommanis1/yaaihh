@@ -1,0 +1,10 @@
+// A piece of the project's work (today's items, ids kept, three digits at least: I-001, I-143). TITLE as opened; NOTE its note in the vault. Who
+// works on it is said by `coord item start` (the `started` line); checks are opened under it (`coord ready --item`).
+// Its close is held by the lead (a `hold`: owed, never delivered, never Silent), and answered when the work is done.
+/// a piece of the project's work, closed by its lead when the work is done
+kind item
+  letter I 3
+  form title: Text, note: Ref?
+  result Done(why: Text) | Dropped(why: Text)
+  pattern
+    hold role lead close(title, note)

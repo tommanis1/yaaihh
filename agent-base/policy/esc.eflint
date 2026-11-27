@@ -1,0 +1,11 @@
+// Stopping an agent's running turn (`coord esc NAME`, the page's esc button; owner 13 Nov, paper-research N-36):
+// Escape typed into its terminal (a Codex agent: interrupt), nothing else: no words go with it. The owner may stop
+// anyone and is not asked. The base rule: an agent may stop the agents below it (BELOW, supplied by coordd from the
+// parents). A project says more in a file of its own named esc.eflint, which replaces this one: the act again with
+// this line and its own beside it, for example
+//   Holds when role(actor, "consultant")
+// The refusal names the rule that failed.
+Act esc
+  Actor agent
+  Recipient agent
+  Holds when below(recipient, actor)

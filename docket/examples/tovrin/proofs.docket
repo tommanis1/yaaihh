@@ -1,0 +1,19 @@
+module tovrin.proofs
+
+import std.adapt as A
+
+// Tovrin's own choices over the packs: a proof runs under the proof checker's program, whatever model runs it, and
+// routine lint stays on the guided worker at low effort, even on a frontier model.
+
++A.Task-Class("proof", "deep"). +A.Task-Class("lint", "scoped").
+
++A.Program-Template("proof-checker", "hinted", "stepwise", "tovrin-proof", "high").
++A.Brief("tovrin-proof", "Each lemma is checked before the next: state it, prove it, run the checker on its file, and keep only what the checker accepts. A proof that needs a new axiom, an admitted step or a sorry is no proof; say where you are stuck instead.").
++A.Tool-Hint("tovrin-proof", "You changed a proof file. Run the checker on it before you change another.").
+
+Extend Fact A.Chosen-Template
+  Holds when A.Working-On(agent, kind) && kind == "proof" && A.Program-Template(template, m, s, p, e) && template == "proof-checker"
+  Holds when A.Working-On(agent, kind) && kind == "lint" && A.Program-Template(template, m, s, p, e) && template == "guided-worker"
+
+Extend Fact A.Chosen-Effort
+  Holds when A.Working-On(agent, kind) && kind == "lint" && A.Effort-Step(effort, h) && effort == "low"

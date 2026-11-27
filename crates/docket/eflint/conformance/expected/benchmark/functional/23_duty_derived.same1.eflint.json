@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "violations:\n  violated duty!: d(string(\"foo\"),string(\"foo\"))\nNew type d\n+string(\"foo\")\n+d(string(\"foo\"),string(\"foo\"))\n#2 > string(\"foo\") = True\nd(string(\"foo\"),string(\"foo\")) = True\n\n#2 > violations:\n  violated duty!: d(string(\"foo\"),string(\"bar\"))\n  violated duty!: d(string(\"foo\"),string(\"foo\"))\n+d(string(\"foo\"),string(\"bar\"))\n#3 > string(\"foo\") = True\nd(string(\"foo\"),string(\"bar\")) = True\nd(string(\"foo\"),string(\"foo\")) = True\n\n#3 > "
+ }
+}

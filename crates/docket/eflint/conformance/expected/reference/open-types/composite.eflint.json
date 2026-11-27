@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type a\nNew type b\nNew type c\nNew type composite\n+composite(a(\"A\"),b(\"B\"),c(\"C\"))\nquery successful\n~composite(a(\"A\"),b(\"B\"),c(\"C\"))\nNew type opt_create\n+composite(a(\"A\"),b(\"B\"),c(\"C\"))\nexecuted transition: \nopt_create(composite(a(\"A\"),b(\"B\"),c(\"C\"))) \n~composite(a(\"A\"),b(\"B\"),c(\"C\"))\nNew type wrap\nNew type wrapped\n+composite(a(\"A\"),b(\"B\"),c(\"C\"))\nexecuted transition: \nwrap(composite(a(\"A\"),b(\"B\"),c(\"C\"))) \n+wrapped(composite(a(\"A\"),b(\"B\"),c(\"C\")))\n~composite(a(\"A\"),b(\"B\"),c(\"C\"))\n#13 > "
+ }
+}

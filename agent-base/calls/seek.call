@@ -1,0 +1,26 @@
+// Before any work is built, its builder looks for what already does part of it, and builds on that: the existing piece
+// extended, named as "extends X at file:line", never a second copy beside it (the owner's rule, paper-research
+// N-1396.p74; the plan, p78, p79, p187). fix.kind asks it of the fixer before `repair` (claim.call), which is given
+// what it found; item.kind asks it of the agent that starts an item (`coord item start`), whose answer stands on the
+// item as its post. `better` (claim.call) asks whether a fix adds a second copy anyway. The call was `look` until
+// the research project's own `look` (its words.call) showed that a base call may not share a project call's name.
+type Found = Extends(pieces: Text) | Nothing(searched: Text)
+
+// WHAT is to be done, WHERE it is (a fix's place; an item's note), NOTE what the one who accepted it added. The
+// channel tag says what the step is on (a fix, an item); its first line says nothing of either. An `{{ if }}` keeps
+// its line: WHERE's `{{ end }}` shares NOTE's `{{ if }}` line, so one blank line comes before the ask, whichever of
+// them is none.
+call seek(what: Text, where: Ref?, note: Text?) -> Found
+  task repair
+  template
+    You are to do this:
+    What: {{ what }}
+    {{ if where }}Where: {{ where }}
+    {{ end }}{{ if note }}
+    The one who accepted it added:
+    {{ note }}
+    {{ end }}
+    Before you change anything, look for what already does part of it: a function, a type, a rule, a test, a file.
+    Search the repository for it, by its name and by what it does. Change nothing yet.
+    Answer Extends, naming each piece you found as "X at file:line" and how the work would extend it; or Nothing,
+    saying what you searched for and where.

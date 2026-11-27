@@ -1,0 +1,22 @@
+// Who of the agents on a ticket is handed the owner's `@all` (claims.call): the one woken now; `tell` informs the
+// others, who see it at their next delivery. Anybody told of it may claim it by answering first; the one handed it is
+// only the one woken. The order: first the agent whose work the words are about, else one on the ticket not in a turn,
+// else the project's answerer, else anyone on the ticket; each one that can be woken.
+// coordd supplies, beside the team's facts: among(A, I), A the I-th agent on the ticket from 0 (whom his post names
+// first, then the others as they came on it); in-turn(A) for each agent in a turn now; about(A) for each agent the
+// words are about: one whose step a ticket named in the words awaits, or a ticket under it; wakeable(A) for each agent
+// that takes a hand-over now, running and not ended. The answerer is the agent with the role "answerer": given by the
+// owner's `coord role`, or by a project's own policy text (`+role(A, "answerer").`). A project's policy/claims.eflint
+// replaces this file.
+Decision claims
+  Options agent
+// about the words' work, else free on the ticket, else the answerer, else anyone on the ticket, each one that can be
+// woken; with nobody who can, the first on the ticket, where it waits for that agent's start
+Prefer for claims:
+  about(option) and wakeable(option) > among(option, _) and not in-turn(option) and wakeable(option) > role(option, "answerer") and wakeable(option) > among(option, _) and wakeable(option) > among(option, _)
+// then one on the ticket before one off it (an agent off the ticket has no among(A, I), so `minimise` alone would cost
+// it nothing), then the first on the ticket
+Prefer for claims:
+  among(option, _) > true
+Prefer for claims:
+  minimise among(option)

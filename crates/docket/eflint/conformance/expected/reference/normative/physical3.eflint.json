@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "+actor(\"John\")\nNew type do\n+do(actor(\"John\"))\nNew type dont\nquery successful\nquery successful\nquery successful\nquery successful\nexecuted transition: \ndo(actor(\"John\")) (DISABLED)\n|\n`- dont(actor(\"John\")) (DISABLED)\nviolations:\n  disabled action: do(actor(\"John\"))\n#10 > "
+ }
+}

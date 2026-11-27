@@ -1,0 +1,737 @@
+#!/usr/bin/env python3
+"""ra-front: one rust-analyzer for every agent's worktree (paper-research N-412 post 909 part 2; hs-ls's design,
+post 911, measured in post 940; docket-core3's four conditions, post 916).
+
+  ra-front serve --socket SOCK --ra RUST-ANALYZER --data DIR --repo REPO... [--refuse PATH]... [--manifest REL]...
+                 [--memory-mb N] [--log FILE]
+  ra-front build-data DIR          (rust-analyzer runs this in a workspace's folder) the build data for its Cargo.lock
+
+`symbols` connects to SOCK as to any shared server (`[[lsp]] socket`) and says its worktree in `initialize`. Each
+connection is one agent's worktree; the worktree's projects (`--manifest`, relative to it; Cargo.toml when none
+is named) are linked into the one rust-analyzer, which merges the crates every branch shares (std, crates.io and the
+path packages) and keeps each branch's own crates apart. What each connection may reach:
+
+- a worktree only: the root it names is taken to its worktree's top, which must be a worktree of a REPO (`git
+  worktree list`), and must be none of the never-served places (a repository's .git, the owner's dot folders, the
+  coords under ~/agent-coord) nor a --refuse path (production's checkout); anything else is refused in words;
+- its own files only: a document it opens, changes or asks about lies inside its worktree; an edit the server answers
+  with (a rename, a code action) or asks to apply that would change a file outside it is refused whole, naming them;
+- its own diagnostics only: a file's diagnostics go to the connections whose worktree is the longest prefix of it.
+
+Proc macros and build scripts are not run here: their results are read from DIR/LOCKHASH (one entry per Cargo.lock,
+made by one runner job, `cargo check --message-format=json`, its paths rewritten into DIR), through rust-analyzer's
+`cargo.buildScripts.overrideCommand`; rust-analyzer's own check on save is off, so nothing here runs cargo or writes a
+target folder. The server answers rust-analyzer's own diagnostics: unresolved names, methods, fields and imports, type
+mismatches, missing fields and match arms, argument counts, unmet trait bounds among them; the borrow checker's errors
+(E0499, E0502, E0382, E0596, ...) are not among them and stay with a `cargo check` job.
+
+Memory, not time, is the bound: when rust-analyzer's process tree passes --memory-mb (8000), the worktree asked least
+recently that no connection holds is unlinked; its next connection links it again. The text agents send is never
+written or logged: the log holds events (connections, roots taken or refused, edits refused, unlinks).
+"""
+import hashlib, json, os, socket, subprocess, sys, threading, time
+from urllib.parse import unquote, urlparse
+
+
+def log(msg):
+    if LOG:
+        with open(LOG, "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%S ") + msg + "\n")
+
+
+LOG = None
+DEBUG = bool(os.environ.get("RA_FRONT_DEBUG"))  # also each publish's file and count (never its text)
+
+
+# --- framing ---------------------------------------------------------------------------------------------------
+
+def read_msg(f):
+    n = None
+    while True:
+        line = f.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            if n is None:
+                continue
+            break
+        k, _, v = line.partition(b":")
+        if k.strip().lower() == b"content-length":
+            n = int(v)
+    return json.loads(f.read(n))
+
+
+def frame(m):
+    b = json.dumps(m).encode()
+    return b"Content-Length: %d\r\n\r\n" % len(b) + b
+
+
+def path_of(u):
+    p = urlparse(u)
+    return os.path.realpath(unquote(p.path)) if p.scheme == "file" else None
+
+
+def inside(p, root):
+    return p is not None and (p == root or p.startswith(root.rstrip("/") + "/"))
+
+
+# --- what a connection may ask -----------------------------------------------------------------------------------
+
+# the requests the symbol tools send (symbols/src), and nothing else: rust-analyzer's own extensions such as
+# `rust-analyzer/runFlycheck` or `experimental/runTest` would run cargo outside the runner (docket-core3, post 957)
+REQUESTS = {"initialize", "shutdown", "textDocument/documentSymbol", "textDocument/references", "textDocument/rename",
+            "textDocument/prepareRename", "textDocument/hover", "textDocument/definition"}
+NOTES = {"initialized", "exit", "$/cancelRequest", "textDocument/didOpen", "textDocument/didChange",
+         "textDocument/didClose", "textDocument/didSave", "workspace/didChangeConfiguration",
+         "workspace/didChangeWorkspaceFolders"}
+
+
+# --- what a connection may name ----------------------------------------------------------------------------------
+
+def worktrees(repos):
+    out = []
+    for r in repos:
+        try:
+            txt = subprocess.run(["git", "--no-optional-locks", "-C", r, "worktree", "list", "--porcelain"],
+                                 capture_output=True, text=True, check=True).stdout
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+        out += [os.path.realpath(l[len("worktree "):]) for l in txt.splitlines() if l.startswith("worktree ")]
+    return out
+
+
+def never_served(p, home):
+    parts = p.split("/")
+    if ".git" in parts:
+        return "a repository's own folder"
+    if inside(p, os.path.join(home, "agent-coord")):
+        return "a coord's folder"
+    rest = os.path.relpath(p, home) if inside(p, home) else None
+    if rest and rest != ".":
+        first = rest.split("/")[0]
+        if first.startswith(".claude") or first in (".codex", ".ssh", ".config", ".local", ".cargo", ".rustup"):
+            return "the owner's logins and settings"
+    return None
+
+
+def take_root(root, repos, refuse, manifests, home):
+    """The worktree top for ROOT, or why it is refused."""
+    if not root:
+        return None, "no root was named"
+    root = os.path.realpath(root)
+    if root == os.path.realpath(home) or root == "/":
+        return None, f"{root} is no worktree"
+    why = never_served(root, home)
+    if why:
+        return None, f"{root} is {why}, never served"
+    for r in refuse:
+        r = os.path.realpath(r)
+        if inside(root, r):
+            return None, f"{root} is in {r}, which is not served"
+    tops = [w for w in worktrees(repos) if inside(root, w)]
+    if not tops:
+        return None, f"{root} is not in a worktree of this project's repositories"
+    top = max(tops, key=len)
+    for r in refuse:
+        if inside(top, os.path.realpath(r)):
+            return None, f"{top} is in {r}, which is not served"
+    # rust-analyzer reads a `rust-analyzer.toml` in a workspace as configuration of its own, which could name a
+    # command it runs: a worktree holding one is not served
+    for d, subs, files in os.walk(top):
+        subs[:] = [x for x in subs if x not in (".git", "target", "node_modules")]
+        hit = {"rust-analyzer.toml", ".rust-analyzer.toml"} & set(files)
+        if hit:
+            return None, f"{os.path.join(d, sorted(hit)[0])} would configure the shared server; it is not served with one"
+    found = [m for m in manifests if os.path.isfile(os.path.join(top, m)) and inside(os.path.realpath(os.path.join(top, m)), top)]
+    if not found:
+        return None, f"{top} holds none of {', '.join(manifests)}"
+    return top, None
+
+
+def edit_paths(edit):
+    """Every file a WorkspaceEdit would change, create, rename or delete."""
+    out = []
+    if not isinstance(edit, dict):
+        return out
+    out += [path_of(u) for u in (edit.get("changes") or {})]
+    for c in edit.get("documentChanges") or []:
+        if "textDocument" in c:
+            out.append(path_of(c["textDocument"]["uri"]))
+        for k in ("uri", "oldUri", "newUri"):
+            if k in c:
+                out.append(path_of(c[k]))
+    return out
+
+
+def edits_in(result):
+    """The WorkspaceEdits an answer holds (a rename's, a code action's, each of a list of code actions)."""
+    if isinstance(result, list):
+        return [e for r in result for e in edits_in(r)]
+    if not isinstance(result, dict):
+        return []
+    if "changes" in result or "documentChanges" in result:
+        return [result]
+    return [result["edit"]] if isinstance(result.get("edit"), dict) else []
+
+
+def doc_uris(params):
+    """Every file a client's message names, wherever in its parameters (`uri`, `textDocument.uri`, `*Uri`)."""
+    out = []
+    def walk(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if isinstance(x, str) and (k == "uri" or k.endswith("Uri")) :
+                    out.append(x)
+                else:
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(params)
+    return out
+
+
+def keep_locations(v, ok):
+    """V with every location OK refuses taken out: an element of a list that names a refused file is dropped, a lone
+    one becomes null. OK(path) says whether a file may be shown."""
+    def names(d):
+        return [x for k, x in d.items() if isinstance(x, str) and (k == "uri" or k.endswith("Uri"))]
+    def bad(d):
+        return any(not ok(path_of(u)) for u in names(d))
+    def walk(x):
+        if isinstance(x, list):
+            return [walk(e) for e in x if not (isinstance(e, dict) and bad(e))]
+        if isinstance(x, dict):
+            return {k: walk(e) for k, e in x.items()}
+        return x
+    if isinstance(v, dict) and bad(v):
+        return None
+    return walk(v)
+
+
+def peer_pid(sock):
+    import struct
+    try:
+        pid, _uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+        return pid
+    except OSError:
+        return 0
+
+
+def boxed(pid):
+    """Why the process PID cannot be served: in a box (another mount namespace than this front's, or a pid this
+    namespace cannot see); None for a process on the host beside it."""
+    if pid <= 0:
+        return "its process is not visible from here (a box)"
+    try:
+        if os.readlink(f"/proc/{pid}/ns/mnt") != os.readlink("/proc/self/ns/mnt"):
+            return "it runs in a box (another mount namespace)"
+    except OSError:
+        return "its process is not visible from here (a box)"
+    return None
+
+
+def tree_rss_mb(pid):
+    tot, todo = 0, [pid]
+    while todo:
+        q = todo.pop()
+        try:
+            with open(f"/proc/{q}/status") as s:
+                tot += next((int(l.split()[1]) for l in s if l.startswith("VmRSS:")), 0)
+            with open(f"/proc/{q}/task/{q}/children") as c:
+                todo += [int(x) for x in c.read().split()]
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    return tot // 1024
+
+
+# --- the front ---------------------------------------------------------------------------------------------------
+
+class Conn:
+    def __init__(self, cid, sock):
+        self.cid, self.sock, self.root, self.docs = cid, sock, None, set()
+        self.boxed = boxed(peer_pid(sock))
+        self.wlock = threading.Lock()
+
+    def send(self, m):
+        try:
+            with self.wlock:
+                self.sock.sendall(frame(m))
+        except OSError:
+            pass
+
+
+class Front:
+    def __init__(self, a):
+        self.a = a
+        self.home = os.path.expanduser("~")
+        self.lock = threading.RLock()
+        self.conns = {}
+        self.pending = {}       # our id -> (cid, the client's id, method, the message, times sent again)
+        self.applying = {}      # the id we gave a client for the server's applyEdit -> the server's id
+        self.linked = {}        # worktree top -> when last asked
+        self.next_id = 1
+        self.ra = None
+        self.caps = None
+        self.ready = threading.Event()
+        self.starting = threading.Lock()
+        self.tops = []          # every worktree of the repositories, as last listed (at each initialize)
+        self.quiescent = False  # rust-analyzer's last word on whether it is done loading (experimental/serverStatus)
+        self.early = set()  # files the server published while it loaded, asked again once it is quiescent
+        self.reloading = False  # a relink was sent and the server has not yet said it is busy with it
+        self.held = []          # requests it cancelled to be asked again once it is (ServerCancelled, retrigger)
+
+    def tool_env(self):
+        """The cargo and rustc rust-analyzer runs (`cargo metadata`, `rustc --print`): the toolchain's beside RA, named
+        in the environment, which a worktree's .cargo/config.toml (`build.rustc`, `build.rustc-wrapper`) cannot
+        override; no wrapper of any kind."""
+        bin_ = os.path.dirname(os.path.realpath(self.a.ra))
+        rustc = os.path.join(bin_, "rustc")
+        return {"CARGO": os.path.join(bin_, "cargo"), "RUSTC": rustc, "CARGO_BUILD_RUSTC": rustc,
+                "RUSTC_WRAPPER": "", "CARGO_BUILD_RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": "",
+                "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER": "", "CARGO_NET_OFFLINE": "true"}
+
+    def config(self):
+        projects = [os.path.join(t, m) for t in sorted(self.linked) for m in self.a.manifest if os.path.isfile(os.path.join(t, m))]
+        return {
+            "linkedProjects": projects,
+            "checkOnSave": False,
+            "cargo": {"buildScripts": {"enable": True, "invocationStrategy": "per_workspace",
+                                       "overrideCommand": [sys.executable, os.path.abspath(__file__), "build-data", self.a.data]},
+                      "extraEnv": self.tool_env()},
+            "procMacro": {"enable": True},
+            "diagnostics": {"experimental": {"enable": True}},
+            "cachePriming": {"enable": False},
+            "numThreads": 4,
+            "files": {"watcher": "server"},
+        }
+
+    def owner(self, p):
+        """The worktree P belongs to: the deepest one that holds it (a worktree may stand in another's folder)."""
+        holds = [t for t in self.tops if inside(p, t)]
+        return max(holds, key=len) if holds else None
+
+    def mine(self, c, p):
+        return c.root is not None and self.owner(p) == c.root
+
+    # the server
+    def to_ra(self, m):
+        self.ra.stdin.write(frame(m))
+        self.ra.stdin.flush()
+
+    def start_ra(self):
+        self.ra = subprocess.Popen([self.a.ra], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=open(os.devnull, "w"), env=dict(os.environ, **self.tool_env()))
+        threading.Thread(target=self.ra_reader, daemon=True).start()
+        with self.lock:
+            i = self.take_id()
+            self.pending[i] = (None, None, "initialize", None, 0)
+        self.to_ra({"jsonrpc": "2.0", "id": i, "method": "initialize", "params": {
+            "processId": os.getpid(), "rootUri": None, "workspaceFolders": None,
+            "initializationOptions": self.config(),
+            "capabilities": {
+                "workspace": {"configuration": True, "applyEdit": True, "workspaceEdit": {"documentChanges": True},
+                              "didChangeConfiguration": {"dynamicRegistration": False}},
+                # no pull diagnostics: told the client pulls, rust-analyzer stops publishing, and symbols reads the
+                # published ones
+                "textDocument": {"publishDiagnostics": {"relatedInformation": True},
+                                 "hover": {"contentFormat": ["markdown", "plaintext"]},
+                                 "rename": {"prepareSupport": True},
+                                 "documentSymbol": {"hierarchicalDocumentSymbolSupport": True}},
+                "window": {"workDoneProgress": True},
+                "experimental": {"serverStatusNotification": True}}}})
+        self.ready.wait()
+        self.to_ra({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        log(f"rust-analyzer started, pid {self.ra.pid}")
+
+    def take_id(self):
+        i = self.next_id
+        self.next_id += 1
+        return i
+
+    def relink(self):
+        # rust-analyzer asks for its configuration again on this, and reloads the projects it names; until it says it
+        # is quiescent again, a changed file's errors are not asked for (they would come back empty)
+        with self.lock:
+            self.quiescent = False
+            self.reloading = True  # a "quiescent" counts only after the server has said it is busy with this reload
+        self.to_ra({"jsonrpc": "2.0", "method": "workspace/didChangeConfiguration", "params": {"settings": {}}})
+
+    def ra_reader(self):
+        while True:
+            m = read_msg(self.ra.stdout)
+            if m is None:
+                log("rust-analyzer ended")
+                with self.lock:
+                    for c in list(self.conns.values()):
+                        c.sock.close()
+                os._exit(1)
+            if "id" in m and "method" in m:
+                self.ra_request(m)
+            elif "id" in m:
+                self.ra_answer(m)
+            else:
+                self.ra_note(m)
+
+    def ra_request(self, m):
+        meth, i = m["method"], m["id"]
+        if meth == "workspace/configuration":
+            with self.lock:
+                cfg = self.config()
+            self.to_ra({"jsonrpc": "2.0", "id": i, "result": [cfg for _ in m["params"].get("items", [])]})
+        elif meth == "workspace/applyEdit":
+            paths = edit_paths(m["params"].get("edit"))
+            with self.lock:
+                owners = [c for c in self.conns.values() if c.root and all(self.mine(c, p) for p in paths)]
+                if paths and owners:
+                    c = owners[0]
+                    j = self.take_id()
+                    self.applying[j] = (c.cid, i)
+                else:
+                    c = None
+            if c:
+                c.send({"jsonrpc": "2.0", "id": j, "method": meth, "params": m["params"]})
+            else:
+                outside = sorted({p or "?" for p in paths})[:5]
+                log(f"applyEdit refused: {len(paths)} files, not in one worktree")
+                self.to_ra({"jsonrpc": "2.0", "id": i, "result": {"applied": False, "failureReason":
+                            "the edit would change files outside one worktree: " + ", ".join(outside)}})
+        else:
+            # progress tokens, capability registrations and refresh asks: nothing a client needs to see
+            self.to_ra({"jsonrpc": "2.0", "id": i, "result": None})
+
+    def ra_answer(self, m):
+        with self.lock:
+            cid, their, meth, sent, again = self.pending.pop(m["id"], (None, None, None, None, 0))
+            c = self.conns.get(cid)
+            # ContentModified: a file changed while the server answered, here as often another worktree's edit as
+            # one's own; the request is sent again, as an editor does, so no agent sees another's edit as its error
+            err = m.get("error") or {}
+            retrigger = err.get("code") == -32802 and (err.get("data") or {}).get("retriggerRequest")
+            resend = None
+            if c is not None and (err.get("code") == -32801 or retrigger) and again < 50:
+                ours = self.take_id()
+                self.pending[ours] = (cid, their, meth, sent, again + 1)
+                if retrigger and not self.quiescent:
+                    # cancelled while it loads: asked again when it says it is done
+                    self.held.append(dict(sent, id=ours))
+                    return
+                resend = dict(sent, id=ours)
+        if resend is not None:
+            self.to_ra({k: v for k, v in resend.items() if k != "front_token"})
+            return
+        if meth == "front/pull" and not self.quiescent and c is not None:
+            # answered before the server has loaded the worktree (it then answers nothing for the file, rather than
+            # cancelling): asked again once it says it is quiescent; the client's check goes on meanwhile
+            with self.lock:
+                ours = self.take_id()
+                self.pending[ours] = (cid, None, meth, dict(sent, id=ours), again)
+                self.held.append(dict(sent, id=ours))
+            return
+        if meth == "front/pull":
+            # the front's own ask for a changed file's diagnostics: published to the connection that changed it,
+            # then its check ends (rust-analyzer reports no work while it computes them, so a client would stop
+            # waiting before they came)
+            uri, token = sent["params"]["textDocument"]["uri"], sent["front_token"]
+            if DEBUG:
+                log(f"pull for {path_of(uri)}: " + (f"error {m['error']}" if "error" in m else f"{len((m.get('result') or {}).get('items') or [])} items, kind {(m.get('result') or {}).get('kind')}"))
+            if c is not None:
+                items = (m.get("result") or {}).get("items")
+                if isinstance(items, list):
+                    c.send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                            "params": {"uri": uri, "diagnostics": items}})
+                if token is not None:
+                    c.send({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": token, "value": {"kind": "end"}}})
+            return
+        if meth == "initialize" and cid is None:
+            self.caps = m.get("result", {}).get("capabilities", {})
+            self.ready.set()
+            return
+        if c is None:
+            return
+        res = m.get("result")
+        with self.lock:
+            outside = sorted({p or "?" for e in edits_in(res) for p in edit_paths(e) if not self.mine(c, p)})
+        if outside:
+            log(f"{meth} answer refused for {c.root}: {len(outside)} files outside it")
+            c.send({"jsonrpc": "2.0", "id": their, "error": {"code": -32803, "message":
+                    "the edit would change files outside your worktree, so nothing is changed: " + ", ".join(outside[:5])
+                    + (f" and {len(outside) - 5} more" if len(outside) > 5 else "")}})
+            return
+        out = {"jsonrpc": "2.0", "id": their}
+        if "error" in m:
+            out["error"] = m["error"]
+        else:
+            # every location an answer gives stays in the asker's worktree (another worktree's file, a library's
+            # source: taken out)
+            with self.lock:
+                out["result"] = keep_locations(res, lambda p: self.mine(c, p))
+        c.send(out)
+        self.bound()
+
+    def ra_note(self, m):
+        meth = m.get("method")
+        if meth == "textDocument/publishDiagnostics":
+            p = path_of(m["params"]["uri"])
+            with self.lock:
+                if not self.quiescent:
+                    # computed while the server still loads (before build data and proc macros: hundreds of false
+                    # errors); not passed on, the file is asked again once it is quiescent
+                    self.early.add(m["params"]["uri"])
+                    if DEBUG:
+                        log(f"diagnostics for {p} while loading: {len(m['params'].get('diagnostics', []))}, held back")
+                    return
+                best = self.owner(p)
+                to = [c for c in self.conns.values() if best and c.root == best]
+            if DEBUG:
+                log(f"diagnostics for {p}: {len(m['params'].get('diagnostics', []))}, to connections {[c.cid for c in to]}")
+            for c in to:
+                c.send(m)
+        if DEBUG and meth == "experimental/serverStatus":
+            log(f"server status quiescent={m['params'].get('quiescent')} health={m['params'].get('health')}")
+        if DEBUG and meth == "$/progress":
+            v = m["params"].get("value") or {}
+            log(f"progress {m['params'].get('token')} {v.get('kind')} {v.get('title', '')}")
+        if meth == "$/progress" and (m["params"].get("value") or {}).get("kind") == "begin":
+            with self.lock:
+                self.reloading = False  # the server is at work on the reload: its next "quiescent" counts
+        if meth == "experimental/serverStatus":
+            with self.lock:
+                q = bool(m["params"].get("quiescent"))
+                if not q:
+                    self.reloading = False
+                self.quiescent = q and not self.reloading
+                held, self.held = (self.held, []) if self.quiescent else ([], self.held)
+                if self.quiescent:
+                    asked = {r["params"]["textDocument"]["uri"] for r in held if r.get("method") == "textDocument/diagnostic"}
+                    for uri in sorted(self.early - asked):
+                        best = self.owner(path_of(uri))
+                        c = next((c for c in self.conns.values() if best and c.root == best and uri in c.docs), None)
+                        if c is None:
+                            continue
+                        ours = self.take_id()
+                        pull = {"jsonrpc": "2.0", "id": ours, "method": "textDocument/diagnostic",
+                                "params": {"textDocument": {"uri": uri}}}
+                        self.pending[ours] = (c.cid, None, "front/pull", dict(pull, front_token=None), 0)
+                        held.append(pull)
+                    self.early = set()
+            for r in held:
+                self.to_ra({k: v for k, v in r.items() if k != "front_token"})
+        if meth in ("$/progress", "experimental/serverStatus"):
+            # every connection hears that the server works (symbols waits on it while it loads), but not in its own
+            # words: a title or message can name another worktree's files (docket-core3, post 971)
+            if meth == "$/progress":
+                v = m["params"].get("value") or {}
+                kept = {k: v[k] for k in ("kind", "percentage", "cancellable") if k in v}
+                if v.get("kind") == "begin":
+                    kept["title"] = "rust-analyzer works"
+                m = {"jsonrpc": "2.0", "method": meth, "params": {"token": m["params"].get("token"), "value": kept}}
+            else:
+                m = {"jsonrpc": "2.0", "method": meth, "params": {k: m["params"][k] for k in ("health", "quiescent") if k in m["params"]}}
+            with self.lock:
+                to = [c for c in self.conns.values() if c.root]
+            for c in to:
+                c.send(m)
+
+    def bound(self):
+        rss = tree_rss_mb(self.ra.pid)
+        if rss <= self.a.memory_mb:
+            return
+        with self.lock:
+            held = {c.root for c in self.conns.values() if c.root}
+            free = sorted((t for t in self.linked if t not in held), key=lambda t: self.linked[t])
+            if not free:
+                log(f"rust-analyzer at {rss} MB, every linked worktree is held")
+                return
+            del self.linked[free[0]]
+        log(f"rust-analyzer at {rss} MB: {free[0]} unlinked (asked least recently)")
+        self.relink()
+
+    # a client
+    def serve_conn(self, c):
+        f = c.sock.makefile("rb")
+        try:
+            while True:
+                m = read_msg(f)
+                if m is None:
+                    break
+                self.client_msg(c, m)
+        except (OSError, ValueError) as e:
+            log(f"connection {c.cid}: {type(e).__name__}")
+        finally:
+            self.drop(c)
+
+    def refuse(self, c, i, msg):
+        if i is not None:
+            c.send({"jsonrpc": "2.0", "id": i, "error": {"code": -32602, "message": msg}})
+
+    def client_msg(self, c, m):
+        meth, i, params = m.get("method"), m.get("id"), m.get("params")
+        if DEBUG:
+            log(f"connection {c.cid} sends {meth}" + (f" {[path_of(u) for u in doc_uris(params)]}" if params else ""))
+        if meth is None:  # an answer: to the server's applyEdit
+            with self.lock:
+                cid, their = self.applying.pop(i, (None, None))
+            if cid == c.cid:
+                self.to_ra({"jsonrpc": "2.0", "id": their, **({"result": m["result"]} if "result" in m else {"error": m.get("error")})})
+            return
+        if meth == "initialize" and c.boxed:
+            log(f"connection {c.cid} refused: {c.boxed}")
+            self.refuse(c, i, "the shared Rust server does not serve this: " + c.boxed)
+            return
+        if meth == "initialize":
+            root = path_of(params.get("rootUri") or "") if params.get("rootUri") else params.get("rootPath")
+            if not root and params.get("workspaceFolders"):
+                root = path_of(params["workspaceFolders"][0]["uri"])
+            top, why = take_root(root, self.a.repo, self.a.refuse, self.a.manifest, self.home)
+            if why:
+                log(f"connection {c.cid} refused: {why}")
+                self.refuse(c, i, "the shared Rust server does not serve this: " + why)
+                return
+            with self.lock:
+                self.tops = worktrees(self.a.repo)
+                new = top not in self.linked
+                self.linked[top] = time.monotonic()
+            with self.starting:  # the first connection starts the server with its worktree linked; later ones relink
+                if self.ra is None:
+                    self.start_ra()
+                elif new:
+                    self.relink()
+            with self.lock:
+                c.root = top
+            log(f"connection {c.cid}: {top}" + (" linked" if new else ""))
+            c.send({"jsonrpc": "2.0", "id": i, "result": {"capabilities": self.caps,
+                                                          "serverInfo": {"name": "rust-analyzer (shared, ra-front)"}}})
+            return
+        if c.root is None:
+            self.refuse(c, i, "initialize first")
+            return
+        if meth == "shutdown":
+            c.send({"jsonrpc": "2.0", "id": i, "result": None})
+            return
+        if meth == "exit":
+            c.sock.shutdown(socket.SHUT_RDWR)
+            return
+        if (i is not None and meth not in REQUESTS) or (i is None and meth not in NOTES):
+            log(f"connection {c.cid}: {meth} refused (not one the symbol tools send)")
+            self.refuse(c, i, f"{meth} is not taken by the shared Rust server (only what the symbol tools ask)")
+            return
+        if meth in ("initialized", "workspace/didChangeConfiguration", "workspace/didChangeWorkspaceFolders"):
+            return  # the front owns the server's configuration and its projects
+        with self.lock:
+            bad = [u for u in doc_uris(params) if not self.mine(c, path_of(u))]
+        if bad:
+            log(f"connection {c.cid}: {meth} on a file outside {c.root} refused")
+            self.refuse(c, i, f"{bad[0]} is outside your worktree {c.root}")
+            return
+        with self.lock:
+            self.linked[c.root] = time.monotonic()
+            if meth == "textDocument/didOpen":
+                c.docs.add(params["textDocument"]["uri"])
+            elif meth == "textDocument/didClose":
+                c.docs.discard(params["textDocument"]["uri"])
+            if meth == "$/cancelRequest":
+                ours = next((k for k, v in self.pending.items() if v[0] == c.cid and v[1] == params.get("id")), None)
+                if ours is None:
+                    return
+                m = {"jsonrpc": "2.0", "method": meth, "params": {"id": ours}}
+            elif i is not None:
+                ours = self.take_id()
+                m = dict(m, id=ours)
+                self.pending[ours] = (c.cid, i, meth, m, 0)
+            pull = None
+            if meth in ("textDocument/didChange", "textDocument/didSave"):
+                ours = self.take_id()
+                token = f"ra-front/check/{ours}"
+                pull = {"jsonrpc": "2.0", "id": ours, "method": "textDocument/diagnostic",
+                        "params": {"textDocument": {"uri": params["textDocument"]["uri"]}}}
+                self.pending[ours] = (c.cid, None, "front/pull", dict(pull, front_token=token), 0)
+        self.to_ra(m)
+        if pull is not None:
+            c.send({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": token, "value": {
+                "kind": "begin", "title": "checking " + os.path.basename(path_of(params["textDocument"]["uri"]) or "")}}})
+            with self.lock:
+                later = not self.quiescent
+                if later:
+                    self.held.append(pull)  # the server still loads: asked when it says it is quiescent
+            if not later:
+                self.to_ra(pull)
+
+    def drop(self, c):
+        with self.lock:
+            self.conns.pop(c.cid, None)
+            for k in [k for k, v in self.pending.items() if v[0] == c.cid]:
+                del self.pending[k]
+            others = {u for o in self.conns.values() for u in o.docs}
+            closing = [u for u in c.docs if u not in others]
+        for u in closing:  # the server goes back to the file on disk: no agent's unsaved text stays in it
+            self.to_ra({"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": u}}})
+        try:
+            c.sock.close()
+        except OSError:
+            pass
+        log(f"connection {c.cid} closed")
+
+    def serve(self):
+        s = socket.socket(socket.AF_UNIX)
+        try:
+            os.unlink(self.a.socket)
+        except FileNotFoundError:
+            pass
+        os.makedirs(os.path.dirname(self.a.socket), exist_ok=True)
+        old = os.umask(0o077)
+        s.bind(self.a.socket)
+        os.umask(old)
+        s.listen(64)
+        log(f"listening on {self.a.socket}")
+        n = 0
+        while True:
+            sock, _ = s.accept()
+            n += 1
+            c = Conn(n, sock)
+            with self.lock:
+                self.conns[n] = c
+            threading.Thread(target=self.serve_conn, args=(c,), daemon=True).start()
+
+
+def build_data(data):
+    """rust-analyzer's build scripts' and proc macros' results for the Cargo.lock of the folder it runs this in."""
+    try:
+        h = hashlib.sha256(open("Cargo.lock", "rb").read()).hexdigest()[:16]
+    except FileNotFoundError:
+        print(f"ra-front build-data: no Cargo.lock in {os.getcwd()}", file=sys.stderr)
+        return 1
+    f = os.path.join(data, h, "messages.jsonl")
+    if not os.path.isfile(f):
+        print(f"ra-front build-data: none for this Cargo.lock ({h}); one runner job makes it", file=sys.stderr)
+        print(json.dumps({"reason": "build-finished", "success": False}))
+        return 0
+    sys.stdout.write(open(f).read())
+    return 0
+
+
+def main(argv):
+    global LOG
+    import argparse
+    if argv[:1] == ["build-data"] and len(argv) == 2:
+        return build_data(argv[1])
+    ap = argparse.ArgumentParser(prog="ra-front")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("serve")
+    s.add_argument("--socket", required=True)
+    s.add_argument("--ra", required=True)
+    s.add_argument("--data", required=True)
+    s.add_argument("--repo", action="append", required=True)
+    s.add_argument("--refuse", action="append", default=[])
+    s.add_argument("--manifest", action="append", default=[])
+    s.add_argument("--memory-mb", type=int, default=8000)
+    s.add_argument("--log")
+    a = ap.parse_args(argv)
+    a.manifest = a.manifest or ["Cargo.toml"]
+    LOG = a.log
+    Front(a).serve()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

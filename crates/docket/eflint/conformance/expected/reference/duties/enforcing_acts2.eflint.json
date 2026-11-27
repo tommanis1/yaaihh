@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type is-enforced\nNew type maybe-enabled\n+is-enforced(actor(\"Someone\"),actor(\"Someone\"))\nquery successful\nviolations:\n  violated duty!: is-enforced(actor(\"Someone\"),actor(\"Someone\"))\n+maybe-enabled(actor(\"Someone\"))\nquery successful\nviolations:\n  violated duty!: is-enforced(actor(\"Someone\"),actor(\"Someone\"))\nquery successful\nviolations:\n  violated duty!: is-enforced(actor(\"Someone\"),actor(\"Someone\"))\nNew type yes-enabled\n+yes-enabled(actor(\"Someone\"))\nquery successful\nviolations:\n  violated duty!: is-enforced(actor(\"Someone\"),actor(\"Someone\"))\n~yes-enabled(actor(\"Someone\"))\nquery successful\n#12 > "
+ }
+}

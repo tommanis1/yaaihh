@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# box-enter DIR CMD...: a boxed agent's way in (coordd's sandbox.rs; plan/layers.md Part I §2; paper-research N-95).
+# roster's open runs it as root of the view's user namespace (nsenter on the layer's holder), in a mount namespace of
+# its own (unshare --mount), with ROSTER_BOX (the agent's inside uid K), ROSTER_BOX_DIR ($COORD/box/NAME) and
+# ROSTER_BOX_READ (folders under the home to read, colon-separated) from coordd. coordd has built the box before
+# (sandbox.rs `home`): the agent's home (0711) and tmp, its settings, Claude Code's state, its key file, its folder in
+# the coord (agents/NAME, where its channel's socket is). Here only where things are seen and as whom it runs:
+#   - a new home over the owner's: an empty one with only what is bound in, read-only: the parts of the coord's
+#     folder its programs use (below), agent-base, Claude Code and ROSTER_BOX_READ; written: the view at DIR and at the view's other repositories
+#     (ROSTER_BOX_ALSO), the agent's home and agents/NAME; nothing beside them (the folder that holds them included);
+#   - its tmp at /tmp and /var/tmp, a fresh /dev/shm, message queues, /run/lock and every other folder of the
+#     system's that others may write, coordd's socket at /tmp/.coordd.sock (the owner's runtime folder is shut to
+#     others); the machine's folders outside the system's own (the owner's) not seen;
+#   - it becomes uid K, gid K, with the box group (inside gid 1), runs the project's box_setup if it has one, and runs
+#     CMD in DIR with umask 002 (the layer's files are the group's).
+# Against honest mistakes, not against malice: nothing here is meant to hold an agent that tries to get out.
+set -euo pipefail
+# a command that fails ends the box's start: it says which, so an agent that "exited with 1" says why (docket-core5,
+# N-101 p1218: a dangling link in mcp/ ended every boxed start on Tovrin-dev without a word)
+trap 'echo "box-enter: line $LINENO: \`$BASH_COMMAND\` failed (exit $?); the agent is not started" >&2' ERR
+dir=$1; shift
+k=${ROSTER_BOX:?} d=${ROSTER_BOX_DIR:?} h=${HOME:?} sock=${COORDD_SOCK:-}
+
+[ -d "$d/home" ] && [ -d "$d/tmp" ] || { echo "box-enter: coordd built no box at $d" >&2; exit 1; }
+a=$COORD/agents/${d##*/}
+
+place() {  # place SRC DST: DST made to bind SRC on
+  if [ -d "$1" ]; then mkdir -p "$2"; else mkdir -p "$(dirname "$2")"; [ -e "$2" ] || : >"$2"; fi
+}
+staged() {  # staged AT: where what the agent will see at AT is put now: under the home in the new home, under /tmp or
+  # /var/tmp in its own tmp; nothing (fails) anywhere else, which is seen as it is
+  case $1 in
+  "$h"/*) echo "/mnt/home${1#"$h"}" ;;
+  /tmp/* | /var/tmp/*) echo "$d/tmp/${1#/*tmp/}" ;;
+  *) return 1 ;;
+  esac
+}
+bind() {  # bind ro|rw SRC [AT]: SRC at AT (its own path) where the agent will see it (staged)
+  local how=$1 src=$2 at=${3:-$2} to
+  [ -e "$src" ] || return 0
+  to=$(staged "$at") || return 0
+  place "$src" "$to"
+  mount --rbind "$src" "$to"
+  [ "$how" = rw ] || mount -o remount,bind,ro "$to"
+}
+
+claude=$(readlink -f "$(command -v claude)")
+mount -t tmpfs -o mode=755 box-stage /mnt
+mkdir /mnt/home
+mount -t tmpfs -o mode=755 box-home /mnt/home
+# of the coord's folder only what the agent's programs use (paper-research N-101 p573): its box's settings and
+# box_setup (its home and its agents/NAME are bound written, below), the coord's programs (opt/: Codex), the
+# folders of the project's shared language servers' sockets (ROSTER_BOX_SOCKETS, coordd: `[[lsp]] socket`) and the
+# project's MCP servers with what they read (below). Not the
+# record, other agents' folders and boxes, the route and its key (.proxy-key, route), codex-home (the box's own
+# CODEX_HOME holds a copy of its config.toml, never its auth.json), views/ (no client in a box reads a published
+# base: coordd lays the view out) or the layers' folders (the view is at DIR; of them only the object stores its git
+# borrows, below)
+bind ro "$d/claude-settings.json"
+bind ro "$d/setup"
+bind ro "$COORD/opt"
+IFS=: read -ra socks <<<"${ROSTER_BOX_SOCKETS:-}"
+for p in "${socks[@]}"; do [ -z "$p" ] || bind ro "$p"; done
+# the project's MCP servers (roster: each $COORD/mcp/NAME is a server of every session), what a link there leads to,
+# and what symbols, one of them, reads of the coord: $COORD/project and the project file it names, and in a view its
+# own entry of the layers' record. That entry is written here, not bound: coordd replaces layers.json by a rename,
+# which a bound file would not show, and the rest of it is the other views'. The agent is started again in each view
+bind ro "$COORD/mcp"
+for f in "$COORD"/mcp/*; do
+  [ -L "$f" ] || continue
+  # a link that names nothing is no server: said, and the box starts without it
+  t=$(readlink -e "$f") || { echo "box-enter: $f is a link to $(readlink "$f"), which is not there: that MCP server is not in the box" >&2; continue; }
+  case $t in "$COORD"/mcp/*) ;; *) bind ro "$t" ;; esac
+done
+bind ro "$COORD/project"
+pf=$(head -n 1 "$COORD/project" 2>/dev/null || true)
+[ -z "$pf" ] || bind ro "$pf"
+if [ -n "${COORD_LAYER:-}" ] && lj=$(staged "$COORD/layers/layers.json"); then
+  mkdir -p "${lj%/*}"
+  for r in layers lines; do [ -f "$COORD/layers/$r.json" ] && cat "$COORD/layers/$r.json" || echo '{}'; done |
+    jq -s --arg id "$COORD_LAYER" '{($id): (.[0][$id] // .[1][$id])} | with_entries(select(.value != null))' >"$lj"
+  chmod 444 "$lj"
+fi
+bind ro "$AGENT_BASE"
+# agent-base's programs that are links to binaries beside it (a release folder's coordc, coordd, coord-pty)
+for f in "$AGENT_BASE"/bin/*; do
+  [ -L "$f" ] || continue
+  t=$(readlink -e "$f") || { echo "box-enter: $f is a link to $(readlink "$f"), which is not there" >&2; continue; }
+  case $t in "$AGENT_BASE"/*) ;; *) bind ro "$t" ;; esac
+done
+bind ro "$claude"
+bind ro "$claude" "$h/.local/bin/claude"
+IFS=: read -ra reads <<<"${ROSTER_BOX_READ:-}"
+for p in "${reads[@]}"; do [ -z "$p" ] || bind ro "$p"; done
+bind rw "$dir"
+# the view's other repositories (ROSTER_BOX_ALSO, coordd: a layer over several), each written at its own path
+IFS=: read -ra also <<<"${ROSTER_BOX_ALSO:-}"
+for p in "${also[@]}"; do [ -z "$p" ] || bind rw "$p"; done
+bind rw "$d/home"
+bind rw "$a"
+# what the view's git folders borrow of the project's own git folder (coordd's layer.rs: under $COORD/layers/ID/…/
+# mnt/common), read-only, each at its own path; of the layers' folders only these. A step's layer has a git folder of
+# its own whose alternates name the project's objects; the line's view has one whose commondir is the project's git
+# folder, history and refs (docket-core3, N-101 p656: without it git in the line's view finds no repository)
+for r in "$dir" "${also[@]}"; do
+  [ -n "$r" ] && [ -d "$r/.git" ] || continue
+  g=$r/.git c=
+  if [ -f "$g/commondir" ]; then
+    c=$(head -n 1 "$g/commondir")
+    case $c in /*) ;; *) c=$g/$c ;; esac
+    bind ro "$c"
+  fi
+  for f in "$g/objects/info/alternates" ${c:+"$c/objects/info/alternates"}; do
+    [ -f "$f" ] || continue
+    while IFS= read -r o; do case $o in /*) bind ro "$o" ;; esac; done <"$f"
+  done
+done
+
+# its own tmp at /tmp and /var/tmp, holding what was bound there above (in this mount namespace only) and coordd's
+# socket (the owner's runtime folder is shut to others). Its folder SOCK.d, not the socket: coordd makes its socket
+# anew at each start and links it there again (main.rs), so a box started before a restart (`dev.sh move`) reaches the
+# coordd that runs now, where a socket bound as a file stays the old one's (paper-research N-101 p1235). A coordd
+# without the folder: the socket, as before
+if [ -n "$sock" ]; then
+  rm -f "$d/tmp/.coordd.sock"
+  if [ -e "$sock.d/coordd.sock" ]; then
+    mkdir -p "$d/tmp/.coordd"
+    mount --bind "$sock.d" "$d/tmp/.coordd"
+    ln -s .coordd/coordd.sock "$d/tmp/.coordd.sock"
+  else
+    : >"$d/tmp/.coordd.sock"
+    mount --bind "$sock" "$d/tmp/.coordd.sock"
+  fi
+fi
+mount --rbind "$d/tmp" /var/tmp
+mount --rbind "$d/tmp" /tmp
+mount --rbind /mnt/home "$h"
+umount -l /mnt
+mount -t tmpfs -o mode=1777 box-shm /dev/shm
+# the rest of what a uid not the owner's may write on the machine (paper-research N-101 p564: two agents' tools writing
+# the same name there is an honest mistake), each the box's own; a tmpfs is charged to the box's memory limit as its
+# writer's: POSIX message queues (the box's own IPC namespace, roster's `unshare --ipc`), /run/lock, and every
+# world-writable folder of the system's under /var, /run, /etc, /opt, /srv (/var/crash, /var/snap/cups/N/tmp, …)
+[ ! -d /dev/mqueue ] || mount -t mqueue box-mq /dev/mqueue
+while IFS= read -r w; do
+  case $w in /var/tmp | /var/tmp/*) continue ;; esac
+  [ -d "$w" ] || continue  # inside one made the box's own just before
+  mount -t tmpfs -o mode=1777,size=64m box-w "$w"
+done < <(find /run/lock /var /run /etc /opt -xdev -maxdepth 4 -type d -perm -o+w 2>/dev/null | sort -u)
+# what the machine holds outside the system's own folders (the owner's: /personal, /app, …): not seen, an empty
+# read-only folder (a file: empty) in its place; the system's folders stay as the host has them
+for e in /*; do
+  case ${e#/} in
+  bin | boot | dev | etc | home | lib | lib32 | lib64 | libx32 | nix | opt | proc | root | run | sbin | snap | sys | tmp | usr | var | *.usr-is-merged) continue ;;
+  esac
+  # one that holds what the agent is given (its view, the coord, agent-base) stays
+  held=
+  for g in "$dir" "$COORD" "$AGENT_BASE" "${also[@]}"; do case $g/ in "$e"/*) held=1 ;; esac; done
+  if [ -n "$held" ] || [ -L "$e" ]; then continue
+  elif [ -d "$e" ]; then mount -t tmpfs -o mode=755,ro box-none "$e"
+  elif [ -e "$e" ]; then mount --bind /dev/null "$e"
+  fi
+done
+
+# the project's box_setup (coordd copied it to $d/setup, sandbox.rs `home`), run as the agent in its view before CMD,
+# at every start: what its own home needs (git's and cabal's configuration, links to the toolchain's data). It fails:
+# CMD does not start, and what it said is in the agent's terminal.
+exec setpriv --reuid="$k" --regid="$k" --groups=1 -- env HOME="$d/home" BOX_SETUP="$d/setup" sh -c '
+cd "$1" && shift && umask 002 || exit
+if [ -f "$BOX_SETUP" ]; then
+  "$BOX_SETUP" || { s=$?; echo "box-enter: the project'\''s box_setup ended with $s: not started" >&2; exit "$s"; }
+fi
+unset BOX_SETUP
+exec "$@"' box-enter "$dir" "$@"

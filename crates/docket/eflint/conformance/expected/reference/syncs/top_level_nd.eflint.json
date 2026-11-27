@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type observe_ys\nNew type observed_xs\nNew type x\nNew type y\n+actor(\"Alice\")\n+observe_ys(actor(\"Alice\"),y(1))\n+observe_ys(actor(\"Alice\"),y(2))\n+observe_ys(actor(\"Alice\"),y(3))\n+observe_ys(actor(\"Alice\"),y(4))\n+observe_ys(actor(\"Alice\"),y(5))\nexecuted transition: \nobserved_xs(x(1)) \nexecuted transition: \nobserved_xs(x(2)) \nexecuted transition: \nobserved_xs(x(3)) \n+x(1)\n+x(2)\n+x(3)\nexecuted transition: \nobserve_ys(actor(\"Alice\"),y(1)) (ENABLED)\nexecuted transition: \nobserve_ys(actor(\"Alice\"),y(2)) (ENABLED)\nexecuted transition: \nobserve_ys(actor(\"Alice\"),y(3)) (ENABLED)\nexecuted transition: \nobserve_ys(actor(\"Alice\"),y(4)) (ENABLED)\nexecuted transition: \nobserve_ys(actor(\"Alice\"),y(5)) (ENABLED)\n+y(1)\n+y(2)\n+y(3)\n+y(4)\n+y(5)\n#5 > "
+ }
+}

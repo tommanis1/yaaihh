@@ -1,36 +1,96 @@
 #!/usr/bin/env bash
 # coord: the agents' commands in one box (vault designs/yaaihh-2026-11-07.md §5).
 #
-#   coord msg [--esc] [--re ID] NAME[,NAME...] TEXT...   a message; first line = subject (--esc: agents below me; --re: in ID's thread)
-#   coord msg --thread ID TEXT...     a reply in ID's thread to everyone in it
-#   coord mail [ID]                   my recent mail, or one mail in full
-#   coord ask [--on QID] SUBJECT...   (run by the agent) a question to the owner, explanation on stdin; does not wait
-#   coord ask --drop QID [WHY...]     withdraw my question
-#   coord ask --list                  my questions: open, answered or dropped, each thread with the answers in full
+#   coord msg NAME[,NAME...] TEXT...  a thread with them (a ticket, N-12); first line = subject; reaches them when their turn ends
+#   coord msg --under T[.pN] [--label TEXT] NAME[,...] TEXT...  the same, opened at post N of thread T (its last post
+#                                     when none) and tied there in the outline; --label: its label there
+#   coord msg --re ID [KIND] NAME[,...] TEXT...  a post on ticket ID naming NAME (the command a message ends with); KIND as for post
+#   coord esc NAME[,NAME...]          stop their running turn, nothing else (agents below me); then coord msg to say something
+#   coord esc --all                   stop every agent's running turn in the project at once, nothing else; not kept stopped
+#   coord hold-mail on|off            (the owner) hold agents' mail: only the owner's posts pass, until off
+#   coord effort NAME LEVEL           NAME runs at effort LEVEL from now on (agents below me); a running turn ends first
+#   coord model NAME MODEL            NAME (a Claude Code agent) runs on MODEL from now on, as effort does
+#   coord import-agy ID [--name NAME] [--model MODEL] [--effort LEVEL] [--dir DIR] [--dry-run]
+#                                     an Antigravity CLI chat as an agy agent that goes on from it, copied, never linked
+#   coord mode NAME safe|yolo         NAME (a Claude Code agent) runs in Safe or Yolo from now on, as effort does; the owner's only
+#   coord can [--as NAME] [THING...]  the acts I may do now at a ticket, naming any of the names given, or all; greyed with why
+#   coord duties [--as NAME]          the duties I hold now (violated ones said), with the acts that end each
+#   coord compact NAME TOKENS         where NAME (a Claude Code agent) compacts from its next start; 0: the coord's
+#   coord msg --thread ID [KIND] TEXT...  a post on ticket ID naming everyone on it; KIND as for post
+#                                     NAME may be PROJECT/NAME, an agent of another project (its answer comes on the same ticket); TEXT - : from stdin
+#   coord open KIND [--under T] [--FIELD VALUE]... [TEXT | -]   open a ticket (- : the first post from stdin); KIND alone: its form; no KIND: the kinds
+#   coord post [KIND] T TEXT...       a post on ticket T; KIND, what it is, decides who gets it now and who later (the reply tool's kind):
+#                                     --ask NAME[,NAME...] | --read NAME[,NAME...] HEAD | --blocker NAME[,NAME...] | --hold I-N | --result | --fyi;
+#                                     none: an @NAME asks NAME. Put @ only on whoever must act
+#   coord take-back T.pN              take back my post N of T while nobody has been handed it (it keeps its number, is drawn no more)
+#   coord pass T.pN NAME [WHY...]     pass the owner's @all (post N of T), handed to me, on to agent NAME, who then holds it
+#   coord say NAME TEXT...            the owner's message to NAME (a thread, or a one-off); coord move T N [TO],
+#                                     coord keep T..., coord drop-thread T: the owner's overrides
+#   coord answer T HEAD [--FIELD VALUE]... [TEXT]   answer T's step explicitly (normally the turn's last message is)
+#   coord cancel T WHY...             cancel ticket T (its step withdrawn, its open children cancelled)
+#   coord withdraw T 'PROGRAM' WHY... withdraw T's step; PROGRAM (pattern text, quoted) goes on in its place
+#   coord edit T WHY... < PROGRAM     what T does after its step's answer becomes PROGRAM (coord show --program T)
+#   coord repair T 'PROGRAM' WHY...   the failed ticket T runs PROGRAM instead (checked as its kind's pattern)
+#   coord rekind T KIND [--F V]... WHY... T becomes a KIND with that form and runs its pattern; its posts stay
+#   coord show T | coord tickets [--waiting|--mine|--kind K]   a ticket as text; the open tickets
+#   coord outline                     the open threads and items as one tree, each under the thread it is tied to, with who
+#                                     has it and its state
+#   coord tie T PARENT | coord tie T -   T stands under thread PARENT in the outline from now on (- : untied, at the top);
+#                                     coord title T TEXT: T's label there. T's opener, a lead or the owner may; a loop is refused
+#   coord end T [T...] done|dropped|kept WHY   the threads end and leave the outline (their opener, an agent above it, or a lead)
+#   coord find WORDS...               the posts of this project's tickets (closed ones too), the mail and the agents' conversations that hold every word: each
+#                                     by its id, its ticket's label, who wrote it (the owner's marked) and the line
+#   coord mentions [--json] ID        the posts whose words name ID (a ticket, a post N-1.p5, an agent): each post's id,
+#                                     who wrote it, when, its ticket's label, and the post of ID it named
+#   coord graph [ID] [--hops N] [--layer L]... [--who NAME]... [--from T] [--to T] [--limit N] [--json]
+#                                     the part of the graph the Map draws around ID (a post, a ticket, an item, an agent by
+#                                     its name, commit:SHA; none: the whole graph's newest), each edge a line, oldest first
+#                                     (who wrote, answered, named, handed what), then each node; 2 hops, 200 edges, the
+#                                     layers his, agents, deliveries and work unless given (L: also calls, files, other, all)
+#   coord mail [ID]                   old mail (before tickets), read only; or one old mail in full
+#   coord ask [--on Q] SUBJECT...     (run by the agent) a question ticket Q-N for the lead, who answers it or passes it
+#                                     to the owner; explanation on stdin; does not wait (--on Q: a post on my question Q)
+#   coord ask --drop Q WHY...         withdraw my question (as coord cancel Q WHY)
+#   coord ask --drop T.pN WHY...      withdraw what my post N of T asks the owner (he is told nothing; the record keeps WHY)
+#   coord ask --list                  my questions: id, state, ask
 #   coord ls                          each agent: name, id, state, parent
 #   coord log NAME [LAST]             the session of an agent below me, as text
-#   coord item start ID | open TITLE | close ID WHY...
-#   coord ack RULING                  (run by the agent) record its ruling base
-#   coord ready [--item I] [--also WORKTREE]... [--with BRANCH]...  (run by the agent) queue its branch at HEAD
+#   coord item start ID | open --note REF TITLE | close ID WHY... | drop ID WHY...  (an item ticket: started, opened, its close answered Done or Dropped;
+#                                     REF the post or ticket it comes from, N-1104.p673 or N-1446: an agent's item without one is refused)
+#   coord ready [--item I] [--also WORKTREE]... [--with BRANCH]...  (run by the agent) queue its branch at HEAD; --item I: a check ticket under I
+#                                     (none when the project file says ready_check = false)
+#   coord check [--quick|--typecheck|--proofs] [--flip STAGE]... [REPO:BRANCH...]  (run by the agent) its own check, through coordd to the
+#                                     project's runner; none named: its layer's branch in every repository; the answer
+#                                     comes as a message
 #   coord queue                       each queue entry and the runner's state for it
 #   coord attach NAME                 NAME's terminal in this one (Ctrl-\ detaches; from the host, through the box)
-#   coord fork [--name NEW] [--model MODEL] [TEXT...]  (run by the agent) a copy of my conversation as a new agent
-#                                     below me, TEXT its first task (roster fork)
+#   coord fork [FROM] [--name NEW] [--model MODEL] [TEXT...]  (run by the agent) a copy of FROM's conversation (mine
+#                                     if none) as a new agent below me, TEXT its first task; the policy's make-agent decides
+#   coord new NAME [--model MODEL] TEXT...  (run by the agent) a fresh agent below me, TEXT its first words (make-agent)
+#   coord star ID | coord unstar ID   star ticket ID (N-221) or a post (N-221.p5), or take my star off: the owner
+#                                     sees it in his starred list, with who set it
+#   coord hold on|off | coord notice NAME TEXT   the owner's tools for a return (release.sh coord-back --esc): nothing
+#                                     handed while held; a notice from coord to NAME, not the owner's
+#   coord go [ID]                     (run by the agent) move me to layer ID (or ticket ID's layer) when this turn ends;
+#                                     none: where I stand and each step I hold with its layer
 #   coord team ask TEXT...            (run by the agent) ask to form a team; it goes to whoever the policy names
 #   coord team grant NAME N           NAME's team may have N agents (the owner, or an agent the policy names)
-#   coord context [ls | note KEY TEXT | reset KEY]  the nets' contexts: sizes; a note for the next call; a new start
-#   coord measure [DAYS]              the nets' deciders: what each chose, the owner's marks, rubber-stamp flags
+#   coord read-brain [NOTE...]        (run by an agy agent on v2) pull my briefing: what waits for me, handed now,
+#                                     as one JSON object {mode, priority_directive, new_directives, unread_messages,
+#                                     assigned_items, suggested_wake_mins, wake_hint}; NOTE: where I stand, kept with it
+#   coord report-work [--refs REF]... [--item ITEM] SUMMARY...  (run by an agent on v2) hand my work in: what I did,
+#                                     what shows it (commits, posts), the item it finishes; what I was handed is read
 #
-# msg, mail, ask, ls (state), log and item are coordd's (bin/coordc): it knows the caller by its process's cgroup, never by
-# a name it gives, and keeps the agents, their mail and the project's items. A host session (hosts/NAME: the resume id
+# msg, mail, ask, ls (state), log, item and the ticket verbs are coordd's (bin/coordc): it knows the caller by its
+# process's cgroup, never by a name it gives, and keeps the agents and the tickets (notes, questions, items among them). A host session (hosts/NAME: the resume id
 # of a Claude Code session on the host) sends as itself through the owner side: from the host, these commands run
 # inside the box, with COORD_AS=NAME. There is no stop or lock: pausing an agent is Escape in its terminal (owner,
 # 5 Nov 2026). attach is coordc's too, but needs no coordd: it speaks to the agent's terminal holder (bin/coord-pty).
 # The build queue (a project's runner, until the project file owns it): agents
 # never build; `coord ready` writes queue/AGENT.json {agent, branch, commit, item, with, at, also}, one file per agent, a
 # newer ready replacing the older. Only the runner writes queue/state/AGENT.json
-# {commit, state: waiting|batch|landed|rejected, batch, reason, at}; a state whose commit is
-# not the entry's commit is stale and shows as waiting. A ready that conflicts with dev is
+# {commit, also, state: waiting|batch|landed|rejected, batch, reason, at}; a state whose commit set
+# (commit and also) is not the entry's is stale and shows as waiting. A ready that conflicts with dev is
 # refused; one that conflicts with another queued entry is refused and recorded in
 # queue/blocked/AGENT.json {agent, branch, commit, clashes: [{agent, files}], at}, which the
 # runner clears when the other entry lands; a later successful ready removes it.
@@ -38,35 +98,112 @@ set -euo pipefail
 : "${COORD:?COORD is not set}"
 me=${AGENT_NAME:-owner}
 feed() { jq -nc --arg at "$(date -Is)" --arg from "$me" "$@" >>"$COORD/feed.jsonl"; }
-usage() { sed -n '4,22p' "$0" | sed 's/^# //'; exit 2; }
+# the commands above, whole: from line 4 to the bare `#` that ends them (a fixed range cut them at `coord mentions`
+# once the list grew; docket-edge8, N-1446 p2717 gap 4)
+usage() { awk 'NR >= 4 { if ($0 == "#") exit; sub(/^# /, ""); print }' "$0"; exit 2; }
+ready_check_off() {
+  local p; read -r p 2>/dev/null <"$COORD/project" && [ -r "$p" ] || return 1  # 2>/dev/null first: a project with no file says nothing (roster's standing)
+  awk '/^[[:space:]]*\[/ { in_p = ($0 ~ /^[[:space:]]*\[project\][[:space:]]*(#.*)?$/); next }
+       in_p && /^[[:space:]]*ready_check[[:space:]]*=[[:space:]]*false[[:space:]]*(#.*)?$/ { off = 1 }
+       END { exit !off }' "$p"
+}
+
+# read-brain and report-work are coordd-v2's acts (std/bridges/agy.docket's Pull-Brain, std/delivery.docket's
+# Report-Work), asked for once by `coordd-v2 ask` as this session's own party, which the v2 daemon knows by the
+# session's cgroup; its answer is printed as it comes. The daemon's socket is $COORD/v2/coordd.sock and the release's
+# coordd-v2 stands beside agent-base, as spawn-v2.sh starts sessions (COORDD_V2_SOCK and COORDD_V2 name others).
+# With no v2 socket there and none named, both are coordd's (coordc, below; crates/coordd/src/pull.rs, N-1998).
+v2_ask() {
+  local bin=${COORDD_V2:-$(dirname "$0")/../../coordd-v2}
+  [ -x "$bin" ] || { echo "coord $1: no coordd-v2 at $bin: these commands are the v2 engine's (set COORDD_V2)" >&2; exit 2; }
+  shift
+  exec "$bin" ask "${COORDD_V2_SOCK:-$COORD/v2/coordd.sock}" "$@"
+}
+v2=; [ -n "${COORDD_V2_SOCK:-}" ] || [ -S "$COORD/v2/coordd.sock" ] && v2=1
+case ${1:-} in
+read-brain|report-work) [ "$me" != owner ] || { echo "coord $1 runs inside an agent session (AGENT_NAME set)" >&2; exit 2; } ;;&
+read-brain)
+  [ -z "$v2" ] || { shift; v2_ask read-brain std.bridges.agy.Pull-Brain "$me" "$*"; } ;;
+report-work)
+  shift; words=("$@") refs=() item=
+  while [ $# -gt 0 ]; do
+    case $1 in
+    --refs) [ $# -ge 2 ] || usage; refs+=("$2"); shift 2 ;;
+    --item) [ $# -ge 2 ] || usage; item=$2; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+    esac
+  done
+  [ -n "${*//[[:space:]]/}" ] || { echo "coord report-work: say what was done: coord report-work [--refs REF]... [--item ITEM] SUMMARY..." >&2; exit 2; }
+  # fields hold no lists (docket-v2 spec 6.2): the refs go as one text, a comma between two
+  joined=
+  [ ${#refs[@]} -eq 0 ] || { joined=$(printf '%s, ' "${refs[@]}"); joined=${joined%, }; }
+  [ -z "$v2" ] || v2_ask report-work std.delivery.Report-Work "$me" "$*" "$joined" "$item"
+  set -- report-work "${words[@]}" ;;
+esac
 
 # On the host, a box's coord folder (~/agent-coord/BOX, the same path inside the box) belongs to the box, and coordd's
 # socket lives in the box VM: coordd's commands run inside the box (a stopped box has no coordd, so they fail), and so
 # does attach, whose holders' sockets are the box's too. A project without a box has its coordd on the host, at
 # COORDD_SOCK (bin/host-coordd sh sets it): no box is reached then.
 box=${COORD#"$HOME/agent-coord/"}
-case ${1:-} in msg | mail | ask | ls | state | log | item | team | attach)
+# a host project's coordd found by its socket, so the owner's own terminal reaches it without host-coordd sh (owner,
+# 10 Nov: `COORD=~/agent-coord/research coord team grant ...` went looking for a box named research)
+hs=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/coordd/$box.sock
+[ -n "${COORDD_SOCK:-}" ] || [ ! -S "$hs" ] || export COORDD_SOCK=$hs
+case ${1:-} in msg | read-brain | report-work | esc | effort | model | mode | compact | can | duties | mail | ask | ls | state | log | item | team | check | attach | open | post | answer | cancel | withdraw | edit | repair | rekind | show | tickets | new | fork | go | native | accounts | account)
   if [ -z "${COORDD_SOCK:-}" ] && [ ! -S /run/coordd.sock ] && [ "$box" != "$COORD" ] && [ "${box%/*}" = "$box" ] && [ -x "$(dirname "$0")/../box/box.sh" ]; then
     as=(); [ "$me" = owner ] || as=(COORD_AS="$me")
     exec "$(dirname "$0")/../box/box.sh" sh "$box" env "${as[@]}" coord "$@"
   fi ;;
 esac
 
+# the queue is files in the coord's folder, which a boxed agent does not see (box-enter, paper-research N-101 p573):
+# said, not answered with an empty list or a failed write
+case ${1:-}:${AGENT_BOX:-} in
+ready:?* | queue:?*) echo "coord $1: not available in a box: the runner's queue is the coord's, outside it. Name your commit in your answer or a post instead" >&2; exit 2 ;;
+esac
+
+# an agent's item names where it comes from, as its commits name their Item: (agent-base/git/trail; paper-research N-1446
+# p1409): `coord item open --note REF TITLE...` and `coord open item --title TITLE --note REF` need REF, the post or
+# ticket the item comes from (N-1104.p673, N-1446), and are refused without one, saying why and how; `item open` goes
+# to coordd as `open item` with its title and note. `coord open item` alone still says the kind's form. The owner's
+# items, Tovrin's coords' (as the hook leaves them) and the items already open are as before: nothing is filled in.
+ITEM_REF='^[A-Z]+-[0-9]+(\.p[0-9]+)?$'
+item_refused() {
+  echo "coord $1: refused: $2. Name the post or ticket the item comes from as its note: \`coord item open --note N-1104.p673 TITLE\`, or \`coord open item --title TITLE --note N-1446\` (paper-research N-1446 p1409)." >&2
+  exit 2
+}
+case ${COORD%/} in */tovrin-dev | */docket-tovrin | */docket-tovrin-import) item_out=1 ;; *) item_out= ;; esac
+if [ "$me" != owner ] && [ -z "$item_out" ]; then
+  case ${1:-}:${2:-} in
+  item:open)
+    a=("${@:3}") note=
+    if [ "${a[0]:-}" = --note ]; then note=${a[1]:-}; a=("${a[@]:2}"); fi
+    title="${a[*]}"
+    [ -n "$note" ] || item_refused "item open" "the item names no post or ticket it comes from"
+    [[ $note =~ $ITEM_REF ]] || item_refused "item open" "\`--note $note\` names no post or ticket"
+    [ -n "${title//[[:space:]]/}" ] || item_refused "item open" "it has no title"
+    exec "$(dirname "$0")/coordc" open item --title "$title" --note "$note" </dev/null ;;
+  open:item)
+    if [ $# -gt 2 ]; then
+      # the form's leading --FIELD VALUE pairs, as coordc reads them
+      a=("${@:3}") note= i=0
+      while [ "$i" -lt "${#a[@]}" ] && [[ ${a[$i]} == --?* ]]; do [ "${a[$i]}" != --note ] || note=${a[$((i + 1))]:-}; i=$((i + 2)); done
+      [ -n "$note" ] || item_refused "open item" "the item names no post or ticket it comes from (no --note)"
+      [[ $note =~ $ITEM_REF ]] || item_refused "open item" "\`--note $note\` names no post or ticket"
+    fi ;;
+  esac
+fi
+
 case ${1:-} in
 msg) shift; exec "$(dirname "$0")/coordc" msg ${COORD_AS:+--as "$COORD_AS"} "$@" ;;
-mail|ask|ls|state|log|item|team) exec "$(dirname "$0")/coordc" "$@" ;;
+read-brain|report-work|esc|effort|model|mode|compact|can|duties|mail|ask|ls|state|log|item|team|check|open|post|answer|cancel|withdraw|edit|repair|rekind|show|tickets|say|move|keep|drop-thread|go|star|unstar|find|mentions|hold|notice|tie|title|end|take-back|pass|outline|graph|native|accounts|account) exec "$(dirname "$0")/coordc" "$@" ;;
 attach) [ $# -eq 2 ] || usage; exec "$(dirname "$0")/coordc" attach "$2" ;;
-context) shift; exec "$(dirname "$0")/coord-context" "$@" ;;
-measure) shift; exec "$(dirname "$0")/coord-measure" "$@" ;;
-fork)
-  [ "$me" != owner ] || { echo "coord fork runs inside an agent session (AGENT_NAME set); the owner forks with roster fork NAME" >&2; exit 2; }
-  shift; exec "$(dirname "$0")/roster" fork "$me" "$@" ;;
-ack)
-  [ $# -eq 2 ] && [ "$me" != owner ] || { echo "coord ack RULING runs inside an agent session (AGENT_NAME set)" >&2; exit 2; }
-  mkdir -p "$COORD/agents/$me" && echo "$2" >"$COORD/agents/$me/ruling"
-  feed --arg ruling "$2" '{kind: "ack", at: $at, from: $from, ruling: $ruling}'
-  echo "acknowledged ruling #$2"
-  ;;
+import-agy) shift; exec "$(dirname "$0")/agy-import" "$@" ;;
+new|fork)
+  [ "$me" != owner ] || { echo "coord $1 runs inside an agent session (AGENT_NAME set); the owner makes agents with roster add or roster fork NAME" >&2; exit 2; }
+  exec "$(dirname "$0")/coordc" "$@" ;;
 ready)
   [ "$me" != owner ] || { echo "coord ready runs inside an agent session (AGENT_NAME set)" >&2; exit 2; }
   shift; item= with=() alsos=()
@@ -112,8 +249,8 @@ ready)
       | (($theirs - $ARGS.positional | length) < ($theirs | length)) or (((.with // []) - $mine | length) < ((.with // []) | length))' \
       "${with[@]}" <"$q" >/dev/null && continue
     st=$COORD/queue/state/$a.json
-    [ -f "$st" ] && [ "$(jq -r .commit "$st")" = "$(jq -r .commit "$q")" ] &&
-      jq -e '.state == "landed" or .state == "rejected"' "$st" >/dev/null && continue
+    [ -f "$st" ] && jq -e --slurpfile q "$q" '.commit == $q[0].commit and ((.also // []) | sort) == (($q[0].also // []) | map(.commit) | sort)
+      and (.state == "landed" or .state == "rejected")' "$st" >/dev/null && continue
     files=()
     for oc in $(jq -r '.commit, (.also // [])[].commit' "$q"); do
       for i in "${!udirs[@]}"; do
@@ -142,6 +279,16 @@ ready)
   feed --arg branch "$branch" --arg commit "$commit" --argjson also "$also" \
     '{kind: "ready", at: $at, from: $from, branch: $branch, commit: $commit, also: $also}'
   echo "queued $branch at ${commit:0:9} for the runner$(jq -r 'map(" + \(.branch) at \(.commit[:9])") | join("")' <<<"$also")"
+  # with an item, the check is also a ticket under it (plan/edge.md S4, E3): the project's runner answers its step and
+  # the agent hears the verdict by its closing notice. Not when the project file ($COORD/project names it) has
+  # `ready_check = false` in its [project] table: a project whose runner answers no check step writes the queue only
+  # (paper-research m1515). Read here, not by coordd; a file this shell cannot read counts as no key.
+  if [ -n "$item" ] && ! ready_check_off; then
+    # its first post given, and stdin closed: coordc open reads a post from stdin when none is given, and an agent's
+    # shell holds stdin open
+    "$(dirname "$0")/coordc" open check --under "$item" --commit "$commit" --branch "$branch" \
+      "coord ready --item $item: $branch at ${commit:0:9}" </dev/null
+  fi
   ;;
 queue)
   printf '%-10s %-24s %-10s %-9s %-8s %s\n' AGENT BRANCH COMMIT STATE BATCH SINCE/REASON
@@ -150,7 +297,7 @@ queue)
     a=$(basename "$q" .json)
     commit=$(jq -r .commit "$q")
     st="$COORD/queue/state/$a.json" state=waiting batch=- note=$(jq -r .at "$q")
-    if [ -f "$st" ] && [ "$(jq -r .commit "$st")" = "$commit" ]; then
+    if [ -f "$st" ] && jq -e --slurpfile q "$q" '.commit == $q[0].commit and ((.also // []) | sort) == (($q[0].also // []) | map(.commit) | sort)' "$st" >/dev/null; then
       state=$(jq -r .state "$st"); batch=$(jq -r '.batch // "-"' "$st"); note=$(jq -r '.reason // .at' "$st")
     fi
     printf '%-10s %-24s %-10s %-9s %-8s %s\n' "$a" "$(jq -r .branch "$q")" "${commit:0:9}" "$state" "$batch" "$note"

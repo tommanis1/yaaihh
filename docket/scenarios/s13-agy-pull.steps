@@ -1,0 +1,124 @@
+# Scenario 13: an agy agent pulls (std.delivery, std.bridges.agy). Nothing is pushed into its session but the
+# owner's own word once it has pulled (the end): no step before that has a `stand-in:` line, so any Effect toward
+# it would fail the step. It is kicked off, pulls a briefing,
+# works, reports, and sleeps on its own timer for the minutes the briefing suggests; a check-in later than that
+# and the grace is told to the owner once, as a fact, and the session is left alone. The parties are scenario
+# 10's; the minutes are the clock driver's `Tick`.
+load ../std/hooks.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/delivery.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/agy.docket
+load s11-delivery-world.docket
+carries: Agy-Kick, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Measure, Model, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, TextOf
+driver: Tick(100) -> performed
+# before it is kicked off it pulls nothing; words for it wait, and nothing reaches its session
+g1: Pull-Brain(g1, "starting") -> refused policy -> raised Refused
+o1: Post(o1, g1, k1, "read the spec", Normal) -> performed -> ended ()
+o1: Post(o1, g1, k2, "the gate is red", Interrupt) -> performed -> ended ()
+brain: Direct(brain, g1, "the spec before the code", 4) -> performed -> ended ()
+o1: Assign(o1, g1, map-work) -> performed -> ended ()
+holds Needs-Agent(g1, message)
+# kicked off by him: its first pull is due within the grace
+driver: Session-Kicked-Off(g1, true, 100) -> performed
+holds Agy-Active(g1)
+holds Next-Expected-Pull(g1, 105)
+# its pull: everything waiting handed and told; work to do, so the work wake
+g1: Pull-Brain(g1, "starting") -> performed -> ended std.bridges.agy.Briefing { mode: work, priority_directive: the spec before the code, new_directives: [the spec before the code], unread_messages: [[k1 from o1] read the spec, [k2 from o1] the gate is red], assigned_items: [map-work], suggested_wake_mins: 10, wake_hint: pull again in 10 min (read_brain); a pull later than minute 110 and the grace is told to the owner }
+holds In-Flight(g1, k1)
+holds In-Flight(g1, k2)
+holds Directive-Given(g1, "the spec before the code")
+holds Briefed(g1, map-work)
+holds Last-Pulled(g1, 100)
+holds Status-Note(g1, starting)
+holds Next-Expected-Pull(g1, 115)
+not Needs-Agent(g1, message)
+# a word while it works waits for its pull, his too; another pull reads what the last one handed, and tells only
+# what is new
+g1: Reach(g1, turn_begins) -> performed -> ended ()
+driver: Tick(104) -> performed
+o1: Post(o1, g1, k3, "the tiles too", Normal) -> performed -> ended ()
+g1: Pull-Brain(g1, "reading the spec") -> performed -> ended std.bridges.agy.Briefing { mode: work, priority_directive: the spec before the code, new_directives: [], unread_messages: [[k3 from o1] the tiles too], assigned_items: [map-work], suggested_wake_mins: 10, wake_hint: pull again in 10 min (read_brain); a pull later than minute 114 and the grace is told to the owner }
+not Unread(g1, k1, Normal)
+not Unread(g1, k2, Interrupt)
+holds In-Flight(g1, k3)
+# it reports its item done: what it was handed is read, and then nothing waits: it sleeps the long wake
+g1: Report-Work(g1, "map done", "commit 9f8e7d", map-work) -> performed -> ended reported; map-work claimed done
+not Unread(g1, k3, Normal)
+holds Hand-In(g1, map-work, "commit 9f8e7d")
+g1: Reach(g1, turn_end) -> performed -> ended ()
+g1: Pull-Brain(g1, "done for now") -> performed -> ended std.bridges.agy.Briefing { mode: sleep, priority_directive: the spec before the code, new_directives: [], unread_messages: [], assigned_items: [], suggested_wake_mins: 20, wake_hint: pull again in 20 min (read_brain); a pull later than minute 124 and the grace is told to the owner }
+holds Next-Expected-Pull(g1, 129)
+# watching a gate, it wakes at the watch minutes; a phase's wake for it is used over the default
+g1: Watch(g1, g1, "gate 4410") -> performed -> ended ()
+g1: Pull-Brain(g1, "watching") -> performed -> ended std.bridges.agy.Briefing { mode: sleep, priority_directive: the spec before the code, new_directives: [], unread_messages: [], assigned_items: [], suggested_wake_mins: 3, wake_hint: pull again in 3 min (read_brain); a pull later than minute 107 and the grace is told to the owner }
+g1: Unwatch(g1, g1, "gate 4410") -> performed -> ended ()
+brain: Set-Phase-Wake(brain, g1, 6, 12) -> performed -> ended ()
+w1: Set-Phase-Wake(w1, g1, 1, 1) -> refused policy -> raised Refused
+driver: Tick(110) -> performed
+brain: Direct(brain, g1, "watch the gate", 1) -> performed -> ended ()
+g1: Pull-Brain(g1, "x") -> performed -> ended std.bridges.agy.Briefing { mode: work, priority_directive: the spec before the code, new_directives: [watch the gate], unread_messages: [], assigned_items: [], suggested_wake_mins: 6, wake_hint: pull again in 6 min (read_brain); a pull later than minute 116 and the grace is told to the owner }
+holds Next-Expected-Pull(g1, 121)
+# missed: at minute 122 the pull due by 116 and the grace is late; told once, and nothing reaches the session
+driver: Tick(121) -> performed
+not Anomaly(agy_missed_checkin, g1, 121)
+driver: Tick(122) -> performed
+holds Anomaly(agy_missed_checkin, g1, 121)
+driver: Tick(123) -> performed
+record lacks Pulse-Anomaly
+# paused, it is told to stop, sets no timer, and no check-in is missed
+o1: Pause(o1, g1) -> performed -> ended ()
+w1: Pause(w1, g1) -> refused policy -> raised Refused
+# and what comes while paused is not handed: nothing counts as read that it was not told (N-1978 p5, point 4)
+o1: Post(o1, g1, k9, "the release is tonight", Normal) -> performed -> ended ()
+g1: Pull-Brain(g1, "y") -> performed -> ended std.bridges.agy.Briefing { mode: stop, priority_directive: , new_directives: [], unread_messages: [], assigned_items: [], suggested_wake_mins: 0, wake_hint: set no timer: the session is paused or finished; it is started again by him }
+not In-Flight(g1, k9)
+holds Unread(g1, k9, Normal)
+driver: Tick(200) -> performed
+not Anomaly(agy_missed_checkin, g1, 128)
+# unpaused after longer than its wake: its next pull is due within the grace from now, no check-in missed
+o1: Unpause(o1, g1) -> performed -> ended ()
+holds Next-Expected-Pull(g1, 205)
+driver: Tick(201) -> performed
+record lacks Pulse-Anomaly
+not Anomaly(agy_missed_checkin, g1, 128)
+o1: Pause(o1, g1) -> performed -> ended ()
+# its session started again, by the project: kicked off, no longer paused, its first pull due within the grace again
+driver: Session-Started(g1, agy, agy-1.5.18) -> performed
+not Agy-Paused(g1)
+holds Kicked-Off(g1, false)
+holds Next-Expected-Pull(g1, 206)
+# his own word (N-1998 p3, point 1): before its first pull since the kick-off it waits, as any word does
+o1: Post(o1, g1, k10, "the notes too", Normal) -> performed -> ended ()
+not In-Flight(g1, k10)
+g1: Pull-Brain(g1, "again") -> performed -> ended std.bridges.agy.Briefing { mode: work, priority_directive: the spec before the code, new_directives: [], unread_messages: [[k10 from o1] the notes too, [k9 from o1] the release is tonight], assigned_items: [], suggested_wake_mins: 6, wake_hint: pull again in 6 min (read_brain); a pull later than minute 207 and the grace is told to the owner }
+holds Has-Pulled(g1)
+# pulled, and in no turn: his word is typed in at once as a turn of its own; it is not handed by that, so the
+# pull the turn begins with tells it and says work (the owner, N-1998 p7, point 1)
+stand-in: Agy-Kick(g1, _) -> ()
+o1: Post(o1, g1, k11, "ship it tonight", Normal) -> performed -> ended ()
+record has [coord delivery, from the owner] [k11 from o1] ship it tonight
+not In-Flight(g1, k11)
+holds Unread(g1, k11, Normal)
+holds Agy-Kicked(g1)
+# a second word before that turn is over waits: one word typed in is one turn
+o1: Post(o1, g1, k12, "and the notes", Normal) -> performed -> ended ()
+not In-Flight(g1, k12)
+g1: Reach(g1, turn_begins) -> performed -> ended ()
+g1: Pull-Brain(g1, "kicked") -> performed -> ended std.bridges.agy.Briefing { mode: work, priority_directive: the spec before the code, new_directives: [], unread_messages: [[k11 from o1] ship it tonight, [k12 from o1] and the notes], assigned_items: [], suggested_wake_mins: 6, wake_hint: pull again in 6 min (read_brain); a pull later than minute 207 and the grace is told to the owner }
+holds In-Flight(g1, k11)
+not Agy-Kicked(g1)
+# in its turn his word waits, an interrupting one too
+o1: Post(o1, g1, k13, "stop", Interrupt) -> performed -> ended ()
+not In-Flight(g1, k13)
+g1: Reach(g1, turn_end) -> performed -> ended ()
+# a director's word that is not his waits for a pull
+brain: Post(brain, g1, k14, "from the brain", Normal) -> performed -> ended ()
+not In-Flight(g1, k14)
+# paused, his word waits too
+o1: Pause(o1, g1) -> performed -> ended ()
+o1: Post(o1, g1, k15, "while paused", Normal) -> performed -> ended ()
+not In-Flight(g1, k15)

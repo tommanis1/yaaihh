@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type bin\nNew type level\nNew type prim\n+level(bin(prim(\"A\"),prim(\"A\")),prim(\"A\"))\n+level(bin(prim(\"A\"),prim(\"A\")),prim(\"B\"))\n+level(bin(prim(\"A\"),prim(\"B\")),prim(\"A\"))\n+level(bin(prim(\"A\"),prim(\"B\")),prim(\"B\"))\n+level(bin(prim(\"B\"),prim(\"A\")),prim(\"A\"))\n+level(bin(prim(\"B\"),prim(\"A\")),prim(\"B\"))\n+level(bin(prim(\"B\"),prim(\"B\")),prim(\"A\"))\n+level(bin(prim(\"B\"),prim(\"B\")),prim(\"B\"))\nquery successful\nquery successful\nquery successful\nquery successful\nquery successful\nNew type single\n+single(bin(prim(\"A\"),prim(\"A\")))\n+single(bin(prim(\"B\"),prim(\"B\")))\nquery successful\nquery successful\n#11 > "
+ }
+}

@@ -1,0 +1,153 @@
+// Docket's tickets (tickets-patterns syntax.tex, Policy). coordd supplies these facts when it asks about tickets:
+// each ticket asked about, who its step awaits, and how many minutes the step has been silent (asked every minute):
+// WAITED is 0 while the awaited agent is in a turn or a runner job runs for the ticket, otherwise the minutes since the
+// latest of the step being given, the agent's last turn end and the ticket's last job end (coordd ticket/quiet.rs).
+// A step given to the runner is not silent while the project's source sees the runner alive; from when it is seen
+// gone, it is.
+// A wait lasts while the awaited process lives.
+Fact ticket Identified by String
+Fact awaits Identified by ticket * agent
+Fact waited Identified by ticket * Int
+
+// Naming an agent on a ticket: the names of a note or a post (coord msg NAME, --re, --thread, @NAME), which reach
+// them at once. Anyone may name anyone, except a consultant, whose words are advice its members do not answer: a lead
+// or a consultant may name one, and anyone may on a ticket the consultant takes part in already (someone brought it
+// in). TAKES-PART is supplied by coordd: the ticket's opener, its posts' authors and those they named, whoever was
+// given a delivery of it, and whoever works on it (`coord item start`: an item's starters, I-1480, N-1481 p15). So a
+// consultant who started an item may be named on it by anyone. A new note is asked as a ticket nobody takes part in.
+Fact takes-part Identified by agent * ticket
+Act name
+  Actor agent
+  Recipient agent
+  Related to ticket
+  Holds when not role(recipient, "consultant")
+  Holds when role(actor, "lead")
+  Holds when role(actor, "consultant")
+  Holds when takes-part(recipient, ticket)
+
+// When a step has been silent too long it is withdrawn and the ticket fails where it stood (Silent), so the failure goes
+// up the tree instead of the ticket waiting for ever. A step that waits on the owner does not expire: the owner is
+// the last rung, with no one above to raise to. Nor does one on a ticket the owner archived (below): it is held, not
+// silent, and comes again if he unarchives it. SILENT-AFTER is how long the step may be silent in minutes (WAITED,
+// above: not its age; asked every minute); a project
+// may shorten it with its own instance (`+silent-after(2).`): the shortest one given holds.
+Fact silent-after Identified by Int
++silent-after(120).
+
+// How many turns of an agent its own program's `every e.every of turn_end(e)` binding counts before it fires (the
+// brain, N-1444 p16). A project sets it per agent, `+check-in-every("paper-research", 20).` (policy/agents/NAME.eflint),
+// and he edits it there; coordd reads it as written (coordd policy/parts.rs) into each `turn_end` of that agent, so the
+// record holds it. An agent with none has nothing fire.
+Fact check-in-every Identified by agent * Int
+
+// How far before the owner's burst, in seconds, the brain's attention pass reads his posts to the agent that it has
+// not answered (the ledger, docket-machine `Machine::asked`; coordd brain.rs; the selector's candidates `unanswered by
+// it`; proto-reader N-1446 p98, proto-lead p138). A project gives it in its own policy, `+unanswered-within(43200).`,
+// and he edits it there; the shortest instance holds. With none, the pass reads none of them.
+Fact unanswered-within Identified by Int
+
+// How far before the owner's burst, in seconds, the brain's attention pass reads his earlier posts as an index (id,
+// thread, time, first line): those on the burst's thread, the thread it hangs from and the threads hanging from it,
+// and those to the agent (coordd brain.rs EARLIER; his repeats, paper-research-brain N-1449; proto-mind N-1446 p450).
+// The owner model names the ones whose words on his topic the agent must have before it answers, and coordd adds those
+// words, as he wrote them, to what the pass says. A project gives it in its own policy, `+earlier-within(604800).`, and
+// he edits it there; the shortest instance holds. With none, the pass reads none of them.
+Fact earlier-within Identified by Int
+
+// How many of those posts the index lists, the newest (coordd brain.rs EARLIER): `+earlier-lines(100).`, the smallest
+// instance holds; with none, 40. On research's record against paper-research-brain's lessons, it is this number, not
+// the reach, that bounds what the owner model sees of what he had said before (proto-mind N-1446, I-1455).
+Fact earlier-lines Identified by Int
+
+// How far back, in seconds, the owner model reads his posts when it is built whole (owner_model.kind, coordd brain.rs
+// `owner_model_env`; paper-research N-1446 p1108): from that long before the newest of the posts its update names. A
+// project gives it in its own policy, as `+owner-model-within(604800).`; the shortest instance holds. With none, coordd
+// opens no update, and no model is made.
+Fact owner-model-within Identified by Int
+
+// After how many misses since it was last built whole the owner model is built whole again rather than brought up to
+// date (owner_model.kind's `owner_update`; the misses are the brain's predictions of his next words that his words did
+// not bear out). `+owner-model-rebuild-after(3).`, the smallest instance holds; with none, as with no
+// owner-model-within, coordd opens no update.
+Fact owner-model-rebuild-after Identified by Int
+
+Act expired
+  Actor agent
+  Related to ticket
+  Holds when awaits(ticket, actor) and waited(ticket) >= silent-after() and actor != "owner" and not archived(ticket)
+
+// A ticket's kind and opener, and the agents running now (supplied when a ticket's step asks who fills a role).
+Fact ticket-kind Identified by ticket * String
+Fact opener Identified by ticket * agent
+Fact running Identified by agent
+// Agent A works on item I (`coord item start`, the `started` line), for each open item: for example
+// `Requires started(option, ctx.item)` gives a ticket under an item to whoever took the item.
+Fact started Identified by agent * String
+
+// A goal (`goal NAME` on a kind; Owed) is the act of that name, asked for the ticket's opener when its program
+// returns: the ticket closes done only if it holds. coordd supplies what closed below the ticket: CLOSED-UNDER(T, KIND,
+// HEAD), HEAD the result's constructor or the exception raised. For example a project's
+//   Act green
+//     Actor agent
+//     Related to ticket
+//     Holds when closed-under(ticket, "check", "Green")
+Fact closed-under Identified by String * String * String
+
+// Who else an event on a ticket reaches (syntax.tex, notify): besides whom a post names and whoever acts next, and
+// besides the opener of a ticket that closes with no parent waiting. EVENT is "post" or "closed"; the actor is who
+// caused it. coordd asks it for every agent and the owner. agent-base declares it, with `inform`, in notify.eflint
+// (who hears of a post on a thread); a project replaces that file with its own policy/notify.eflint (an act is
+// declared once). Without the act, nobody more is told. For example, "always tell the lead of a post on a claim":
+//   Act notify
+//     Actor agent
+//     Recipient agent
+//     Related to ticket, event
+//     Holds when event == "post" and ticket-kind(ticket, "claim") and role(recipient, "lead")
+// An act `inform`, declared the same way, tells whom it names without starting a turn for it: the notice is there at
+// the recipient's next turn (plan/design-two-systems.md, section 10). Whom both name is notified.
+Fact event Identified by String
+// On a "closed" notice: the ticket closed with a raise (failed, cancelled, or given up at a stop), not done.
+Fact closed-failed Identified by ticket
+
+// Who may change a ticket (syntax.tex, `may edit`): cancel it, withdraw its step. Its opener (for a ticket opened by
+// a pattern, the nearest opener above it), an agent above the opener in the agent tree, or a lead. The owner always
+// may. ABOVE is supplied by coordd: A is above B when B's parent, or its parent's, and so on, is A.
+Fact above Identified by agent * agent
+Act edit
+  Actor agent
+  Related to ticket
+  Holds when opener(ticket, actor)
+  Holds when above(actor, opener(ticket))
+  Holds when role(actor, "lead")
+
+// What the owner archived (the owner, N-1073: "some relation in the eflint code that express this is no longer of
+// importance to the owner ie archived"): ARCHIVED(T), supplied by coordd for a ticket he archived and for each ticket
+// under it, worked out from the record's `archive` lines and kept nowhere else. It is made and unmade by his act alone
+// (the window's Archive, `coord archive T`, `coord unarchive T`): the engine takes it from nobody else, whatever is
+// written here. His own post on it unarchives it, as writing there says it matters to him again. It is not an end:
+// nothing is closed, taken back or removed, and Unarchive puts it back as it was.
+// What it asks of the agents, the library's: nobody is asked on it. The engine hands nothing at or under it while it
+// is archived (a step, a post's wake, words given), puts its hole to no minder, and keeps what it holds, to hand it at
+// Unarchive as it would have been; a held step does not expire (`expired`, above); and whoever holds work under it
+// is told once, quietly (notify.eflint's `inform`, event "archived"). WORKS-UNDER(A, T), supplied with that event: A
+// is awaited by a step at or under T, or opened an open ticket under it; never the owner.
+Fact archived Identified by ticket
+Fact works-under Identified by agent * ticket
+
+// Who fills a role for a ticket's step (`step role R`; the call gives `role`, `call` and `ticket`): a running agent
+// with that role. The call gives too the step's arguments that are texts, numbers or truths, each by its name
+// (`call.by`), and each text of a list argument is among(X, I), I from 0 (paper-research N-1446 p2894: who reads a
+// text change turns on who made it and what it touches).
+Decision fills
+  Options agent
+  Requires role(option, call.role)
+  Requires running(option)
+
+// Where the open tickets stand, supplied when coordd asks a `when D is o` binding's decision D (beside its call fields,
+// docket-machine `when_asks`; `Machine::standing`): STANDS(T, CALL), ticket T's program waits at a step or a hold of
+// CALL now (`cut_of`; `decide:green` while a decision is asked); STANDS-WITH(T, PARAM, VALUE), that step's argument
+// PARAM is the string VALUE (a commit); HANDS-IN(T, POST, BY), T's form's `for` names POST, or an item whose note POST
+// is (the ASKED ledger's hand-in), which BY wrote (`owner` for his). Not declared here: a project that reads them
+// declares them in its own policy (`Fact stands Identified by String * String`, `Fact stands-with Identified by String
+// * String * String`, `Fact hands-in Identified by String * String * String`), so a release from before them, which
+// supplies none, still loads it, and coordd supplies only what a policy declares.

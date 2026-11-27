@@ -1,0 +1,16 @@
+// The filing kind's step (tickets-patterns semantics.tex, The owner's words): coordd answers it itself as the agent
+// `clerk`, from the split call (filing.call) whose passages it finds in the owner's text. A piece is a span of that
+// text, in bytes, never a copy; `answer` names the result of the step it answers, where the words leave only one.
+type Piece {
+  ticket: Ticket
+  at: Int
+  len: Int
+  answer: Text?
+}
+type Left {
+  at: Int
+  len: Int
+}
+
+call file(text: Text) -> Filed(pieces: [Piece]) | Unplaced(why: Text, left: [Left]?)
+  task file

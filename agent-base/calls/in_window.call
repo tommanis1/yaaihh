@@ -1,0 +1,12 @@
+// A cut's wait for his window (dev.kind's cut; N-1446 p1491, 6; proto-mind p1516): held (`hold role installer
+// in_window(name, engine)`), it is answered by the machine itself (docket-machine `IN_WINDOW`), by the ticket, once the
+// last `window_release` line has the cut NAME in his window: the window's half names it as its release or lists it in
+// its `contains`, and with ENGINE coordd's half has it too. That is in the apply of the line that has it, or at once
+// when the step is reached and the last line kept has it already. The answer is the window's half. The holder may answer
+// it by hand, for a window that names no release. An engine from before this call leaves an open hold to the holder (the
+// cut replays by the calls its open line recorded), and refuses a kind that holds it: its agent-base has no in_window.call
+// (proto-mind N-1446 p1544).
+/// the cut in his window
+call in_window(name: Text, engine: Bool) -> Has(release: Text, contains: [Text])
+  template
+    His window is to have release {{ name }} (coordd's too: {{ engine }}). Answer Has with the release his window runs and those it contains once it has it.

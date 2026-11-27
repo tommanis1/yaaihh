@@ -1,0 +1,14 @@
+module std.programs.guided_worker
+
+import std.adapt as A
+
+// Guided worker: one step at a time, each with its check, only the files the step needs, and a hint at each change,
+// so a smaller or faster model stays on its task. It fits every tier; a leaner pack that fits is taken over it.
+
+// High: a model that is given its steps does best thinking hard inside each one.
++A.Program-Template("guided-worker", "hinted", "stepwise", "guided", "high").
++A.For-Class("guided-worker", "scoped"). +A.For-Class("guided-worker", "deep").
++A.Every-Turn("stepwise").
+
++A.Brief("guided", "Work in steps. Before each one, write the single step you take next and the check that will show it done; take it; run that check; only then write the next step. Read only the files this step needs, and change only the files your work names. If a check fails twice, stop and say what you saw.").
++A.Tool-Hint("guided", "You changed a file. Run your step's check now, before you change another.").

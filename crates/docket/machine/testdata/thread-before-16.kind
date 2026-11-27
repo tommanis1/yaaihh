@@ -1,0 +1,46 @@
+// The owner's message to an agent (plan/design-two-systems.md, section 3; the first slice). TO is the agent written
+// to, NAMES the @NAMEs in the words, ADDRESSED whether there were any. A message naming others is a thread for sure;
+// otherwise the watcher's one call (intake) says whether the words are a one-off, belong on an open ticket, or are a
+// new thread. If that call fails, coordd answers OneOff.
+//
+// - OneOff: the words go to TO as they are (`give`), and nothing is posted. The turn that answers them is kept by
+//   reference, so the owner can make a run of one-offs a thread later (Keep).
+// - Place(t): the words are posted on t as the owner's, naming TO.
+// - Thread: the words are this ticket's first post, naming TO and every @NAME; then it rests at the hole, a place for
+//   posts that nothing runs. An Edit fills the hole: `return OneOff` drops it, `return Kept` keeps it as it is.
+//
+// result Kept: the thread is over (what was asked on it is done, or the owner let it go); its posts stay as they are.
+// result Moved(to): the owner's words belonged on ticket TO and were posted there; this thread holds nothing.
+// result OneOff: the owner's words were a one-off to TO; nothing is kept on a ticket.
+kind thread from base
+  letter N
+  form to: Agent, names: [Agent], text: Text, addressed: Named | Unnamed
+  result Kept | Moved(to: Ticket) | OneOff
+  pattern
+    v <- match addressed {
+      Named => return Thread
+      Unnamed => step watcher intake(text, to)
+    };
+    match v {
+      OneOff =>
+        _ <- give to text;
+        return OneOff
+      Place(t) =>
+        _ <- post text on t as owner naming to;
+        return Moved(t)
+      Thread =>
+        _ <- post text as owner naming to, names;
+        ...
+      Unsure(ts) =>
+        w <- step owner pick(text, ts);
+        match w {
+          Place(t) =>
+            _ <- post text on t as owner naming to;
+            return Moved(t)
+          Thread =>
+            _ <- post text as owner naming to, names;
+            ...
+        }
+    }
+
+on owner_message(m) open thread(m.to, m.names, m.text, m.addressed)

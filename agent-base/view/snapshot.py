@@ -10,8 +10,7 @@ Reads, for every box under ~/agent-coord:
   - commits fetched from the box (refs/sandboxes/BOX/* in the box's repo, which
     sbx keeps after the box is removed), with their
     Agent/Session/Ruling trailers. It fetches at most once a minute.
-Also ~/agent-coord/.classifier.json (tools/classifier-watch.py): sessions whose
-auto-mode checks run on the client fallback become host alarms. Also the plan's headings (an id such as T3 or L0 before a colon becomes the
+Also the plan's headings (an id such as T3 or L0 before a colon becomes the
 item id) and the newest ruling file.
 
 Writes OUT/snap.js as `window.SNAP = {...}`, which view/index.html reloads,
@@ -120,20 +119,6 @@ def box_snapshot(box, sbx, last_fetch, now):
             "agents": agents, "feed": feed, "alarms": alarms}
 
 
-def classifier_alarms(now):
-    """Sessions tools/classifier-watch.py found on the client fallback; an alarm too if it stopped writing."""
-    try:
-        with open(os.path.join(COORD, ".classifier.json")) as f:
-            c = json.load(f)
-    except (OSError, ValueError):
-        return []
-    if now - c["at"] > 900:
-        return [f"classifier-watch: no report for {int((now - c['at']) // 60)} min"]
-    return [f"auto mode on the client fallback: {s['title'] or s['session'][:8] or s['pid']} (pid {s['pid']},"
-            f" {s['checks']} {c['model']} checks in {c['window'] // 60} min); restart: claude --resume {s['session']}"
-            for s in c["sessions"]]
-
-
 # Each `sbx ls` opens ~47 Secret Service sessions (sbx reads the Docker login from the keyring); every 3 s that churn
 # crashed gnome-keyring 46 (29 Oct, 16:14 and 20:38: aes_negotiate on a gone client), relocking it. So at most
 # every SBX_EVERY seconds.
@@ -157,7 +142,7 @@ def snapshot(args, last_fetch):
     sbx = sbx_boxes(now)
     boxes = [box_snapshot(os.path.basename(b), sbx, last_fetch, now)
              for b in sorted(glob.glob(os.path.join(COORD, "*"))) if os.path.isdir(b)]
-    return {"at": int(now), "boxes": boxes, "alarms": classifier_alarms(now),
+    return {"at": int(now), "boxes": boxes, "alarms": [],
             "plan": {"path": args.plan, "items": plan_tree(args.plan)} if args.plan else None,
             "ruling": latest_ruling(args.rulings) if args.rulings else None}
 

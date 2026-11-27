@@ -1,0 +1,127 @@
+// The kind the others start from (plan/design-two-systems.md, sections 9 to 11): every kind takes its handlers for
+// the events it has none of its own for (`kind K from B` names another). It is not opened itself.
+//
+// - hole: a ticket resting at a hole (`...`) is put to the minder once something has happened on it since it was last
+//   asked: a post not by coordd, an answer, a ticket under it closed (a kind's own hole is not asked on arrival; a
+//   hole in a program the minder wrote is). The minder answers `shape` (shape.call): Rest, a Program to stand at the
+//   hole (checked as an Edit there is), or Close(result). It never posts; each answer it gives is a logged line the
+//   owner can undo. With nobody in the role, coordd answers the step itself, with one model call (shape.rs, the
+//   minder where no agent holds the role); the NoWorker arm is reached only when the policy cannot be solved.
+// - ask: an agent holding a step of the ticket asked, and waits in its turn (block_ask): a question to the lead, who
+//   may pass it up to the owner; its answer is the asker's command's result. A lead filling it that waits on the
+//   asker itself, through asks of its own (`coord ask`, a cycle: docket-machine `Machine::cycle`), is passed over, to
+//   the owner.
+// - owner_post: the owner's words landed on the ticket as a post (a thread's first words, a Place, a pick, a Move,
+//   the owner's own post; not words that answer a step owed to the owner, design-two-systems §13). While this runs
+//   the post is held: no agent is given it. `tell AGENTS p` wakes those agents and informs every other agent on the
+//   ticket; `drop p` withdraws it (the owner sees it struck through). Ending with neither, the post goes as policy
+//   says. Ours: the owner's answers to what a post asks go to whom they were typed to (paper-research m1437: no
+//   call for them); words that name someone go to them, and so do words on a ticket nobody else is on, and words typed
+//   to nobody on a ticket with one agent go to that agent (paper-research m1418: no call for them); otherwise the
+//   watcher says whom they are for (route.call), and when it cannot tell, the owner does (clarify.call), by a press:
+//   whom it is for, or drop it. When route says the words go on from a post of his just before them (its `joins`, the
+//   thread's holder: his p586 and p587 on N-1104, 20 Nov), `tell … joining` keeps that post on them, and those told
+//   read which post they go on from; one still theirs to answer is answered with them (hs-ls N-1446 p38). His typed
+//   words are held first (`gather`, E1b; the owner, N-1445 p9: "hold them for 15s by default and ask a docket program
+//   to split them"): for the policy's `lapse-after("gather", N)` from his first post (while he types in the thread's
+//   box it waits on, up to the policy's `lapse-at-most("gather", N)` from his first post: the 60 s ceiling,
+//   proto-engine's, with paper-research's yes at N-1446 p40), or until his "Send now" (on a slowed thread only that),
+//   his next posts on the ticket join the first, and everything below reads his burst, their words joined, as one
+//   message; route may then split it between agents by whole posts (its `Split`), each part told to its own (a split of
+//   more than 20 parts is not split: every post of it goes to every agent on the ticket, each once). A post of the
+//   burst that carries his own choice (its @NAMEs, the post it answers) goes to exactly whom he chose, and one that
+//   says `@all` goes as a lone `@all` does, one agent taking it by claims (`p.claimed`, before anything else;
+//   proto-lead N-1446 p475): when the burst's posts do not all carry one same choice, route reads them all and coordd
+//   takes only an answer that sends each such post there (`p.chosen`; consult-3 N-1446 p281, proto-reader p307,
+//   proto-lead p325); when route cannot tell whom the posts left are for, those he chose for go where he chose and he
+//   is asked about the rest; when every post carries a choice, nothing is asked (`p.left`, proto-reader p445). With no
+//   hold in the policy `gather` is his post at once, as before. Words he types on the thread while a question to him
+//   waits are a post of their own, with their own names, and the post he did not answer is handed to every agent on the
+//   thread (the machine, `hand_unanswered`; paper-research N-807.p78): nothing withdraws a post of his but his own
+//   "drop it". Words that say `@all` reach every agent on the ticket and one of them takes it (consult-lead N-1158 post
+//   1; the owner, N-1104 post 26: "reach all but only 1 needs to claim it eh so be smart about it"): the policy's
+//   decision `claims` (claims.call) says which one is handed it, and `tell` informs the others, who see it at their
+//   next delivery; the first answer to it, by any of them, is the claim, and another agent's answer after that is
+//   refused. Another team writes its own; a kind replaces it with its own `when owner_post`.
+/// the kind the others take their handlers from; it is not opened itself
+kind base
+  pattern
+    ...
+  when hole(h) do
+    try {
+      k <- step role minder shape(this);
+      continue k
+    } handle {
+      NoWorker(w) => ...
+    }
+  when ask(q) do
+    a <- open question(q.text, q.context);
+    reply q a
+  when owner_post(p) do
+    // `p`, as before E1b: a recorded handler's program runs with this name bound, and every one recorded before reads
+    // `p` (a replay of one gave his post to nobody under `first`: proto-engine N-1446)
+    p <- gather p;
+    // his `@all` in a burst whose posts carry different choices (`p.claimed`) goes as a lone `@all` does: the policy's
+    // claims says which one agent is handed it, the others informed (proto-lead N-1446 p475); `p.text` is then the
+    // burst's other posts, what the holder reads
+    _ <- match p.claimed {
+      none => return ()
+      c =>
+        taker <- decide claims(c.to, c.text);
+        tell [taker] c.posts
+    };
+    r <- match p.all {
+      none =>
+        match p.answers {
+          none =>
+            match p.names {
+              // a burst whose posts carry different choices of his (`p.chosen`): each post where he chose, the holder
+              // deciding the posts left (`p.left`), and with none left nothing is asked (proto-reader N-1446 p445)
+              [] => match (p.chosen, p.naming, p.others) {
+                ([], _, []) => return To(p.naming)
+                ([], [], [a]) => return To([a])
+                _ =>
+                  match p.left.posts {
+                    [] => return Split(p.chosen)
+                    _ => step watcher route(p.text, p.naming, p.others)
+                  }
+              }
+              _ => return To(p.naming)
+            }
+          _ => return To(p.naming)
+        }
+      everyone =>
+        match everyone {
+          [] => return To(p.naming)
+          _ =>
+            taker <- decide claims(everyone, p.text);
+            return To([taker])
+        }
+    };
+    match r {
+      To(as, j) => tell as p joining j
+      Split(parts) =>
+        try {
+          _ <- for part in parts up to 20 {
+            tell part.to part.posts
+          };
+          return ()
+        } handle {
+          Exhausted => tell p.agents p
+        }
+      Unclear(why) =>
+        // his own choices go where he chose first; he is asked only about the posts left (proto-reader N-1446 p445)
+        try {
+          _ <- for c in p.chosen up to 20 {
+            tell c.to c.posts
+          };
+          w <- step owner clarify(p.left.text, why, p.agents);
+          match w {
+            Send(as) => tell as p
+            Drop => drop p
+            Again(t) => tell p.agents p
+          }
+        } handle {
+          Exhausted => tell p.agents p
+        }
+    }

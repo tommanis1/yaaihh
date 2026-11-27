@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+# Parts of this program are ported from t3code (https://github.com/pingdotgg/t3code, tag v0.1.11, commit
+# 59651c1761f6): the ACP session's order, the environment's cleaning list, the profile's settings, the sign-in and
+# quota codes and patterns, and the reading of agy's per-prompt usage. Its licence:
+#
+#   MIT License
+#
+#   Copyright (c) 2026 T3 Tools Inc.
+#
+#   Permission is hereby granted, free of charge, to any person obtaining a copy
+#   of this software and associated documentation files (the "Software"), to deal
+#   in the Software without restriction, including without limitation the rights
+#   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#   copies of the Software, and to permit persons to whom the Software is
+#   furnished to do so, subject to the following conditions:
+#
+#   The above copyright notice and this permission notice shall be included in all
+#   copies or substantial portions of the Software.
+#
+#   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+#   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+#   SOFTWARE.
+"""agy-rpc: an agy agent's session, and an agy account's t3code server, from roster and coordd (the owner, N-1104
+p880: "i want to act as t3cdoe so have a t3code -agy logingin basiclly"; p886: "we should just for resrch od ou won
+impletion over agy. so like t3code does it but cut out t3 code . just so i can hedge my betse too"; plans N-1446
+p2038, read Right in p2039 and p2043).
+
+Two ways to agy (Google's Antigravity CLI), one bridge to coordd:
+- **its own ACP client**: `agy acp` of the pinned agy 1.5.18 run by this program, telling agy no client name at all
+  (clientInfo is optional in ACP), on a key account's API key (AGY_KEY_FILE) or on a sign-in account's Google sign-in
+  (AGY_SIGNIN, the account's profile folder, where agy's own `agy acp --login` keeps it: `signin`).
+- **through t3code**, on a sign-in account t3code signed in before agy's own sign-in was used here (T3_HOME, its
+  `home/`): the pinned t3code 0.1.11, unmodified, as it ships, one `t3 serve` per account (`server`). An agent is a
+  thread of its account's server, driven over t3code's own `/ws`, the interface its web client uses. Nothing of ours
+  goes to Google: no client name, no patched code, no flag t3code does not ship with; agy is told t3code's own name by
+  t3code. Signing such an account in again (`signin`) moves it to agy's own client.
+
+  agy-rpc serve NAME DIR MODEL[:LEVEL] [SESSION] [--dangerously-skip-permissions]
+                                       the agent's session, the way its account gives, exactly one of AGY_KEY_FILE (a
+                                       key account's key file) and AGY_SIGNIN (a sign-in account's profile) through
+                                       ACP, or T3_HOME (an account t3code signed in) through t3code. roster runs this
+                                       under `coordc run NAME --`, so it is the agent's process for coordd. Prints
+                                       nothing; SESSION resumes that session (ACP) or thread (t3code), none makes a new
+                                       one; its id is written to $CODEX_SOCK/session. AGY_BARE `1` or `true` starts it
+                                       bare (`0`, `false` or none: not; any other word is refused). The flag last
+                                       starts it in the owner's Yolo (`YOLO`)
+  agy-rpc send SESSION PRIORITY TEXT   deliver TEXT, at thinking level $CODEX_EFFORT when set (coord effort). `next` goes into a running turn (t3code's `steer_active`; agy
+                                       1.5 steers its running turn with the next ACP prompt) or starts one; `later`
+                                       only starts one when no turn runs (exit 3 if one does: the caller keeps it held)
+  agy-rpc status SESSION               idle, or busy
+  agy-rpc interrupt SESSION            cut the running turn off (coord esc): t3code's `run.interrupt`, ACP's
+                                       `session/cancel`; nothing when idle
+  agy-rpc wait-idle SESSION            return once no turn runs
+  agy-rpc screen                       the agent's terminal (roster's `open`): an imported chat's history (agy-import),
+                                       then its transcript as text, followed
+  agy-rpc models                       the models agy itself offers, one a line, HOME the account's `home/`: on its key
+                                       (AGY_KEY_FILE; its profile HOME/profile) or on its sign-in (AGY_SIGNIN, its
+                                       profile); no prompt
+  agy-rpc server HOME                  a sign-in account's t3code server (coordd, `accounts::agy`): t3code's documented
+                                       settings written into HOME/.t3/userdata/settings.json, then `t3 serve` on
+                                       127.0.0.1 alone, in its place (exec), with HOME its home
+  agy-rpc signin HOME                  agy's own Google sign-in of the account whose home is HOME (coordd), into its
+                                       profile HOME/profile alone (`agy acp --login`): prints `url URL`, Google's
+                                       address as agy gives it, reads the code he pasted as one line, gives it to agy,
+                                       then prints `succeeded` or `failed WORDS`
+  agy-rpc check HOME                   what t3code says of the account, one JSON line: its runtime, sign-in, models
+                                       and limits, read again first by t3code's own Refresh (its health check and
+                                       Google's quota summary: read only, no prompt, nothing used)
+  agy-rpc logout HOME                  the account's sign-out: agy's own (ACP `logout`) on its profile HOME/profile,
+                                       or t3code's own on an account t3code signed in
+
+coordd calls send, status, interrupt and wait-idle as it calls codex-rpc (core.rs `rpc_bin`). $CODEX_SOCK names the
+agent's coord folder for agy, `$COORD/agents/NAME/agy/coord/` (mode 700), where `serve` keeps:
+  ctl          the unix socket the other commands reach the session by (mode 600)
+  dir, model   the folder the session runs in, and its model as agy names it (`gemini-…`)
+  session      the session's id: t3code's thread id, or agy's ACP session id
+  transcript.jsonl
+               the session as a Codex rollout (the lines coordd's follow.rs and transcript.rs read): each turn's
+               begin and end, the words, each tool call and its output, each request's usage (`token_count`) as Codex
+               writes it, so the account's usage rows are read from it as a Codex session's are
+Every turn's begin and end, and each tool call's end, are told to coordd by `claude/hook` (prompt, stop, failed,
+post) from inside the agent's cgroup, as opencode-rpc tells them.
+
+**Through t3code.** t3code keeps the sign-in in its own state under the account's `home/.t3`; nothing here reads,
+prints or copies it. Its server is started with t3code's documented switches and no others: telemetry off by its
+environment (`T3CODE_TELEMETRY_ENABLED=false`, `OTEL_SDK_DISABLED=true`, docs/user/telemetry.md), update checks
+off, threads Supervised (`approval-required`: t3code asks for each command and file change), its keep-awake, agent
+browser and preview tunnel off, and on 127.0.0.1 only: a host that is not loopback is refused before anything starts.
+A session's bearer token comes from t3code's own `t3 auth session issue` and stays in this process's memory. Each
+approval t3code asks is answered from `claude/hook pre` (allow once, or decline); each question is declined (nobody
+is at its form: the model asks through coord). Started by Docket v2's session driver (DOCKET_HOOK_RELAY set), each
+moment goes to the relay instead: a call is refused at `tool_called` ({"decline": why}), and the question is then
+answered at `permission_asked` ({"answer": "once" | "decline"}); an answer it cannot have or read refuses or
+declines. Read-only actions t3code approves itself in Supervised
+(docs/user/permission-modes.md: "Some read-only actions can proceed in Supervised"): they reach coordd only as the
+tool calls of the transcript. The agent's commands run in its account's server, with the server's environment and
+cgroup, so its coord is a program of its own: `$COORD/agents/NAME/agy/bin/coord` (`coord_command`), written at each
+start, which runs agent-base's coord with the agent's AGENT_NAME, COORD, COORDD_SOCK and AGENT_BASE, and is named in
+the thread's first message. coordc declares the name beside each request, and coordd takes it from the server's
+cgroup alone (paper-research N-1446 p2099). t3code 0.1.11 has no system prompt of ours for agy: its only append to
+agy's is its own pull-request instructions. So the standing text and that line lead the thread's first message,
+after t3code's own instructions. A turn that ends on Google's limit is continued only by the next
+message coordd sends after it, as t3code's own Continue (`manualContinuationOfRunId`), never by t3code's
+auto-resume or a retry of ours.
+
+**Its own ACP client.** agy is given nothing of its starter's environment but the names PASSED lists (the agent's
+own coord names its `coord` needs, none of which a bare agent has, PATH, the locale), and no value naming the owner's
+home but inside the coord, agent-base or the agent's own: its own HOME, TMPDIR and XDG folders, no session bus (agy keeps
+nothing in a keyring and reaches no one's), no display, no browser, and Google's documented switch that keeps the
+pinned binary from updating itself. agy runs with `--disable-telemetry` on a profile folder (`--gemini-dir`, its data
+folder APP in it, `--app-data-dir`; agy 1.5.18's `agy acp --help` documents all three):
+- on a key, the agent's own (its folder's `home/profile`): the key file, a file of this user's of mode 600, is read
+  here and given to agy as `GEMINI_API_KEY` alone, the profile says `"auth": {"type": "gemini-api-key"}` and
+  `"modelProvider": "gemini"`, and the session is opened only after agy answered `authenticate` with `gemini-api-key`;
+- on a sign-in, the account's (AGY_SIGNIN): agy keeps the sign-in in its data folder there, so each of the account's
+  agents runs on that profile with a HOME of its own, after agy answered `authenticate` with `oauth-personal`.
+A key is never tried for a sign-in, nor a sign-in for a key: exactly one is given, or nothing starts. Each serve holds
+its agent's lock (`serve.lock` in its folder) for as long as it or its agy lives, so no agent is served twice; a
+profile's lock (`lock_of`, beside it) is held whole by a key's agent and by a sign-in or sign-out, and shared by a
+sign-in's agents and checks, so agy is never signed in or out under a running agent; a profile a sign-in began is no
+sign-in until agy took the code (`unfinished`). Left out, on purpose: any client name,
+telemetry, the `SSH_CONNECTION` and `AGY_ACP_FORCE_FILE_STORAGE` that t3code sets to steer where agy keeps a sign-in,
+anything of the owner's own `~/.gemini` but a chat he imports (agy-import), any read of agy's token or quota, and any
+automatic retry of a prompt. Every tool call is asked of coordd first (`"toolPermission": "strict"`, in the profile's
+settings.json, mode 600), answered as for t3code; a bare agent, and one in the owner's Yolo, runs with
+`--dangerously-skip-permissions` instead, and asks nothing.
+"""
+import atexit, base64, contextlib, datetime, fcntl, hashlib, ipaddress, json, math, os, pwd, queue, re, shlex, signal, socket, shutil, stat, struct, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request, uuid
+from pathlib import Path
+
+C = os.environ.get('CODEX_SOCK', '')
+
+# The one agy the ACP way runs: Antigravity CLI 1.5.18 as agy-pin fetches it into $COORD/opt/agy/1.5.18 (Google's own
+# release for linux x64, its archive checked against the sha512 its updater's manifest gives), checked against this
+# hash before every run. There is no switch around it: the tests run a copy of this file with their stand-in's hash.
+AGY_SHA256 = '7c96ad8c944c1a8d195ca34d2041a3d74d5166c96662b52183b748a3c455d52f'
+AGY_VERSION = '1.5.18'
+# agy's thinking levels (coord-types' harness.rs, `agy`); agy-import reads these two from here
+AGY_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+# The one t3code: v0.1.11's linux x64 release as agy-pin fetches it into $COORD/opt/t3/0.1.11 (its archive checked
+# against the release's SHA256SUMS), its `t3` checked against this hash before every run. Never `t3 update`.
+T3_SHA256 = 'f13dd1f37eb2f719b41f45219b3800412799c80f724b022839b8a133e21aced1'
+T3_VERSION = '0.1.11'
+
+# The address a t3code server listens on: loopback only, behind its bearer token (N-1446 p2039). `server` refuses any
+# host that is not loopback, and every client here refuses a server that says it listens on one.
+T3_HOST = '127.0.0.1'
+
+# t3code's built-in instance of agy, the one these accounts use, and every other built-in instance, each turned off
+# in the account's settings so t3code looks for no other harness.
+INSTANCE = 'antigravity'
+OTHER_INSTANCES = ('codex', 'claudeAgent', 'cursor', 'grok', 'opencode', 'fx', 'kiro', 'muse', 'pi')
+
+# The bearer token's scopes: the thread's reads and acts, and the provider's check and sign-out.
+SCOPES = ('orchestration:read', 'orchestration:operate', 'providers:manage')
+
+# A custom agy for the t3code instance (t3code's "Binary path"): None, so t3code runs the runtime it manages and tells
+# agy its own name. Only the tests' copy of this file sets it, to their stand-in (N-1446 p2043: "The stand-in stays a
+# test-only Binary path").
+BINARY_PATH = None
+
+# The t3code methods this program calls, and no other: t3code's reset credits (`provider.consumeResetCredit`) and
+# anything that changes its settings are never called (the owner: never his resets or limits).
+T3_METHODS = {
+    'server.getConfig', 'server.refreshProviders', 'provider.auth.logout', 'orchestration.subscribeShell', 'orchestration.subscribeThread', 'orchestration.launchThread',
+    'orchestration.dispatchCommand', 'orchestration.getTurnItem', 'projects.mutate',
+}
+
+TERMINAL = ('completed', 'failed', 'interrupted', 'cancelled', 'rolled_back')
+
+
+# the rest of the program: its parts beside this file's real path, read into its own names in this order
+for _part in ('coordd', 't3', 't3_thread', 't3_account', 'acp', 'acp_session'):
+    _path = Path(__file__).resolve().parent / f'agy_rpc_{_part}.py'
+    exec(compile(_path.read_text(), _path, 'exec'))
+del _part, _path
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The session's socket and the commands
+
+
+def control(session):
+    """The session's socket (`ctl`): one JSON line in, one out, from the other commands of this program."""
+    path = os.path.join(C, 'ctl')
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old = os.umask(0o177)
+    try:
+        s.bind(path)
+    finally:
+        os.umask(old)
+    s.listen(16)
+
+    def serve_one(conn):
+        with conn:
+            f = conn.makefile('rw')
+            try:
+                req = json.loads(f.readline() or '{}')
+            except ValueError:
+                return
+            op, out = req.get('op'), {'ok': True}
+            if req.get('session') != session.sid:
+                out = {'ok': False, 'why': f'the session here is {session.sid}, not {req.get("session")}'}
+            elif op == 'send':
+                out['exit'] = session.deliver(str(req.get('text', '')), req.get('prio', 'next'), str(req.get('effort') or ''))
+            elif op == 'status':
+                out['busy'] = session.busy()
+            elif op == 'interrupt':
+                session.interrupt()
+            elif op == 'wait-idle':
+                session.wait_idle()
+            else:
+                out = {'ok': False, 'why': f'no command {op}'}
+            f.write(json.dumps(out) + '\n')
+            f.flush()
+
+    def loop():
+        while True:
+            conn, _ = s.accept()
+            threading.Thread(target=serve_one, args=(conn,), daemon=True).start()
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
+def ask(op, session, **more):
+    """One command of the session's socket, its answer."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(os.path.join(C, 'ctl'))
+    except OSError as e:
+        sys.exit(f'agy-rpc: no session is served in {C or "$CODEX_SOCK (unset)"} ({e.strerror})')
+    with s:
+        f = s.makefile('rw')
+        f.write(json.dumps(dict(op=op, session=session, **more)) + '\n')
+        f.flush()
+        out = json.loads(f.readline() or '{}')
+    if not out.get('ok'):
+        sys.exit(f'agy-rpc: {out.get("why", "no answer")}')
+    return out
+
+
+def imported():
+    """The Antigravity CLI chat this agent was imported from (agy-import's `imported`): its conversation, transcript, bytes.
+    None where no agent's folder is named (CODEX_SOCK unset: an account's check)."""
+    if not C:
+        return None
+    try:
+        with open(os.path.join(os.path.dirname(C), 'imported')) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def earlier(chat):
+    """The imported chat's history as text, read in place from agy's own transcript up to the import's byte."""
+    with open(chat['transcript'], 'rb') as f:
+        data = f.read(chat['upto'])
+    for line in data.splitlines():
+        try:
+            v = json.loads(line)
+        except ValueError:
+            continue
+        text = str(v.get('content') or '').replace('<USER_REQUEST>', '').replace('</USER_REQUEST>', '').strip()
+        if v.get('type') == 'USER_INPUT':
+            print(f'\nyou: {text}', flush=True)
+        elif v.get('type') == 'PLANNER_RESPONSE':
+            if text:
+                print(f'\nagy: {text}', flush=True)
+            for c in v.get('tool_calls') or []:
+                print(f'  · {c.get("name")} {json.dumps(c.get("args", {}))[:200]}', flush=True)
+        elif v.get('type') == 'CHECKPOINT':
+            print('  (compacted)', flush=True)
+    print(f'\n  (imported from Antigravity CLI, conversation {chat["conversation"]})', flush=True)
+
+
+def screen():
+    """The agent's terminal: an imported chat's history, then its transcript as text, followed as it grows (roster's `open`)."""
+    chat = imported()
+    if chat:
+        earlier(chat)
+    path = os.path.join(C, 'transcript.jsonl')
+    while not os.path.exists(path):
+        time.sleep(0.5)
+    with open(path) as f:
+        while True:
+            line = f.readline()
+            if not line:
+                time.sleep(0.3)
+                continue
+            try:
+                v = json.loads(line)
+            except ValueError:
+                continue
+            p = v.get('payload') or {}
+            kind = p.get('type')
+            if kind == 'message':
+                text = ''.join(c.get('text', '') for c in p.get('content') or [])
+                print(f'\n{"you" if p.get("role") == "user" else "agy"}: {text}', flush=True)
+            elif kind == 'function_call':
+                print(f'  · {p.get("name")} {p.get("arguments", "")[:200]}', flush=True)
+            elif kind in ('task_complete', 'turn_aborted'):
+                print(f'  ({"interrupted" if kind == "turn_aborted" else "done"})', flush=True)
+
+
+# The thinking level in force (roster's MODEL:EFFORT, then coord effort): agy's `thought_level`, one of AGY_LEVELS
+EFFORT = ''
+
+# A bare agent (roster's AGY_BARE, `flag`): nothing of ours on it. No standing text and no coord line before its first
+# words, no MCP servers, no tool call asked of coordd first: on agy's own client agy runs with
+# `--dangerously-skip-permissions`, and through t3code its thread runs in `full-access`; neither asks an approval. Its
+# turns' begins and ends, words and usage are still told to coordd, so his words reach it and its answers come back.
+BARE = flag('AGY_BARE')
+
+# The owner's Yolo (coordd's `mode`; roster gives it from session.json's `mode`): `serve`'s last argument,
+# `--dangerously-skip-permissions`, so that coordd reads it on the command line it starts (coordd's `started_yolo`), as
+# it reads Claude Code's. agy runs with that flag and asks nothing, so coordd's check before a call does not run (each
+# call is still told after it ran); through t3code its thread runs in `full-access`. Unlike a bare agent it keeps the
+# standing text, its MCP servers and every moment told. The profile's settings stay `strict`: a sign-in's profile is
+# every agent's on it, and one in Safe asks there.
+YOLO = False
+
+
+def selection(model):
+    """t3code's modelSelection for MODEL, with the thinking level when one is asked."""
+    return {'instanceId': INSTANCE, 'model': model, **({'options': [{'id': 'thought_level', 'value': EFFORT}]} if EFFORT else {})}
+
+
+def native_marker():
+    """The file whose presence keeps the agent on agy's own client (roster's ROSTER_AGY_NATIVE)."""
+    return os.path.join(os.path.dirname(C), 'native')
+
+
+def serve(name, directory, model, sid):
+    model, _, level = model.partition(':')
+    if not model or ':' in level:
+        sys.exit(f'{name}: {model}:{level} is not MODEL or MODEL:LEVEL; not started')
+    os.makedirs(C, mode=0o700, exist_ok=True)
+    os.chmod(C, 0o700)
+    # the agent's lock, held for as long as this process (and, on agy's own client, its agy) lives: no agent is served
+    # twice, and nothing of a running serve's is touched by a second
+    mine = hold(os.path.join(os.path.dirname(C), 'serve.lock'))
+    if mine is None:
+        sys.exit(f'{name}: another agy-rpc serves it ({os.path.dirname(C)}/serve.lock is held); not started')
+    write('dir', directory)
+    write('model', model)
+    for stale in ('session', 'ctl'):
+        try:
+            os.unlink(os.path.join(C, stale))
+        except FileNotFoundError:
+            pass
+    home = os.environ.get('T3_HOME', '')
+    if home and not (os.environ.get('AGY_KEY_FILE') or os.environ.get('AGY_SIGNIN')):
+        if imported() or os.path.exists(native_marker()):
+            why = 'it runs on agy\'s own client, and its account was signed in through t3code: sign the account in again first'
+            hook('failed', {'error': 'authentication_failed', 'error_details': why})
+            sys.exit(f'{name}: {why}; not started')
+        serve_t3(name, directory, model, level, sid, os.path.abspath(home))
+        return
+    way, why = way_of()
+    if way is None:
+        hook('failed', {'error': 'authentication_failed', 'error_details': why})
+        sys.exit(f'{name}: {why}; not started')
+    serve_acp(name, directory, model, level, sid, way, mine)
+
+
+def main(argv):
+    global YOLO
+    if len(argv) < 2:
+        sys.exit(__doc__)
+    cmd = argv[1]
+    if cmd == 'serve':
+        args = argv[2:]
+        YOLO = args[-1:] == ['--dangerously-skip-permissions']
+        args = args[:-1] if YOLO else args
+        if not 3 <= len(args) <= 4 or any(a.startswith('--') for a in args):
+            sys.exit('usage: agy-rpc serve NAME DIR MODEL [SESSION] [--dangerously-skip-permissions]')
+        serve(args[0], args[1], args[2], args[3] if len(args) > 3 else '')
+    elif cmd == 'models':
+        models()
+    elif cmd == 'screen':
+        screen()
+    elif cmd in ('server', 'signin', 'check', 'logout'):
+        if len(argv) < 3:
+            sys.exit(f'usage: agy-rpc {cmd} HOME')
+        {'server': server, 'signin': signin, 'check': check, 'logout': logout}[cmd](os.path.abspath(argv[2]))
+    elif len(argv) < 3:
+        sys.exit(__doc__)
+    elif cmd == 'send':
+        if len(argv) < 5:
+            sys.exit('usage: agy-rpc send SESSION PRIORITY TEXT')
+        sys.exit(ask('send', argv[2], prio=argv[3], text=argv[4], effort=os.environ.get('CODEX_EFFORT', '')).get('exit', 0))
+    elif cmd == 'status':
+        print('busy' if ask('status', argv[2]).get('busy') else 'idle')
+    elif cmd in ('interrupt', 'wait-idle'):
+        ask(cmd, argv[2])
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == '__main__':
+    main(sys.argv)

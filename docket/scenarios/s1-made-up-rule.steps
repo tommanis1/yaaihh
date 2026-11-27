@@ -1,0 +1,79 @@
+# Scenario 1: a made-up rule is caught. A casual remark of the owner's is written down as a rule and passed on.
+# The form of its lines is in the head of docket/gate/script-b.steps. The looker's answers are the
+# stand-in's; the clerk's marks are asked for by std.rails, the module that records them, since the clerk's own answer is a
+# list, which a script cannot write yet.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load s1-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+# the writer has heard the owner's remark; the clerk marks the passage as laying down a rule and as for the other agent
+w1: Hear(w1, h1) -> performed -> ended ()
+stand-in: Pick-Other(looker, _) -> lk1
+stand-in: TextOf(n1) -> From now on no thread may have more than two levels.
+stand-in: TextOf(h1) -> maybe keep the outline small for now
+stand-in: Call-Text(_) -> trace-n1
+stand-in: Model(lk1, trace-n1) -> faulty
+stand-in: Read-As(_, faulty) -> Faulty(more, He did not say that much. Take it back.)
+std.rails: Mark-Passage(std.rails, cl1, n1, "lays down", k-outline) -> performed -> ended ()
+std.rails: Mark-Passage(std.rails, cl1, n1, for, k-worker) -> performed -> ended ()
+# the looker of the other family was asked, shown his words, and its finding is recorded by the module
+holds Lays-Down(n1, w1)
+holds Caught(n1, more)
+holds Made-Up(n1, w1)
+holds Scold-Owed(w1, n1, He did not say that much. Take it back.)
+holds Owes-Retraction(w1, o1, n1)
+unviolated Owes-Retraction(w1, o1, n1)
+not For-Agent-Pull(n1, w2)
+# who may judge it: not a looker of the writer's own family, not the looker itself, not the writer
+std.rails: Record-Fault(std.rails, lk2, n1, more) -> refused policy -> raised Refused
+lk1: Record-Fault(lk1, lk1, n1, more) -> refused policy -> raised Refused
+w1: Record-Fault(w1, lk1, n1, more) -> refused policy -> raised Refused
+w1: Clear-Claim(w1, lk1, n1) -> refused policy -> raised Refused
+# a second made-up rule while the first stands
+stand-in: Pick-Other(looker, _) -> lk1
+stand-in: TextOf(n2) -> Nobody posts after six.
+stand-in: TextOf(h1) -> maybe keep the outline small for now
+stand-in: Call-Text(_) -> trace-n2
+stand-in: Model(lk1, trace-n2) -> faulty
+stand-in: Read-As(_, faulty) -> Faulty(from_nothing, He never said it. Take it back.)
+std.rails: Mark-Passage(std.rails, cl1, n2, "lays down", k-outline) -> performed -> ended ()
+holds Made-Up(n2, w1)
+violated Owes-Retraction(w1, o1, n1)
+# the way out is not the writer's alone
+w1: Take-Back-Rule(w1, n1) -> performed -> ended ()
+holds Made-Up(n1, w1)
+w1: Confirm-Retraction(w1, lk1, n1) -> refused policy -> raised Refused
+std.rails: Confirm-Retraction(std.rails, lk1, n1) -> performed -> ended ()
+not Made-Up(n1, w1)
+not Owes-Retraction(w1, o1, n1)
+holds For-Agent-Pull(n1, w2)
+# or the owner makes a rule his
+w1: Approve-Rule(w1, n2) -> refused policy -> raised Refused
+o1: Approve-Rule(o1, n2) -> performed -> ended ()
+not Made-Up(n2, w1)
+# a looker of the writer's own family, should a driver give one, is no judge: its finding is not recorded
+stand-in: Pick-Other(looker, _) -> lk2
+stand-in: TextOf(n3) -> Every post starts with a date.
+stand-in: TextOf(h1) -> maybe keep the outline small for now
+stand-in: Call-Text(_) -> trace-n3
+stand-in: Model(lk2, trace-n3) -> faulty
+stand-in: Read-As(_, faulty) -> Faulty(more, He did not say that much. Take it back.)
+std.rails: Mark-Passage(std.rails, cl1, n3, "lays down", k-outline) -> performed -> ended ()
+not Traced(n3)
+not Made-Up(n3, w1)

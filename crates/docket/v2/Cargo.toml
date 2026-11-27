@@ -1,0 +1,10 @@
+[package]
+name = "docket-v2"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Docket v2: the reader, checker and machine of docs/specs/docket-v2-spec.md"
+
+[dependencies]
+eflint = { package = "eflint-rs", path = "../eflint" }
+sha2 = "0.10"

@@ -1,0 +1,12 @@
+[package]
+name = "docket-driver-clerk"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Docket v2's model step: a call's template filled, one request to a party's model, its text read as the call's type"
+
+[dependencies]
+docket-v2 = { path = "../../docket/v2" }
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true

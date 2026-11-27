@@ -1,0 +1,11 @@
+// The limited form's opens (plan/cutover.md D3; paper-research m1586, 3). Asked for an agent's own `coord open`,
+// `coord item open`, `coord msg` and `coord ask`; the owner is not bound, and opens inside a program never come here.
+// - An item: only a lead opens one. Closing needs nothing more: it is the base `edit` (the opener, an agent above it,
+//   a lead).
+// - A claim, fix, check or decision: no agent opens one by hand. They start calls and agents (a fixer, reviewers, the
+//   runner's step) that the limited form does not run.
+// - Every other kind (note, thread, question, ...): as before.
+Act open
+  Actor agent
+  Holds when not ticket-kind("new", "item") and not ticket-kind("new", "claim") and not ticket-kind("new", "fix") and not ticket-kind("new", "check") and not ticket-kind("new", "decision")
+  Holds when ticket-kind("new", "item") and role(actor, "lead")

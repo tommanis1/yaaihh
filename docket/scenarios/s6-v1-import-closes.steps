@@ -1,0 +1,63 @@
+# Scenario 6: v1's record imported once; two threads, their words taken, then the import closes and takes nothing.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load ../defaults/v1.docket
+load s6-world.docket
+# what the stand-in carries without an answer here: every Effect of the loaded text that a driver carries out
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, Start-Session, TextOf, Tool-Use
+driver: Record-Taken("9f2c4a71", 7, im1) -> performed
+driver: Record-Taken("9f2c4a71", 7, w1) -> refused policy
+# a thread of agents' words: opened, one passage with its time, gone over so the clerk is owed nothing
+driver: Thread-Was(t1, "N-1", thread, w1, "The map", 1764000000) -> performed
+holds V1-Id(t1, "N-1")
+holds Opened-By(t1, w1)
+driver: Thread-Was(t1, "N-1", thread, w1, "The map", 1764000000) -> refused policy
+driver: Passage-Was(n1, w1, t1) -> performed
+driver: Written(n1, 1764000060) -> performed
+holds Spoken(n1, w1)
+holds Gone-Over(n1)
+holds Posted(n1, t1)
+stand-in: TextOf(n1) -> I looked at the map code.
+im1: Take-Words(im1, t1) -> performed -> ended ()
+holds Words-Taken(t1)
+# a thread of his: the agent he wrote to has heard it, then his post and its time
+driver: Thread-Was(t2, "Q-1", question, w1, "Ship tonight?", 1764000100) -> performed
+driver: His-Words-To-Were(n2, w1) -> performed
+driver: His-Post-Was(n2, t2) -> performed
+driver: Written(n2, 1764000160) -> performed
+holds His(n2)
+holds Owner-Said(n2, w1)
+holds Heard(w1, n2)
+# an open item is stated once, with its holder and its giver
+driver: Work-Was(map-work, w1, o1) -> performed
+holds Assigned(w1, map-work)
+driver: Work-Was(map-work, w1, o1) -> refused policy
+driver: Work-Was(map-check, w1, w1) -> refused policy
+not Assigned(w1, map-check)
+# the import does not close while a thread's words are not taken
+driver: Import-Closed() -> refused policy
+stand-in: TextOf(n2) -> Yes, after the check.
+im1: Take-Words(im1, t2) -> performed -> ended ()
+im1: Take-Words(im1, t2) -> refused policy -> raised Refused
+driver: Import-Closed() -> performed
+holds Closed()
+# closed: no line of the import is taken after it
+driver: Thread-Was(t3, "N-2", thread, w1, "Late", 1764000200) -> refused policy
+driver: His-Words-To-Were(n2, o1) -> refused policy
+not Opened-By(t3, w1)
+not Owner-Said(n2, o1)

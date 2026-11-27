@@ -1,0 +1,7 @@
+// The minder's one call (base.kind): what a ticket resting at a hole should do now. THIS is the ticket; what the
+// minder is shown of it, and the program syntax, coordd's rendering gives (docket-edge). Rest: nothing yet.
+// Program(text): a program to stand at the hole, in its scope, giving the kind's result. Close(result): close the
+// ticket with RESULT, which must fit the kind's result.
+
+call shape(this: Ticket) -> Rest | Program(text: Text) | Close(result: Any)
+  task shape

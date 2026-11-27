@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type neighbour-of\nNew type person\n+neighbour-of(person(\"Alice\"),person(\"Bob\"))\n+neighbour-of(person(\"Bob\"),person(\"Alice\"))\n+neighbour-of(person(\"Bob\"),person(\"Chloe\"))\n+neighbour-of(person(\"Chloe\"),person(\"Bob\"))\nquery successful\nquery successful\nquery successful\nquery successful\n#8 > "
+ }
+}

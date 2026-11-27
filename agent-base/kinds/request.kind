@@ -1,0 +1,10 @@
+// A team request (`coord team ask`): WHO asks to form a team, for WHY, of N agents if it says. APPROVER is whom the
+// policy lets approve it (`approve-team`: its lead), else the owner. Granted sets WHO's team grant (as `coord team
+// grant` does); WHO is told either way by the closing notice.
+/// a request to form a team, granted or refused by its approver
+kind request
+  letter R
+  form who: Agent, approver: Agent, why: Text, n: Int?
+  result Granted(n: Int) | Refused(why: Text)
+  pattern
+    step approver approve(who, why, n)

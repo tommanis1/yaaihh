@@ -1,0 +1,11 @@
+// A decision only the owner can make (tickets-patterns syntax.tex, the core kinds): opened by an agent that cannot go
+// on without the owner's word, or by a pattern (the claim, when its reviewers cannot tell). Its one step is the
+// owner's (`step owner`: no fills, the owner directly), answered on the Tickets page with a button per result and one
+// text box. It does not expire (policy/tickets.eflint).
+/// a decision only the owner can make
+kind decision
+  letter D
+  form question: Text, context: Text?
+  result Yes(note: Text?) | No(why: Text)
+  pattern
+    step owner decide(question, context)

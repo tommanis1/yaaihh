@@ -1,7 +1,75 @@
 // The system's default preferences (scope global; a project's policy/*.eflint and policy/agents/NAME.eflint rank
 // above).
-// Owner 10 Nov: the clerk runs on Codex only, never a Claude model, for every call and every task.
-Only for model-for:
+// Owner 10 Nov: the clerk runs on Codex only, never a Claude model, for every call and every task. Its calls are
+// `place` `call`; an agent's model (`place` `agent`) is not the clerk's. Changed by him on 20 Nov for one case, the
+// fallback below: model-for still gives Codex alone.
+Only for model-for When call.place != "agent":
   family(option, "codex")
+// Fallback mode. The owner, 20 Nov 21:34 (at paper-research's terminal; N-1397 p117), when every call coordd made from
+// 20:09Z was refused with Codex's 429 `usage_limit_reached`: "should fallbakc to eg sonnet 5.5 becuase morel imits
+// are in sight. will jsut be fallabck mode a bit". Codex first, exactly as above: only when every option model-for
+// gives is refused for a limit does the same call go to Claude Sonnet 5.5, through the gateway, and the next call goes
+// to Codex first again (no clock). Sonnet 5.5 alone, never another Claude model, never first. One line per task, so a
+// task can be left out (proto-lead p118): left out, its call fails at the limit as before. The brain's calls
+// (`attend`, `elect`) are not here, so its pass fails quietly and spends none of his Claude limits (proto-lead p118;
+// first-show-asks.md item 6). Sonnet 5.5 is tier 2 (teams.eflint): it meets `>= 2` and clean's and deliver's `== 2`,
+// and is below the forming calls' `>= 3`; those rules are model-for's, and in fallback mode the call takes Sonnet 5.5
+// rather than no model.
+Only for fallback-model:
+  fallback(call.task, option)
++fallback("route", "claude-sonnet-5-5").
++fallback("deliver", "claude-sonnet-5-5").
++fallback("clean", "claude-sonnet-5-5").
++fallback("form", "claude-sonnet-5-5").
++fallback("intake", "claude-sonnet-5-5").
++fallback("clerk", "claude-sonnet-5-5").
++fallback("split", "claude-sonnet-5-5").
++fallback("shape", "claude-sonnet-5-5").
+// A task's chain (walk #26, the owner's Gap #3 and Q-1828): its models tried first, in this order, each where the
+// router puts it. A Go model is one plain completion with no agent prompt, tools or loop (coordd accounts/plain.rs:
+// 10 s each, no Go model begun after 20 s); then Claude Haiku, then Sonnet; when none answers, model-for as above.
+// Taking out the opencode-go lines turns the free models off; the chain then starts at Haiku. On a 325-word post
+// (26 Nov) hungerg-free answered in 1.3-2.0 s when it answered (7 of 18 tries; the rest 429 overloaded at once, or
+// past 20 s), beam-free at low effort in 3.9-7.9 s, and hy4-flash-free reasoned past 20 s. Declared here, so an older
+// release reading this file knows the fact.
+Fact chain-for Identified by String * String
++chain-for("ahead", "opencode-go/hungerg-free").
++chain-for("ahead", "opencode-go/beam-free:low").
++chain-for("ahead", "claude-haiku-5-5").
++chain-for("ahead", "claude-sonnet-5-5").
+// And never the small model: medium or above, the cheapest of those (gpt-6.2-sol, teams.eflint), for every call
+// coordd runs itself. The owner on N-1104 (19 Nov): "luna model is harmful bad bad", "strong model only". On 20 Nov
+// his message O-1099511630339 went to `route`'s `whom` on gpt-6-luna, which answered Unclear, so coordd asked him
+// whom it was for (a `clarify`) and he answered 56 s later (record lines 101209-101263; paper-research N-1397.p89).
+Only for model-for When call.place != "agent":
+  tier(option) >= 2
 Prefer for model-for:
   minimise price(option)
+// The forming calls read an agent's answer against its step (form.rs): on the small model a design's answer was read
+// as none of its outcomes, or as an Ask, 1 to 4 times in 5, and on medium never in 20 (docket-core N-101 p626;
+// paper-research p631, the owner told). Those two on astra, every other call on medium (above). With gpt-6-sol at 2 and
+// astra at 3 (teams.eflint, N-265.p3), "medium or above, the cheapest" would move them to sol, untried on this job;
+// so 3, where astra read 20 of 20 designs. Back to 2 if sol reads the same designs once the marks form is in
+// (paper-research N-101 p683).
+Only for model-for When call.call == "form-head":
+  tier(option) >= 3
+Only for model-for When call.call == "form-parts":
+  tier(option) >= 3
+// The owner's typing cleaned (coordd clean.rs, N-487): medium, not the cheapest. On ten of his messages luna guessed
+// where it was not sure ("sut" → "so") and changed his words with no mark, the one thing this must never do; sol
+// marked those as doubts (docket-core8 N-487 p27; paper-research p28: "The model: gpt-6-sol"). Medium is gpt-6.2-sol
+// now that it has replaced gpt-6.1-sol (teams.eflint), and medium alone: a refused gpt-6.2-sol leaves no option, so
+// his words go as he typed them (clerk.rs `clean`) and the fault is in the journal, never a quiet change of model
+// (runtime-design §5 and paper-research's choice, N-1397.p30).
+Only for model-for When call.task == "clean":
+  tier(option) == 2
+// The message runtime's `next` (next.call's `choose`, 0.2): what an idle agent is handed now, most important first,
+// and what waits on, was a judgment over every thread waiting, not a copy: medium alone, as clean. That is
+// gpt-6.2-sol (runtime-design §5 and paper-research's choice, N-1397.p30): priced since 20 Nov
+// (prices/resources/model_prices.json; a model with no price is no option, `Requires price(option) >= 0`), it takes
+// tier 2 in teams.eflint and gpt-6.1-sol is marked replaced there. Since I-1480 c no call is made with this task:
+// delivery.kind decides by `push` and asks no `next`, and a delivery ticket still open on the text before has its
+// `next` answered by coordd with no call, everything waiting given (delivery.rs `next_given`). The rule stands for
+// next.call, which agent-base keeps for the recorded programs that name it (proto-lead N-1481 p130).
+Only for model-for When call.task == "deliver":
+  tier(option) == 2

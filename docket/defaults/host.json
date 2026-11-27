@@ -1,0 +1,7 @@
+{
+  "committed": { "event": "yaaihh.hygiene.Committed", "from": "Agent" },
+  "changed_by": "Item",
+  "times": { "event": "yaaihh.brain.Time-Passed", "from": "times" },
+  "proofs": { "event": "yaaihh.train.Proof-Captured", "from": "proofs" },
+  "state": "host-state.json"
+}

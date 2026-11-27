@@ -1,0 +1,13 @@
+// base.kind's `gather p` (E1b; the owner, N-1445 p9: "hold them for 15s by default and ask a docket program to
+// split them"): his typed post is held while this step waits for him, and his next posts on the ticket join it, so the
+// thread's holder (route.call) reads them as one message and decides once: whom it is for, or a split of it between
+// agents. It goes on by itself (`default Send`) once the policy's `+lapse-after("gather", N).` has passed since his
+// first post was made; while he types in the thread's box it waits on, up to the policy's `+lapse-at-most("gather",
+// N).` from his first post; or at once at his press "Send now". The 15 s is his (N-1445 p9); the ceiling while he
+// types, 60 s, is proto-engine's, with paper-research's yes (N-1446 p40). On a slowed thread it never goes by itself:
+// only his "Send now" lets it go. His typed words are never formed against it. The surfaces show it on his posts: "held
+// · goes at HH:MM:SS · Send now" (the handler's view, its `lapses_at`). With no `lapse-after` for it in the policy
+// nothing is held: coordd writes no `hold` on his post, and `gather` waits for nothing (today's lines).
+/// his posts held together for a moment before any agent is given them
+call gather(text: Text) -> Send
+  default Send

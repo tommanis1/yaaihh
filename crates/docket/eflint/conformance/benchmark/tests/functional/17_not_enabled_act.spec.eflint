@@ -1,0 +1,3 @@
+Act x Actor int
+	Creates x(int)
+	Conditioned by int < 5

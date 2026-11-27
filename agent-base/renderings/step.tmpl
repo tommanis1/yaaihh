@@ -1,0 +1,17 @@
+{{ call }}
+{{ if passed }}
+This step was given to {{ passed.from }} first. Its answers could not be read as {{ passed.needs }}, so it is yours now. Each answer, whole, with why it could not be read:
+{{ for a in passed.answers }}
+{{ a.by }} answered:
+{{ a.text }}
+Not read: {{ a.why }}
+{{ end }}
+{{ end }}
+{{ for p in unread }}
+{{ p.by }} wrote:
+{{ p.text }}
+{{ end }}
+{{ gives }}
+{{ if put }}
+{{ include "put.tmpl" }}
+{{ end }}

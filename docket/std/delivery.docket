@@ -1,0 +1,180 @@
+module std.delivery
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+
+// What is for an agent, said once for every harness: who is delivered to, what waits for it, what it is told to
+// put first, what it was given to do and what it handed in. How it reaches the agent is its bridge's
+// (std/bridges/*): a Claude Code session is pushed to, a Codex session is given turns, an agy session pulls.
+// Nothing here names a harness, and nothing here performs an Effect.
+//
+//   1  who          Agent, Director, Idle
+//   2  what waits   messages (Unread, In-Flight), directives, items; Needs-Agent
+//   3  handing      the bridges' acts: Hand, Give, Brief, Wake, Settle, Unwake; `waiting` and `hand`
+//   4  handing in   Report-Work, Hand-In
+//
+// Edge: an agent no line names an Agent is delivered nothing by any bridge, whatever waits for it. Delivery is
+// the project's word, given for each agent with the model its harness is reached by.
+
+// ===== 1. Who ====================================================================================================
+
+// An agent delivered to: its harness, whose bridge reaches it, and its role. The project's, or a director's.
+Fact Agent(agent: H.Party, harness: H.Harness, role: String)
+
+// Who may direct agents: him, and whoever the project names (its brain).
+Fact Directs(who: H.Party)
+Fact Director(who: H.Party)
+  Holds when C.Role(who, "owner")
+  Holds when Directs(who)
+
+Act Enlist(by: H.Party, agent: H.Party, harness: H.Harness, role: String)
+  Conditioned by Director(by) && Holds(agent) && Not(Exists h, r : Agent(agent, h, r))
+  Creates        Agent(agent, harness, role)
+Act Discharge(by: H.Party, agent: H.Party)
+  Conditioned by Director(by) && (Exists h, r : Agent(agent, h, r))
+  Terminates     Agent(agent, h, r) When Agent(agent, h, r)
+
+// Words handed to a session that the turn they began has not ended yet: between a push or a turn's start and that
+// turn's end. Idle: running, in no turn, and handed nothing it has not yet had a turn for.
+Fact Woken(agent: H.Party)
+Fact Idle(agent: H.Party)
+  Holds when H.Running-On(agent, h, v) && Not(H.In-Turn(agent)) && Not(Woken(agent))
+
+// ===== 2. What waits =============================================================================================
+
+// An interrupting word goes in at once where the harness lets words into a turn; a normal one waits for a turn.
+Fact Urgency Identified by String
++Urgency("Normal"). +Urgency("Interrupt").
+
+Fact Message(msg: String, from: H.Party, text: String)
+Fact Unread(agent: H.Party, msg: String, urgency: Urgency)
+Fact In-Flight(agent: H.Party, msg: String)          // handed to its session, not yet read there
+
+// A word for an agent, from any party but itself; an interrupting one only from a director. Each message's id is
+// its own: a second word under an id already used is refused.
+Act Post(by: H.Party, to: H.Party, msg: String, text: String, urgency: Urgency)
+  Conditioned by Holds(to) && by != to && Urgency(urgency) && Not(Exists f, t : Message(msg, f, t))
+                 && (urgency == "Normal" || Director(by))
+  Creates        Message(msg, by, text), Unread(to, msg, urgency)
+
+// What a director tells an agent to put first; the higher the priority, the earlier. It stands until withdrawn.
+Fact Brain-Directive(agent: H.Party, text: String, priority: Int)
+Fact Directive-Given(agent: H.Party, text: String)   // in a word the agent was handed
+Act Direct(by: H.Party, agent: H.Party, text: String, priority: Int)
+  Conditioned by Director(by) && Holds(agent) && priority >= 0 && Not(Exists p : Brain-Directive(agent, text, p))
+  Creates        Brain-Directive(agent, text, priority)
+Act Withdraw-Directive(by: H.Party, agent: H.Party, text: String)
+  Conditioned by Director(by) && (Exists p : Brain-Directive(agent, text, p))
+  Terminates     Brain-Directive(agent, text, p) When Brain-Directive(agent, text, p),
+                 Directive-Given(agent, text) When Directive-Given(agent, text)
+
+// What it was given to do is std.rails' `Assigned`; an item it was told of is `Briefed`.
+Fact Briefed(agent: H.Party, item: R.Artifact)
+
+// Something for the agent that no word handed to it has carried yet, by kind: a message, a directive, an item.
+Fact Needs-Agent(agent: H.Party, reason: String)
+  Holds when Unread(agent, m, u) && Not(In-Flight(agent, m)) && reason == "message"
+  Holds when Brain-Directive(agent, t, p) && Not(Directive-Given(agent, t)) && reason == "directive"
+  Holds when R.Assigned(agent, w) && Not(Briefed(agent, w)) && reason == "item"
+
+// ===== 3. Handing ================================================================================================
+
+// A bridge hands words to its harness's sessions; an agent takes its own (agy, by pulling).
+Fact Carrier(who: H.Party)
+Fact May-Hand(by: H.Party, agent: H.Party)
+  Holds when Carrier(by) && H.Party(agent)
+  Holds when H.Party(agent) && by == agent
+
+Act Hand(by: H.Party, agent: H.Party, msg: String)
+  Conditioned by May-Hand(by, agent) && (Exists u : Unread(agent, msg, u)) && Not(In-Flight(agent, msg))
+  Creates        In-Flight(agent, msg)
+Act Give(by: H.Party, agent: H.Party, text: String)
+  Conditioned by May-Hand(by, agent) && (Exists p : Brain-Directive(agent, text, p)) && Not(Directive-Given(agent, text))
+  Creates        Directive-Given(agent, text)
+Act Brief(by: H.Party, agent: H.Party, item: R.Artifact)
+  Conditioned by May-Hand(by, agent) && R.Assigned(agent, item) && Not(Briefed(agent, item))
+  Creates        Briefed(agent, item)
+Act Wake(by: H.Party, agent: H.Party)
+  Conditioned by Carrier(by) && Not(Woken(agent))
+  Creates        Woken(agent)
+// The words handed were read: their turn ended, or the agent reported, or pulled again.
+Act Settle(by: H.Party, agent: H.Party)
+  Conditioned by May-Hand(by, agent)
+  Terminates     Unread(agent, m, u) When In-Flight(agent, m) && Unread(agent, m, u),
+                 In-Flight(agent, m) When In-Flight(agent, m),
+                 Woken(agent) When Woken(agent)
+// The turn they began failed: the messages handed wait again, to be handed with the next word.
+Act Unwake(by: H.Party, agent: H.Party)
+  Conditioned by Carrier(by) && (Woken(agent) || (Exists m : In-Flight(agent, m)))
+  Terminates     In-Flight(agent, m) When In-Flight(agent, m),
+                 Woken(agent) When Woken(agent)
+
+// What waits for an agent now, as a bridge words it: each message's id and its line, each directive not yet
+// given, the highest standing directive, and each item not yet briefed. Lists are in the order of values (6.2).
+type Waiting { messages: List<String>, lines: List<String>, directives: List<String>, top: String, items: List<R.Artifact> }
+
+// Each join opens with a fact of the agent's own, its other fields bound as the Foreach's own (a message has one
+// Unread for an agent, a directive one priority): `Message` first walks every message posted (consult-lead-c N-1978
+// p8), and an `Exists` first every String in the state, to bind the field it leaves open (tests/delivery.rs's cost).
+fn waiting(agent: H.Party) -> Program<Waiting> {
+  ms <- return (Foreach m, u : m When Unread(agent, m, u) && Not(In-Flight(agent, m)));
+  said <- return (Foreach m, u, f, t : (m, f, t) When Unread(agent, m, u) && Message(m, f, t) && Not(In-Flight(agent, m)));
+  ls <- par x in said { match x { | (m, f, t) => return "[{{ m }} from {{ f }}] {{ t }}" } };
+  ds <- return (Foreach t, p : t When Brain-Directive(agent, t, p) && Not(Directive-Given(agent, t)));
+  top <- do top_directive(agent);
+  is <- return (Foreach w : w When R.Assigned(agent, w) && Not(Briefed(agent, w)));
+  return Waiting(ms, ls, ds, top, is)
+}
+
+// The standing directive of the highest priority; of two at one priority, the first in the order of values.
+fn top_directive(agent: H.Party) -> Program<String> {
+  if Exists t, p : Brain-Directive(agent, t, p) {
+    hi <- return Max(Foreach t, p : p When Brain-Directive(agent, t, p));
+    match first(Foreach t : t When Brain-Directive(agent, t, hi)) {
+      | Some(t) => return t
+      | None    => return ""
+    }
+  } else {
+    return ""
+  }
+}
+
+// What `waiting` gave, marked as the agent's: handed by the run's party (a bridge, or the agent itself).
+fn hand(agent: H.Party, w: Waiting) -> Program<Unit> {
+  par m in w.messages { Hand(self, agent, m) };
+  par t in w.directives { Give(self, agent, t) };
+  par i in w.items { Brief(self, agent, i) };
+  return ()
+}
+
+// XS written one after another with SEP between them.
+fn joined<T>(xs: List<T>, sep: String) -> Program<String> {
+  iterate s = ("", xs) {
+    match s {
+      | (acc, [])          => return Done(acc)
+      | ("", [x, ..rest])  => return Again(("{{ x }}", rest))
+      | (acc, [x, ..rest]) => return Again(("{{ acc }}{{ sep }}{{ x }}", rest))
+    }
+  }
+}
+
+// ===== 4. Handing in =============================================================================================
+
+// What an agent says it did, with what shows it (commits, posts: one text, as fields hold no lists), and the item
+// it says is done, if any (the empty text for none). A done item is std.rails' claim, so it is refused as that is
+// (an item not the agent's, or one with nothing required); what it was handed is read either way.
+Fact Reported(agent: H.Party, summary: String, refs: String)
+Fact Hand-In(agent: H.Party, item: R.Artifact, ref: String)
+Act Report-Work(agent: H.Party, summary: String, refs: String, item: R.Artifact) Returns String
+  Conditioned by Holds(agent) && summary != ""
+  Creates        Reported(agent, summary, refs), Hand-In(agent, item, refs) When item != ""
+  Does {
+    Settle(agent, agent);
+    if item != "" {
+      R.Claim-Done(agent, item);
+      return "reported; {{ item }} claimed done"
+    } else {
+      return "reported"
+    }
+  }

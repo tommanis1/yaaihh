@@ -1,0 +1,105 @@
+module std.bridges.claude_code
+
+import std.hooks as H
+import std.delivery as D
+import std.rails as R
+
+// Claude Code, pinned to the one version whose own text the facts say: 2.1.332, its hooks' answer schemas and its
+// hook reference.
+
+// Its hooks by its own names, as our settings register them. A hook script for it is this table and no more.
++H.Native-Hook("claude-code", "UserPromptSubmit", "turn_begins").
++H.Native-Hook("claude-code", "PreToolUse", "tool_called").
++H.Native-Hook("claude-code", "PostToolUse", "tool_result").
++H.Native-Hook("claude-code", "PermissionRequest", "permission_asked").
++H.Native-Hook("claude-code", "Stop", "turn_end").
++H.Native-Hook("claude-code", "PreCompact", "compacting").
++H.Native-Hook("claude-code", "StopFailure", "overloaded").
+
++H.Reaches("claude-code", "2.1.332", "turn_begins").      +H.Reaches("claude-code", "2.1.332", "tool_called").
++H.Reaches("claude-code", "2.1.332", "tool_result").      +H.Reaches("claude-code", "2.1.332", "permission_asked").
++H.Reaches("claude-code", "2.1.332", "turn_end").         +H.Reaches("claude-code", "2.1.332", "compacting").
++H.Reaches("claude-code", "2.1.332", "overloaded").
+
++H.Lets("claude-code", "2.1.332", "turn_begins", "deny").       +H.Lets("claude-code", "2.1.332", "turn_begins", "inject").
++H.Lets("claude-code", "2.1.332", "tool_called", "deny").       +H.Lets("claude-code", "2.1.332", "tool_called", "modify").
++H.Lets("claude-code", "2.1.332", "tool_called", "inject").
++H.Lets("claude-code", "2.1.332", "tool_result", "modify").     +H.Lets("claude-code", "2.1.332", "tool_result", "inject").
++H.Lets("claude-code", "2.1.332", "permission_asked", "answer"). +H.Lets("claude-code", "2.1.332", "permission_asked", "modify").
++H.Lets("claude-code", "2.1.332", "turn_end", "keep_going").
+
+// It waits for a hook's answer as long as the hook's timeout, which our settings set to 600 seconds for every
+// hook. So a Suspend holds for at most that long. What it does when a request for leave outlives it was not read.
++H.Lets("claude-code", "2.1.332", "permission_asked", "suspend"). +H.Waits("claude-code", "2.1.332", "permission_asked", 600).
++H.Lets("claude-code", "2.1.332", "tool_called", "suspend").      +H.Waits("claude-code", "2.1.332", "tool_called", 600).
++H.Lets("claude-code", "2.1.332", "turn_begins", "suspend").      +H.Waits("claude-code", "2.1.332", "turn_begins", 600).
++H.Lets("claude-code", "2.1.332", "turn_end", "suspend").         +H.Waits("claude-code", "2.1.332", "turn_end", 600).
+
+// Not stated, because the text read does not confirm it; an arm that needs one is not let on Claude Code:
+//   before_model_call, any power     it has no hook before each request to the provider; the moment is not reached
+//   compacting, modify               PreCompact is reached; what its answer may change was not read
+//   overloaded, suspend              StopFailure is reached; taking the turn up again is our own delivery of words
+
+// ===== Delivery: pushed ==========================================================================================
+// What std.delivery holds for an agent reaches a Claude Code session by being pushed into it: the turns driver
+// types it into the session's terminal, and words typed into an idle session begin its turn.
+//   idle               whatever waits is pushed at once, as one word
+//   in a turn          nothing is pushed but an interrupting word, which goes in at once: Claude Code reads words
+//                      typed during a turn at its next step
+//   the turn's end     (Stop) what that turn was handed is read, and whatever came during it is pushed as one word
+//   a failed turn      (StopFailure) what it was handed waits again, and goes with the next word
+// Only an agent the project delivers to by "claude-code" (D.Agent) is pushed to.
+Effect Push-Channel(agent: H.Party, envelope: String) -> Unit      // the turns driver's: typed when idle, held in a turn
+Effect Push-Channel-Now(agent: H.Party, msg: String) -> Unit       // the turns driver's: typed at once, in a turn too
+
++H.Party("std.bridges.claude_code"). +D.Carrier("std.bridges.claude_code").
+
+// One word with all that waits: the directive to put first, the others, the items, then each message on a line.
+fn envelope(w: D.Waiting) -> Program<String> {
+  ds <- do D.joined(w.directives, "; ");
+  is <- do D.joined(w.items, ", ");
+  ls <- do D.joined(w.lines, "\n");
+  head <- if w.top != "" { return "First: {{ w.top }}\n" } else { return "" };
+  dirs <- if ds != "" { return "Directives: {{ ds }}\n" } else { return "" };
+  items <- if is != "" { return "Assigned: {{ is }}\n" } else { return "" };
+  return "[coord delivery]\n{{ head }}{{ dirs }}{{ items }}{{ ls }}"
+}
+
+fn push(agent: H.Party) -> Program<Unit> {
+  w <- do D.waiting(agent);
+  text <- do envelope(w);
+  perform Push-Channel(agent, text);
+  do D.hand(agent, w);
+  D.Wake(self, agent)
+}
+
+on D.Post(by, to, msg, text, "Normal") where D.Agent(to, "claude-code", r) && D.Idle(to) do {
+  do push(to)
+}
+// only into a running session: one not running is given what waits when it starts (below)
+on D.Post(by, to, msg, text, "Interrupt") where D.Agent(to, "claude-code", r) && H.Running-On(to, "claude-code", v) do {
+  perform Push-Channel-Now(to, "[coord delivery, interrupting] [{{ msg }} from {{ by }}] {{ text }}");
+  D.Hand(self, to, msg);
+  if Not(Holds(D.Woken(to))) { D.Wake(self, to) }
+}
+on D.Direct(by, agent, text, p) where D.Agent(agent, "claude-code", r) && D.Idle(agent) do {
+  do push(agent)
+}
+on R.Assign(giver, agent, item) where D.Agent(agent, "claude-code", r) && D.Idle(agent) do {
+  do push(agent)
+}
+// a session started (again): what a session before it was handed and never read is handed back, and what waits is
+// pushed (N-1978 p5, point 2)
+on H.Session-Started(agent, "claude-code", v) where D.Agent(agent, "claude-code", r) do {
+  if Holds(D.Woken(agent)) || (Exists m : D.In-Flight(agent, m)) { D.Unwake(self, agent) };
+  if Exists x : D.Needs-Agent(agent, x) { do push(agent) }
+}
+on H.Reach(agent, "turn_end") where D.Agent(agent, "claude-code", r)
+   && (D.Woken(agent) || (Exists m : D.In-Flight(agent, m)) || (Exists x : D.Needs-Agent(agent, x))) do {
+  D.Settle(self, agent);
+  if Exists x : D.Needs-Agent(agent, x) { do push(agent) }
+}
+on H.Reach(agent, "overloaded") where D.Agent(agent, "claude-code", r)
+   && (D.Woken(agent) || (Exists m : D.In-Flight(agent, m))) do {
+  D.Unwake(self, agent)
+}

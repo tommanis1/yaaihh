@@ -1,0 +1,11 @@
+[package]
+name = "docket-driver-window"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Docket v2's window driver: his seat, his posts and his decisions, from his window over a socket of its own"
+
+[dependencies]
+docket-v2 = { path = "../../docket/v2" }
+serde.workspace = true
+serde_json.workspace = true

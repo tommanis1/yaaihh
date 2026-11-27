@@ -1,0 +1,62 @@
+module yaaihh.audit
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+import std.budgets as B
+
+// Project-specific Docket programs for `yaaihh` — keeping agents on the rails.
+// Roles & Cross-Model Audit: a clerk annotates passages; a `looker` of another family than the writer audits the
+// rules and the claims of the others. Each answers with the model of the party seated in its role (std.comms' Model).
+//
+//   the clerk     reads everything every agent writes, after each turn, and fills std.comms' marks. It judges
+//                 nothing, and no turn is skipped.
+//   the looker    is given only what the clerk marked as worth a look: a rule laid down (std.rails 2), a claim made
+//                 (std.rails 1). It has none of the writer's context.
+
+// Who is the clerk and who is the looker is not said here: each is seated by the owner (`C.Seat`), with its family
+// (`R.State-Family`) and its account (`Desk.Put-On-Account`). What this text says is what the two roles are.
+// Edge: an agent with no family stated has no looker of another family, so nothing it lays down can be cleared or
+// caught. Its rules stay untraced, do not travel (std.rails 2), and show as owed below; nothing is waved through
+// for lack of a fact.
++R.Family("openai"). +R.Family("anthropic"). +R.Family("google").   // Codex's, Claude's and Neon's (agy) makers
+
+// The free model is priced at nothing, said as a rate so that a clerk on it is priced and not `Unpriced`.
++B.Rate("opencode-go/hy4-flash-free", "input", 0). +B.Rate("opencode-go/hy4-flash-free", "output", 0).
++B.Bucket("yaaihh-looker").
+Extend Fact B.Bucket-Of
+  Holds when C.Role(agent, "looker") && H.Running-On(agent, h, v) && B.Bucket(bucket) && bucket == "yaaihh-looker"
+
+// ===== What is owed ==============================================================================================
+
+// Each is held by the reader and owed to the owner. Neither reader can end its own duty (spec 9), and neither
+// needs to: the reading is recorded by the module that asked for it (std.comms, std.rails), when the answer comes.
+Duty Owes-Reading(holder: H.Party, claimant: H.Party, node: C.Node)    // every passage is owed the clerk's reading
+  Holds when C.Role(holder, "clerk") && C.Role(claimant, "owner") && C.Spoken(node, w) && w != holder
+             && Not(C.Gone-Over(node)) && Not(C.Role(w, "clerk")) && Not(C.Role(w, "looker"))
+
+Duty Owes-Trace(holder: H.Party, claimant: H.Party, node: C.Node)      // every rule laid down is owed the looker's trace
+  Holds when C.Role(holder, "looker") && C.Role(claimant, "owner") && R.Lays-Down(node, w) && R.Railed(w)
+             && Not(R.Traced(node))
+
+// Edge: who reads the readers. The clerk and the looker write too. Their passages are not annotated and not
+// traced: that would never end. What keeps them honest is that neither can do anything but mark, clear, catch,
+// verify and refute, and each of those is a line he can open.
+
+// ===== When the looker is over its budget ========================================================================
+// Edge: the looker costs. Over its limit nothing is skipped and nothing is called read: what is owed stays owed
+// and shows as owed, and the bucket waits on him. The looker's calls are charged by the engine, so the
+// stop is the ledger's and not a second rule here: std.rails' trace runs under `B.with_budget("yaaihh-looker", …)`
+// wherever this project starts it.
+Fact Audit-Stalled(dim: B.Dimension)
+  Holds when B.Over-Budget("yaaihh-looker", dim)
+
+// ===== What he sees ==============================================================================================
+// For each turn, one row his window can draw. The numbers are counts of facts, so each opens onto the lines
+// behind it.
+Fact In-Turn-Of(node: C.Node, turn: C.Node)         // passage NODE is of turn TURN: the engine's order
+Fact Read-Over(turn: C.Node, passages: Int, marked: Int, caught: Int)
+  Holds when C.Node(turn)
+             && passages == Count(Foreach n : n When In-Turn-Of(n, turn))
+             && marked   == Count(Foreach n : n When In-Turn-Of(n, turn) && (Exists r, k, j : C.Marked(n, r, k, j)))
+             && caught   == Count(Foreach n : n When In-Turn-Of(n, turn) && (Exists f : R.Caught(n, f)))

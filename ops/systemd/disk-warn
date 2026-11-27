@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# disk-warn: tell the owner, and the Tovrin team's orch, when the host's disk runs low (owner m1067, 11 Nov 2026:
+# "lasting free-space warning: yes"). The disk filled twice on 11 Nov and stopped builds and agents.
+#
+# Run by the systemd user timer disk-warn.timer (ops/systemd), every 5 minutes. Free space on / below WARN_GB (5) mails
+# the owner in research; below ALERT_GB (3) mails the owner and orch in tovrin-dev. Each level is mailed once when it is
+# crossed; the state resets when free space is back above CLEAR_GB (6). The mail goes out as agent yaaihh.
+set -u
+WARN_GB=${WARN_GB:-5} ALERT_GB=${ALERT_GB:-3} CLEAR_GB=${CLEAR_GB:-6}
+COORD_BIN=$HOME/Documents/papers/soft-swarm/agent-base/bin/coord
+state=${XDG_STATE_HOME:-$HOME/.local/state}/disk-warn/level   # 0 nothing sent, 1 warned, 2 alerted
+mkdir -p "$(dirname "$state")"
+free=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+sent=$(cat "$state" 2>/dev/null || echo 0)
+
+mail() {  # mail PROJECT NAME TEXT
+  env -u COORDD_SOCK COORD=$HOME/agent-coord/$1 AGENT_NAME=yaaihh "$COORD_BIN" msg "$2" "$3" >/dev/null ||
+    echo "disk-warn: could not mail $2 in $1" >&2
+}
+
+text="Disk low: ${free} GB free on /
+$(df -h / | tail -1)
+Biggest known users: tovrin-dev box (~/agent-coord/tovrin-dev), agda-dev build/, ~/.cache. Sent by ops/systemd/disk-warn (systemd user timer disk-warn.timer)."
+
+if [ "$free" -lt "$ALERT_GB" ] && [ "$sent" -lt 2 ]; then
+  mail research owner "$text"
+  mail tovrin-dev orch "$text"
+  echo 2 > "$state"
+elif [ "$free" -lt "$WARN_GB" ] && [ "$sent" -lt 1 ]; then
+  mail research owner "$text"
+  echo 1 > "$state"
+elif [ "$free" -gt "$CLEAR_GB" ] && [ "$sent" -ne 0 ]; then
+  echo 0 > "$state"
+fi
+echo "disk-warn: ${free} GB free, level sent: $(cat "$state" 2>/dev/null || echo 0)"

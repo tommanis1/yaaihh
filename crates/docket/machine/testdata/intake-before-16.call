@@ -1,0 +1,36 @@
+// The thread kind's step (thread.kind): owed by the watcher, which coordd answers itself, as it does the clerk's. It
+// runs `sort` below once, statelessly, with the model policy names, and answers `intake` with its verdict; a call
+// that fails, or answers out of shape, is answered OneOff. OPEN is coordd's: the open tickets TO takes part in, one a
+// line, with its kind and title. Unsure(tickets) (paper-research m1249) is for words that could go on more than one of
+// them: the watcher does not guess, the owner picks (two or more tickets, each open, or coordd answers OneOff).
+
+call intake(text: Text, to: Agent) -> Thread | Place(ticket: Ticket) | OneOff | Unsure(tickets: [Ticket])
+  task intake
+
+call sort(text: Text, to: Agent, open: Text) -> Thread | Place(ticket: Ticket) | OneOff | Unsure(tickets: [Ticket])
+  task intake
+  template
+    The owner of a software team wrote the message below to {{ to }}, one of the team's agents. Say what it is:
+
+    - OneOff: a question or a remark for {{ to }} alone, to be answered and forgotten ("what is 5+5", "how are you
+      getting on", "show me the last commit"). Most short messages are this.
+    - Place(ticket): it continues the subject of one of the open tickets listed after it: it answers or follows up
+      what was said there, or is about the same piece of work. Sharing a file, a module or the agent is not enough; a
+      different question about the same code is a Thread or a OneOff. A short answer ("yes", "go ahead", "looks good",
+      "no, keep it") belongs on the ticket whose last post waits on the owner's answer, when exactly one does. Give the
+      ticket's id as listed. A reply to a ticket that asks the owner whom a post is for belongs on that ticket:
+      words that say whom ("for lead", "fixer should"), or the same message said again more clearly.
+    - Unsure(tickets): it could go on more than one of the open tickets, and the words do not say which. The plain
+      case is a short answer while two or more tickets wait on the owner's answer. Give every ticket it could go on;
+      the owner will pick. Do not guess between them.
+    - Thread: it starts a piece of work or a discussion worth keeping, which none of the open tickets is about.
+
+    When unsure between OneOff and Thread, say OneOff: the owner can make it a thread later.
+
+    The message:
+    <<<
+    {{ text }}
+    >>>
+
+    The open tickets {{ to }} takes part in:
+    {{ open }}

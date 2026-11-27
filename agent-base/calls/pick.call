@@ -1,0 +1,15 @@
+// The thread kind's step when the watcher was unsure, until 16 Nov (thread.kind; paper-research m1249): the owner
+// picked one of TICKETS, or a new thread. No kind asks it now: an unsure intake is a thread of its own (the owner on
+// N-354/N-355, paper-research N-101.p1285). It stays defined because the record's history is fixed: every thread that
+// ran the kind with this step keeps its recorded program, and that program must still check against today's calls
+// (paper-research N-101.p1308, after c0be05b removed it and prod's research record no longer replayed).
+call pick(text: Text, tickets: [Ticket]) -> Place(ticket: Ticket) | Thread
+  task pick
+  template
+    Your message could go on more than one ticket. Which one, or a new thread?
+    {{ for t in tickets }}
+    - {{ t }}
+    {{ end }}
+    <<<
+    {{ text }}
+    >>>

@@ -1,0 +1,11 @@
+// The runner's events (coordd's half of the runner's contract, plan/tovrin-program/runner-contract.md; N-101):
+// `outcome` is what the runner sees while it holds a step of a ticket, one per station and per case. NAME is the
+// ticket (coordd gives it as TICKET as well); STATION and CASE are absent when the outcome is not of one; STATE is
+// green, red or running; LOG what it saw (empty when nothing). A kind's `when outcome(o)` reads it; the step's answer is
+// `step_end`, not an event here. The runner's fields (N-97 post 35, runner-contract.md "Agreed", g): ID the history
+// line's, STATION check, O2, staging or build, STEP or CASE what it ran, STATE queued, waits (WHY), green, red,
+// inconclusive or held; under `accepted`, BUILD the `cases` step's id and CUT that build's. A measurement (N-101 post
+// 27, G; plan/eflint/record-to-events.md rows 13 and 14): KIND the build kind, MEASURE what is measured, AMOUNT how much,
+// of CUT (a finished build) or of RUN (one still going). LOG is optional (N-101 post 28): `queued` and `waits` carry
+// none. coordd records every outcome on its ticket, whether or not a handler takes it.
+event outcome { ticket: Text, name: Text, id: Text?, station: Text?, step: Text?, case: Text?, state: Text, why: Text?, log: Text?, build: Text?, cut: Ref?, run: Text?, kind: Text?, measure: Text?, amount: Int? }

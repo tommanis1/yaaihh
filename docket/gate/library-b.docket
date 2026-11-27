@@ -1,0 +1,50 @@
+module gate.b
+
+// Library B of the two-library gate. It declares thread, post, owner, star and archive, and means
+// something else by each than the shipped library does. The engine must run it unchanged.
+
+Fact Party  Identified by String
+Fact Thread Identified by String
+Fact Post   Identified by String
+
+Fact On(post: Post, thread: Thread)                  // one post may stand on several threads
+Fact After(thread: Thread, post: Post, prior: Post)  // the order within a thread; an act changes it
+Fact Owner(post: Post, who: Party)                   // whoever holds the post now; there may be several
+Fact Star(post: Post, by: Party)
+Fact Archived(thread: Thread)                        // for good: no act ends it
+
++Party("p1"). +Party("p2"). +Party("p3").
++Thread("t1"). +Thread("t2"). +Thread("t3").
+
+// A star is a count.
+Fact Stars(post: Post, n: Int)
+  Holds when On(post, t) && n == Count(Foreach p : p When Star(post, p))
+
+Act Write(by: Party, post: Post, thread: Thread)
+  Conditioned by Not(Archived(thread)) && Not(Exists t : On(post, t))
+  Creates        On(post, thread), Owner(post, by)
+
+Act Cross(by: Party, post: Post, thread: Thread)
+  Conditioned by Owner(post, by) && Not(Archived(thread))
+  Creates        On(post, thread)
+
+Act Share(by: Party, post: Post, to: Party)
+  Conditioned by Owner(post, by)
+  Creates        Owner(post, to)
+
+Act Yield(by: Party, post: Post)
+  Conditioned by Owner(post, by) && (Exists q : Owner(post, q) && q != by)
+  Terminates     Owner(post, by)
+
+Act Star-It(by: Party, post: Post)
+  Conditioned by Exists t : On(post, t)
+  Creates        Star(post, by)
+
+Act Put-After(by: Party, thread: Thread, post: Post, prior: Post)
+  Conditioned by Owner(post, by) && On(post, thread) && On(prior, thread) && Not(Archived(thread))
+  Terminates     After(thread, post, old)
+  Creates        After(thread, post, prior)
+
+Act Archive(by: Party, thread: Thread)
+  Conditioned by Not(Exists p : On(p, thread) && Not(Owner(p, by)))
+  Creates        Archived(thread)

@@ -1,0 +1,63 @@
+// Scenario 3. A change that hardcodes an agent kind ("bare") in the engine's code is denied; the same word in the
+// library's text is not; a change to the file that judges one's own work is denied.
+// The rule of yaaihh.hygiene 5 and std.rails 3. Those are handler arms that read a tool call with two host
+// functions, `matches_glob` and `contains`, which eflint-rs does not have. So here the two functions' answers are
+// given as facts (`in-tree`, `adds`), and what is run is the decision made from them. On docket-v2 the same
+// scenario runs with the real functions (scenarios/README.md, script 3). Every query must succeed.
+Fact party Identified by String
+Fact artifact Identified by String
+Fact path Identified by String
+Fact glob Identified by String
+Fact word Identified by String
+Fact patch Identified by String
+Fact assigned Identified by party * artifact
+Fact engine-tree Identified by glob
+Fact library-word Identified by word
+Fact judges Identified by glob * artifact
+Fact may-touch Identified by artifact * glob
+Fact in-tree Identified by path * glob                 // stands for matches_glob(path, glob)
+Fact adds Identified by patch * word                   // stands for contains(added lines of the patch, word)
+
+Fact allowed-by-work Identified by party * path
+  Holds when (Exists artifact, glob : assigned(party, artifact) && may-touch(artifact, glob) && in-tree(path, glob))
+Fact denied-as-engine-word Identified by party * path * patch      // yaaihh.hygiene: with_clean_engine
+  Holds when (Exists glob : engine-tree(glob) && in-tree(path, glob))
+             && (Exists word : library-word(word) && adds(patch, word))
+             && Not(allowed-by-work(party, path))
+Fact denied-as-own-judge Identified by party * path               // std.rails: with_guards, the anti-patch arm
+  Holds when (Exists glob, artifact : judges(glob, artifact) && assigned(party, artifact) && in-tree(path, glob))
+.
++party("b1"). +party("other").
++artifact("start-work"). +artifact("map-merge").
++glob("crates/coordd/src/**"). +glob("agent-base/renderings/**"). +glob("crates/coordd/src/moves.rs").
++glob("crates/coordd/src/ticket/tests.rs").
++engine-tree("crates/coordd/src/**").
++word("bare"). +word("merge"). +library-word("bare"). +library-word("merge").
++path("crates/coordd/src/core.rs"). +path("agent-base/renderings/words/posts.tmpl").
++path("crates/coordd/src/moves.rs"). +path("crates/coordd/src/ticket/tests.rs").
++in-tree("crates/coordd/src/core.rs", "crates/coordd/src/**").
++in-tree("crates/coordd/src/moves.rs", "crates/coordd/src/**").
++in-tree("crates/coordd/src/moves.rs", "crates/coordd/src/moves.rs").
++in-tree("crates/coordd/src/ticket/tests.rs", "crates/coordd/src/**").
++in-tree("crates/coordd/src/ticket/tests.rs", "crates/coordd/src/ticket/tests.rs").
++in-tree("agent-base/renderings/words/posts.tmpl", "agent-base/renderings/**").
++patch("pub bare: bool,"). +patch("fn merge(a: Map, b: Map)"). +patch("let n = 3;").
++adds("pub bare: bool,", "bare"). +adds("fn merge(a: Map, b: Map)", "merge").
++assigned("b1", "start-work").
+
+// 1. The patch of 25 Nov: `pub bare: bool` in the engine's core.
+?denied-as-engine-word("b1", "crates/coordd/src/core.rs", "pub bare: bool,").
+// 2. A change there with no word of the library's world passes.
+?!denied-as-engine-word("b1", "crates/coordd/src/core.rs", "let n = 3;").
+// 3. The same word in the library's own text passes: that is where it belongs.
+?!denied-as-engine-word("b1", "agent-base/renderings/words/posts.tmpl", "pub bare: bool,").
+// 4. A word that is right in the engine for another reason: denied, until the work's own text names the file.
++assigned("other", "map-merge").
+?denied-as-engine-word("other", "crates/coordd/src/moves.rs", "fn merge(a: Map, b: Map)").
++may-touch("map-merge", "crates/coordd/src/moves.rs").
+?!denied-as-engine-word("other", "crates/coordd/src/moves.rs", "fn merge(a: Map, b: Map)").
+?denied-as-engine-word("b1", "crates/coordd/src/moves.rs", "fn merge(a: Map, b: Map)").   // not for anybody else's work
+// 5. The fix goes into what is judged, never into the judge.
++judges("crates/coordd/src/ticket/tests.rs", "start-work").
+?denied-as-own-judge("b1", "crates/coordd/src/ticket/tests.rs").
+?!denied-as-own-judge("other", "crates/coordd/src/ticket/tests.rs").

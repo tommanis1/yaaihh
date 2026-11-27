@@ -11,26 +11,141 @@ $COORD/feed.jsonl (delivery "relay"), on the read-write mount the host sees as
 stopped (~/agent-coord/.relay.json) and posts each such message into the inbox
 socket of the live host session with exactly that id (~/.claude/sessions/PID.json), as
 "[from BOX/AGENT] TEXT". The receiving session sees a message from another
-session, so it cannot approve anything. The result goes back into the box's
-feed as a `relay` entry, where coord status and the view show it.
+session, so it cannot approve anything.
 
 Nothing is dropped (owner, 6 Nov 2026): a message that cannot be delivered (no
 such host session running) is held in the state file and delivered when a
-session with that id starts. Its sender is told at once, by `coord msg` like
-any message, which message (when it was sent, its first line) and why; and told
-again when it is finally delivered.
+session with that id starts.
+
+Messages between projects (N-44): an agent's post due to PROJECT/NAME of another
+project is a feed line with delivery "project" (coordd writes it only where the
+project file says host_relay = true). This posts it in project X as the owner
+side there: `coord msg --as P/AUTHOR --origin P:N-12 NAMES TEXT` (a thread of
+X's that came from P's N-12, opened or posted on), or `--re N-7` when the line
+says it answers X's own thread N-7 (its origin). NAMES are `to` with X's prefix
+taken off. The text is one argument, whatever it holds: on the host through
+X's socket, into a box through `box.sh sh X env coord ...` (argv throughout).
+Only folders whose project file says host_relay = true are projects. Only
+coordd's own refusal (exit 1, its last line beginning "coord") and an unknown
+project are final: the message is refused, not tried again. Anything else that
+fails (X's coordd not running, box.sh's own exit 1 for a held box, sbx or
+docker failing) holds it, delivered when X's coordd runs.
+
+The relay posts no message and writes nothing into any feed, ever (owner,
+N-65, N-67): it is no party to any thread, and its outcomes are its own. Each
+is one line on stderr (the unit's journal): project or box, the message's id,
+from, to, and "delivered", "delivered after being held since T", "held: WHY"
+or "refused: WHY": one line per change of a message's state, so a held
+message, retried on every wake, says nothing until it is delivered or refused.
+Before a message's first carry it writes "carrying ID to X/NAMES" there too,
+so a call that never returns can be seen; it waits for every call to return
+(no time limit). Lines the relay wrote itself before this (from coord-relay or
+X/coord-relay, in old feeds and held in old state) are read past and dropped,
+and the relay's names are taken out of a line's `to` (a line with nobody else
+in it is read past).
 
 Event-driven, no polling: it sleeps on inotify until a box writes its feed, a
-box directory appears, or a host session starts (~/.claude/sessions changes).
+box directory appears, a host session starts (~/.claude/sessions changes), or,
+while a message to a project is held, a coordd starts (its socket made, or its
+running.json written).
 """
-import argparse, ctypes, glob, json, os, select, socket, struct, subprocess
-from datetime import datetime
+import argparse, ctypes, glob, json, os, re, select, socket, struct, subprocess, sys
 
 HOME = os.path.expanduser("~")
 ROOT = os.environ.get("RELAY_ROOT", f"{HOME}/agent-coord")
 SESSIONS = os.environ.get("RELAY_SESSIONS", f"{HOME}/.claude/sessions")
 STATE = f"{ROOT}/.relay.json"
 COORD_BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "coord")
+# a host project's coordd socket (bin/host-coordd); a box's is inside its VM
+RUN = f"{os.environ.get('XDG_RUNTIME_DIR') or f'/run/user/{os.getuid()}'}/coordd"
+# the relay's own name: what it posts carries this as its author
+RELAY = "coord-relay"
+# coordc's exit when it cannot reach coordd (as opposed to 1, coordd's refusal)
+NOT_RUNNING = 3
+
+
+def relays(folder):
+    """Whether the project file of the coord FOLDER says host_relay = true (in its [project] table)."""
+    try:
+        with open(f"{folder}/project") as fh:
+            path = fh.read().strip()
+        with open(path) as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    table = None
+    for line in text.splitlines():
+        t = line.split("#", 1)[0].strip()
+        if t.startswith("["):
+            table = t
+        elif table == "[project]" and re.fullmatch(r"host_relay\s*=\s*true", t):
+            return True
+    return False
+
+
+def projects():
+    """The projects messages are carried between: the coord folders under ROOT whose project file says host_relay = true."""
+    return sorted(os.path.basename(d.rstrip("/")) for d in glob.glob(f"{ROOT}/*/") if relays(d.rstrip("/")))
+
+
+def coord(project, args):
+    """Run `coord ARGS` in PROJECT as the owner side there; (exit code, what it said)."""
+    folder = os.path.realpath(f"{ROOT}/{project}")  # coord tells a box from a host project by ~/agent-coord/NAME
+    env = {k: v for k, v in os.environ.items() if k not in ("AGENT_NAME", "COORD_AS", "COORDD_SOCK")}
+    env["COORD"] = folder
+    sock = f"{RUN}/{os.path.basename(folder)}.sock"
+    if os.path.exists(sock):
+        env["COORDD_SOCK"] = sock
+    try:
+        r = subprocess.run([COORD_BIN, *args], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    except OSError as err:
+        return NOT_RUNNING, str(err)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def carry(src, e):
+    """Post message E of project SRC in its project: None when posted, ("held"|"final", why) when not."""
+    x = e.get("project", "")
+    known = projects()
+    if x not in known:
+        return "final", f"no project named {x} (projects: {', '.join(p for p in known if p != src) or 'none'})"
+    sender = e.get("from", "?")
+    author = sender if "/" in sender else f"{src}/{sender}"
+    names = [n[len(x) + 1:] if n.startswith(f"{x}/") else n for n in e.get("to", [])]
+    origin = e.get("origin") or ""
+    if origin.startswith(f"{x}:"):
+        args = ["msg", "--as", author, "--re", origin.split(":", 1)[1], ",".join(names), e.get("text", "")]
+    else:
+        args = ["msg", "--as", author, "--origin", f"{src}:{e.get('ticket', '')}", ",".join(names), e.get("text", "")]
+    code, out = coord(x, args)
+    if code == 0:
+        return None
+    last = out.splitlines()[-1] if out else ""
+    if code == 1 and last.startswith("coord") and "coordd is not running" not in last:
+        return "final", last  # coordd's own refusal (coord msg: ..., coord: no agent ...)
+    # anything else is the way in failing, not X refusing: box.sh's own exit 1 (a held box), sbx or docker
+    return "held", last if code != NOT_RUNNING and last else f"{x}'s coordd is not running"
+
+
+def is_relay(name):
+    """Whether NAME is the relay itself, here (coord-relay) or as another project names it (X/coord-relay)."""
+    return name == RELAY or name.endswith(f"/{RELAY}")
+
+
+def to_carry(e):
+    """Line E as it is carried: the relay's names out of its `to` (it is no party to a thread); None when the relay
+    wrote it, or nobody but the relay is left to carry it to (N-65: its notices went from project to project in a loop)."""
+    if is_relay(e.get("from", "")):
+        return None
+    to = [n for n in e.get("to", []) if not is_relay(n)]
+    if not to and e.get("to"):
+        return None
+    return {**e, "to": to} if to != e.get("to", []) else e
+
+
+def far(e):
+    """Whom message E was for: its names as written (X/b, X/c)."""
+    return ",".join(e.get("to", [])) or e.get("project", "?")
 
 
 def host_session(box, name):
@@ -55,7 +170,6 @@ def host_session(box, name):
 def deliver(sock, text):
     line = json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
-        c.settimeout(5)
         c.connect(sock)
         c.sendall(line.encode())
 
@@ -72,36 +186,37 @@ def attempt(box, e):
         return f"{e.get('to')}: {err}"
 
 
-def tell_sender(box, e, text):
-    """Tell the box agent that sent E, by `coord msg` (held until its turn ends, like any message to a busy agent)."""
-    sender = e.get("from", "")
-    if not os.path.isdir(f"{ROOT}/{box}/agents/{sender}"):
-        return  # the owner or an unknown sender: the feed's relay entry is all there is
-    title = (e.get("text", "").strip().splitlines() or [""])[0][:100]
-    subprocess.run([COORD_BIN, "msg", sender,
-                    f"{text}: your message to host {e.get('to')} sent {e.get('at')}: \"{title}\""],
-                   env={**os.environ, "COORD": f"{ROOT}/{box}", "AGENT_NAME": "coord-relay"},
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def record(box, e, status):
-    with open(f"{ROOT}/{box}/feed.jsonl", "a") as fh:
-        fh.write(json.dumps({"kind": "relay", "at": datetime.now().astimezone().isoformat(timespec="seconds"),
-                             "from": "coord-relay", "to": e.get("from"), "msg_to": e.get("to"),
-                             "msg_at": e.get("at"), "status": status}) + "\n")
+def journal(box, e, status, why=""):
+    """One line on stderr (the unit's journal) about message E of BOX: STATUS, and WHY when it was not delivered."""
+    to = ",".join(e.get("to", [])) if isinstance(e.get("to"), list) else e.get("to", "")
+    tail = f": {why}" if why else ""
+    print(f"coord-relay: {box} {e.get('id', '-')} from {e.get('from', '?')} to {to}: {status}{tail}", file=sys.stderr, flush=True)
 
 
 def relay(state):
     offsets, held = state["offsets"], state["held"]
-    # Held messages first, oldest first: a host session may have started.
+    # Held messages first, oldest first: a host session or a project's coordd may have started. A retry says nothing
+    # while the message stays held (it is retried on every wake); only a changed outcome is a journal line.
     still = []
     for h in held:
-        why = attempt(h["box"], h["msg"])
+        e = h["msg"]
+        if e.get("delivery") == "project":
+            e = to_carry(e)
+            if e is None:
+                continue
+            why = carry(h["box"], e)
+            if why and why[0] == "held":
+                still.append(h)
+            elif why:
+                journal(h["box"], e, "refused", why[1])
+            else:
+                journal(h["box"], e, f"delivered after being held since {e.get('at')}")
+            continue
+        why = attempt(h["box"], e)
         if why:
             still.append(h)
         else:
-            record(h["box"], h["msg"], f"delivered to {h['msg'].get('to')} (held since {h['msg'].get('at')})")
-            tell_sender(h["box"], h["msg"], "Delivered late")
+            journal(h["box"], e, f"delivered after being held since {e.get('at')}")
     state["held"] = held = still
     for feed in glob.glob(f"{ROOT}/*/feed.jsonl"):
         box = os.path.basename(os.path.dirname(feed))
@@ -118,16 +233,33 @@ def relay(state):
                 e = json.loads(raw)
             except ValueError:
                 continue
-            if e.get("kind") != "msg" or e.get("delivery") != "relay":
+            if e.get("kind") != "msg" or e.get("delivery") not in ("relay", "project") or is_relay(e.get("from", "")):
+                continue
+            if e.get("delivery") == "project":
+                if not relays(os.path.dirname(feed)):
+                    continue  # only a project's own messages are carried
+                e = to_carry(e)
+                if e is None:
+                    continue  # a line only to the relay: read past
+                journal(box, e, f"carrying {e.get('id', '-')} to {far(e)}")
+                why = carry(box, e)
+                if not why:
+                    journal(box, e, "delivered")
+                elif why[0] == "held":
+                    held.append({"box": box, "msg": e})
+                    journal(box, e, "held", why[1])
+                else:
+                    journal(box, e, "refused", why[1])
                 continue
             why = attempt(box, e)
             if why:
                 held.append({"box": box, "msg": e})
-                record(box, e, f"{why}; held, delivered when it runs")
-                tell_sender(box, e, f"Not delivered ({why}); held, delivered when it runs")
+                journal(box, e, "held", why)
             else:
-                record(box, e, f"delivered to {e.get('to')}")
-        offsets[feed] = os.path.getsize(feed) if end else start  # past our own relay entries too
+                journal(box, e, "delivered")
+        # past what was read, and no further: a line written while these were being carried (a project's coordd takes
+        # a while) is read next time; old `relay` entries from before N-65 are read past by their kind
+        offsets[feed] = start + end
 
 
 class Inotify:
@@ -177,6 +309,9 @@ def main():
             state = {"offsets": state, "held": []}
     except (OSError, ValueError):
         state = {"offsets": {}, "held": []}
+    # the relay's own notices held by a relay before N-65 never go out
+    state["held"] = [h for h in state["held"] if not is_relay(h["msg"].get("from", ""))
+                     and (h["msg"].get("delivery") != "project" or to_carry(h["msg"]) is not None)]
     for feed in glob.glob(f"{ROOT}/*/feed.jsonl"):  # what was there before the relay began is not delivered
         state["offsets"].setdefault(feed, os.path.getsize(feed))
     ino = None if args.once else Inotify()
@@ -184,6 +319,8 @@ def main():
         if ino:  # watch before reading, so nothing written in between is missed
             ino.watch(ROOT, Inotify.CREATE)
             ino.watch(SESSIONS, Inotify.CREATE | Inotify.MOVED_TO | Inotify.MODIFY)
+            if os.path.isdir(RUN):
+                ino.watch(RUN, Inotify.CREATE | Inotify.MOVED_TO)
             for d in glob.glob(f"{ROOT}/*/"):
                 ino.watch(d.rstrip("/"), Inotify.MODIFY | Inotify.CREATE)
         relay(state)
@@ -191,8 +328,13 @@ def main():
         if args.once:
             break
         # Wake for a feed written, a box directory made, or a host session file written; not for our own state file.
-        while not any(d == SESSIONS or name == "feed.jsonl" or (d == ROOT and mask & Inotify.ISDIR)
-                      for d, name, mask in ino.wait()):
+        # While a message to a project is held, also for a coordd starting: its socket made, its running.json written.
+        def wakes(d, name, mask):
+            if d == SESSIONS or name == "feed.jsonl" or (d == ROOT and mask & Inotify.ISDIR):
+                return True
+            waiting = any(h["msg"].get("delivery") == "project" for h in state["held"])
+            return waiting and ((d == RUN and name.endswith(".sock")) or name == "running.json")
+        while not any(wakes(d, name, mask) for d, name, mask in ino.wait()):
             pass
 
 

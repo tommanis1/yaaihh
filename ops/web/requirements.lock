@@ -1,0 +1,9 @@
+# yaaihh-web's browser and PDF reader (install.sh): CPython 3.12, Linux x86_64 wheels, each pinned by its SHA-256.
+# PyMuPDF and pymupdf4llm are AGPL-3.0; Playwright is Apache-2.0.
+greenlet==3.5.6 --hash=sha256:975736b002ed080d124cf81a79cb7e05cb26d6b3f5c7a7b651c0fcce70353aa1
+numpy==2.5.5 --hash=sha256:704d819265e5d1064d932968e9ee85fff2103ccc78c05b878c06943ba27b8507
+playwright==1.65.2 --hash=sha256:58932d35f56767ab7ebcdd3d4a733bfb3e62a1a5bc43c08e28b9fa9b3e61cf33
+psutil==7.2.2 --hash=sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9
+pymupdf4llm==2.2 --hash=sha256:0e453094d318c5b21cd86ff328383b217d432b8b5c22869adbea823ea2303c27
+pymupdf==2.2 --hash=sha256:62f4e616192d86419f94ce59c9de498e5f735c682908488c1305f4acec8b0dc0
+tabulate==0.10.0 --hash=sha256:f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3

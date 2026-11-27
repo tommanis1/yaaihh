@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# A commit's trailers (design §9, links): what the hooks (hooks/dispatch) and a script's own commits use alike.
+#
+#   trail add FILE     the commit's provenance as trailers of the message in FILE, replacing any already there:
+#                        Agent:   $AGENT_NAME (set by roster)
+#                        Session: $CLAUDE_CODE_SESSION_ID (exported by Claude Code to Bash)
+#                        Ruling:  the ruling the agent last acknowledged ($COORD/agents/NAME/ruling)
+#                      prepare-commit-msg runs it; a script that makes a commit with `git commit-tree` runs it on its
+#                      message file first, so the commit says who made it as one made by `git commit` does
+#   trail check FILE   refuses (exit 1, saying why) a message with no `Item:` trailer naming an item, a ticket or one
+#                      of its posts: `Item: I-1480`, `Item: N-1446`, `Item: N-1104.p678` (the owner, N-1104 p764: a
+#                      commit says what work it belongs to, as in Tovrin; paper-research N-1446 p1364). commit-msg runs
+#                      it, for `git commit` and `git merge`
+#   trail refs         reference-transaction's `prepared` lines on stdin: each branch (refs/heads/) moved to a commit
+#                      no ref holds yet is refused, the whole update with it, when one of the commits it brings has no
+#                      such `Item:`. This is the check for a commit no commit-msg saw: `git commit-tree` with
+#                      `git branch` or `update-ref` (a script's version commit or merge), a cherry-pick. A commit
+#                      whose work was made before FROM below (its author time, which a rebase or cherry-pick keeps:
+#                      paper-research N-1446 p1386) is not looked at, so a branch on older work, or that work rebased
+#                      onto a new base (the proxy fork onto upstream), is made as before
+#
+# A refusal says why: no Item: at all, an Item: naming no id, or an Item: line git does not read as a trailer because
+# it is not in the message's last paragraph (a blank line between it and Co-Authored-By).
+# Each part acts only for an agent (AGENT_NAME set, as roster sets it): the owner's own commits are his. check and refs
+# leave Tovrin alone (paper-research N-1446 p1386: it has its own way, and its team is stopped): its coords, and any
+# repository whose top or common git folder is under one of TOVRIN's places (its project.toml's repos and their
+# copies). flavor, proxy and rune are in.
+set -u
+
+# the rule's start: a commit made before it is older work, not asked for an Item: (2026-11-22 09:00 CET)
+FROM=1795334400
+# what an Item: trailer names: an item or ticket id, or one of its posts (Machine::id's forms: I-1480, N-1104.p678)
+ITEM='^[A-Z]+-[0-9]+(\.p[0-9]+)?$'
+# Tovrin's places (flavor/projects/tovrin/project.toml's repos, their .pre-switch copies, the trial and snapshot folders)
+# and coords; TRAIL_TOVRIN replaces the places for tests/trail-test.sh
+TOVRIN=${TRAIL_TOVRIN:-"/home/t/Documents/papers/sigcomm/*tovrin* /home/t/Documents/papers/sigcomm/vault /home/t/Documents/papers/tovrin /home/t/Documents/papers/agda-tovrin-trial /home/t/Documents/papers/tovrin-snapshots"}
+TOVRIN_COORDS="tovrin-dev docket-tovrin docket-tovrin-import"
+WHY="Add a last paragraph with the line \`Item: ID\`, the item or ticket the work belongs to (\`Item: I-1480\`), or his post it answers (\`Item: N-1104.p678\`), directly above Co-Authored-By (paper-research N-1446 p1364)"
+
+# whether the message $1 has an Item: trailer naming an id; says why not on stderr
+items_ok() {
+  local v ok=1 any=0
+  while IFS= read -r v; do
+    any=1
+    v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}
+    if [[ "$v" =~ $ITEM ]]; then ok=0; else echo "trail: \`Item: $v\` names no item, ticket or post" >&2; fi
+  done < <(printf '%s\n' "$1" | git interpret-trailers --parse | sed -n 's/^Item: *//p')
+  if [ $any = 0 ] && grep -q '^Item:' <<<"$1"; then
+    echo "trail: its Item: line is not in the message's last paragraph, the only one git reads trailers from: put it directly above Co-Authored-By, with no blank line between" >&2
+  fi
+  return $ok
+}
+
+# whether this is Tovrin's: its coord, or a repository at one of its places (the top of the worktree, or the
+# repository its worktrees share)
+tovrin() {
+  local - c p top common name=${COORD:-}
+  set -f  # the places are patterns, for case below, not globs to expand here
+  name=${name%/}; name=${name##*/}
+  for c in $TOVRIN_COORDS; do [ "$name" = "$c" ] && return 0; done
+  top=$(git rev-parse --show-toplevel 2>/dev/null) && top=$(realpath -e "$top" 2>/dev/null)
+  common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && common=$(realpath -e "$common" 2>/dev/null)
+  for p in $TOVRIN; do
+    # shellcheck disable=SC2254
+    case "${top:-/}/" in $p/*) return 0 ;; esac
+    case "${common:-/}/" in $p/*) return 0 ;; esac
+  done
+  return 1
+}
+
+case ${1:-} in
+  add)
+    [ -n "${AGENT_NAME:-}" ] || exit 0
+    msg=${2:?trail add FILE}
+    ruling=$(cat "${COORD:-/nonexistent}/agents/$AGENT_NAME/ruling" 2>/dev/null || true)
+    args=(--trailer "Agent: $AGENT_NAME")
+    [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && args+=(--trailer "Session: $CLAUDE_CODE_SESSION_ID")
+    [ -n "$ruling" ] && args+=(--trailer "Ruling: $ruling")
+    git interpret-trailers --in-place --if-exists replace "${args[@]}" "$msg"
+    ;;
+  check)
+    [ -n "${AGENT_NAME:-}" ] || exit 0
+    msg=${2:?trail check FILE}
+    tovrin && exit 0
+    # the message as git will keep it: comment lines out, as commit-msg's file still holds them
+    if ! items_ok "$(git stripspace --strip-comments < "$msg")"; then
+      echo "commit refused: its message has no Item: trailer. $WHY." >&2
+      exit 1
+    fi
+    ;;
+  refs)
+    [ -n "${AGENT_NAME:-}" ] || { cat >/dev/null; exit 0; }
+    tovrin && { cat >/dev/null; exit 0; }
+    bad=0
+    while read -r old new ref; do
+      case $ref in refs/heads/*) ;; *) continue ;; esac
+      [ "$new" = 0000000000000000000000000000000000000000 ] && continue
+      [ "$(git cat-file -t "$new" 2>/dev/null)" = commit ] || continue
+      # the commits this move brings that no branch, tag or remote's ref holds yet (the refs are not moved while
+      # `prepared` runs; HEAD is not counted, so a rebase's commits, made on a detached HEAD, and a commit-tree commit
+      # checked out detached are looked at), by their author time: when the work was made, which a rebase keeps (its
+      # committer time is the rebase's)
+      while read -r c t; do
+        [ "$t" -ge "$FROM" ] 2>/dev/null || continue
+        if ! items_ok "$(git log -1 --format=%B "$c")"; then
+          echo "${ref#refs/heads/} not moved: commit ${c:0:8} ($(git log -1 --format=%s "$c" | cut -c1-60)) has no Item: trailer. $WHY; a script's commit-tree message too." >&2
+          bad=1
+        fi
+      done < <(git log --max-count=200 --format='%H %at' "$new" --not --branches --tags --remotes 2>/dev/null)
+    done
+    exit $bad
+    ;;
+  *) echo "trail add FILE | trail check FILE | trail refs" >&2; exit 2 ;;
+esac

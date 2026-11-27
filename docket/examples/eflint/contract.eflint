@@ -1,0 +1,144 @@
+// std.rails 1, by hand in the reference eFLINT that eflint-rs reads. Names are lower case here; a name ending in
+// -f is the rule as the foundation (4b219c61b) has it, beside the rule as it is now. Every query below must succeed.
+Fact party Identified by String
+Fact artifact Identified by String
+Fact condition Identified by String
+Fact family Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact of-family Identified by party * family
+Fact other-family Identified by party * party'
+  Holds when (Exists family, family' : of-family(party, family) && of-family(party', family') && family != family')
+Fact assigned Identified by party * artifact
+Fact required Identified by artifact * condition
+Fact claimed-done Identified by party * artifact
+Fact verified Identified by artifact * condition
+Fact refuted Identified by artifact * condition
+Fact accepted Identified by artifact
+Fact all-verified Identified by artifact
+  Holds when (Exists party : claimed-done(party, artifact))
+             && Not(Exists condition : required(artifact, condition) && Not(verified(artifact, condition)))
+
+Duty owes-valid-result-f
+  Holder party
+  Claimant party'
+  Related to artifact, condition
+  Holds when assigned(party, artifact) && required(artifact, condition) && Not(verified(artifact, condition)) && role(party', "owner")
+  Violated when claimed-done(party, artifact) && Not(verified(artifact, condition))
+Fact given-by Identified by artifact * party
+Fact verifier-module Identified by party
+Fact may-find Identified by party * party' * artifact
+  Holds when (Exists party'' : claimed-done(party'', artifact) && Not(assigned(party', artifact))
+              && ((role(party, "owner") && party' == party)
+                  || (verifier-module(party) && role(party', "looker") && other-family(party', party''))))
+Duty owes-valid-result
+  Holder party
+  Claimant party'
+  Related to artifact, condition
+  Holds when assigned(party, artifact) && given-by(artifact, party') && required(artifact, condition) && Not(verified(artifact, condition))
+  Violated when refuted(artifact, condition)
+
+Act claim-done-f
+  Actor party
+  Related to artifact
+  Holds when assigned(party, artifact)
+  Creates claimed-done(party, artifact)
+Act claim-done
+  Actor party
+  Related to artifact
+  Holds when assigned(party, artifact) && (Exists condition : required(artifact, condition))
+  Creates claimed-done(party, artifact)
+Act verify-condition-f
+  Actor party
+  Related to artifact, condition
+  Holds when Not(assigned(party, artifact))
+  Creates verified(artifact, condition)
+Act verify-condition                                   // ACTOR records what PARTY' found
+  Actor party
+  Related to party', artifact, condition
+  Holds when may-find(party, party', artifact) && required(artifact, condition)
+  Creates verified(artifact, condition)
+  Terminates refuted(artifact, condition)
+Act refute-condition
+  Actor party
+  Related to party', artifact, condition
+  Holds when may-find(party, party', artifact) && required(artifact, condition)
+  Creates refuted(artifact, condition)
+  Terminates verified(artifact, condition)
+  Terminates claimed-done(party'', artifact) When claimed-done(party'', artifact)
+Act relinquish-f
+  Actor party
+  Related to artifact
+  Holds when assigned(party, artifact)
+  Terminates assigned(party, artifact)
+Act release-work
+  Actor party
+  Related to party', artifact
+  Holds when party != party' && assigned(party', artifact) && (given-by(artifact, party) || role(party, "owner"))
+  Terminates assigned(party', artifact), claimed-done(party', artifact)
+Act accept
+  Actor party
+  Related to artifact
+  Holds when role(party, "owner") && all-verified(artifact)
+  Creates accepted(artifact)
+Event artifact-changed
+  Related to artifact
+  Terminates verified(artifact, condition) When verified(artifact, condition)
+  Terminates accepted(artifact)
+.
++party("t"). +party("b1"). +party("lk1"). +party("same"). +party("stranger"). +party("std.rails"). +party("w1").
++role-name("owner"). +role-name("looker").
++role("t", "owner"). +role("lk1", "looker"). +role("same", "looker").
++verifier-module("std.rails").
++family("a"). +family("b").
++of-family("b1", "a"). +of-family("same", "a"). +of-family("lk1", "b").
++artifact("w"). +artifact("v"). +condition("tests"). +condition("not-asked").
+
+// 1. A claim with nothing required.
++assigned("b1", "w"). +given-by("w", "w1").
+?Enabled(claim-done-f("b1", "w")).                         // the foundation: it can claim, and all-verified would hold at once
+?!Enabled(claim-done("b1", "w")).                          // now: nothing was asked for, so there is nothing to claim
+
+// 2. Every honest claim was a violation.
++required("w", "tests").
+claim-done("b1", "w").
+?Violated(owes-valid-result-f("b1", "t", "w", "tests")).   // the foundation: violated the moment it claims
+?!Violated(owes-valid-result("b1", "w1", "w", "tests")). // now: nobody has looked yet
+
+// 3. Who records a finding, and whose.
+?Enabled(verify-condition-f("stranger", "w", "not-asked")).     // the foundation: anybody, any condition
+?!Enabled(verify-condition("lk1", "lk1", "w", "tests")).  // a looker performs nothing itself
+?!Enabled(verify-condition("b1", "lk1", "w", "tests")). // the doer cannot record a looker's finding for it
+?!Enabled(verify-condition("std.rails", "b1", "w", "tests")).  // never the doer's own finding
+?!Enabled(verify-condition("std.rails", "same", "w", "tests")).     // not a looker of the doer's own family
+?!Enabled(verify-condition("std.rails", "lk1", "w", "not-asked")). // not a condition nobody required
+?Enabled(verify-condition("std.rails", "lk1", "w", "tests")).
+?Enabled(verify-condition("t", "t", "w", "tests")).             // or him, for himself
+
+// 4. Refuted: violated, owed again, and the holder cannot clear it.
+refute-condition("std.rails", "lk1", "w", "tests").
+?Violated(owes-valid-result("b1", "w1", "w", "tests")).
+?!claimed-done("b1", "w").
+?!Enabled(accept("t", "w")).
+claim-done("b1", "w").                                     // after the mend
+?Violated(owes-valid-result("b1", "w1", "w", "tests")). // a new claim does not clear it
+verify-condition("std.rails", "lk1", "w", "tests").
+?!refuted("w", "tests").                                        // the verifier's finding does
+?all-verified("w").
+?!Enabled(accept("b1", "w")).                              // nobody accepts its own work
+accept("t", "w").
+?accepted("w").
+
+// 5. The thing changes after it was verified.
+artifact-changed("w").
+?!verified("w", "tests").
+?!accepted("w").
+
+// 6. Giving the work up.
++assigned("b1", "v"). +given-by("v", "w1"). +required("v", "tests").
+claim-done("b1", "v").
+?Enabled(relinquish-f("b1", "v")).                         // the foundation: the holder ends its own duty
+?!Enabled(release-work("b1", "b1", "v")).             // now: not by the holder
+release-work("w1", "b1", "v").                          // by whoever gave it
+?!assigned("b1", "v").
+?!claimed-done("b1", "v").

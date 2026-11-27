@@ -1,0 +1,52 @@
+# Safe, Guarded and Yolo (owner, N-1929): each mode says whether commands run unasked and whether the harness's own
+# check is on, and an agent's start is passed both. The form of its lines is in the head of docket/gate/script-b.steps.
+load ../std/hooks.docket
+load ../std/bridges/claude-code.docket
+load ../std/bridges/codex.docket
+load ../std/bridges/opencode.docket
+load ../std/bridges/agy.docket
+load ../std/delivery.docket
+load ../std/comms.docket
+load ../std/rails.docket
+load ../std/budgets.docket
+load ../std/control.docket
+load ../std/adapt.docket
+load ../defaults/audit.docket
+load ../defaults/train.docket
+load ../defaults/hygiene.docket
+load ../defaults/brain.docket
+load ../defaults/desk.docket
+load ../defaults/project.docket
+load s9-world.docket
+carries: Agy-Kick, Apply, Await-Approval, Call-Text, Codex-Start-Turn, Codex-Steer, Command, Delete-Fork, Deliver, Git-Head, Join-Back, Measure, Model, Next-Moment, Notify, Pick, Pick-Other, Push-Channel, Push-Channel-Now, Read-As, Request-Budget, Sleep, Spin-Off, TextOf, Tool-Use
+# nothing set: Safe, asking first, the check on; its start is passed so
+not Runs-Unasked(w1)
+holds Safety-Check-On(w1)
+stand-in: Start-Session(w1, false, false, true, _) -> ()
+o1: Start-Agent(o1, w1) -> performed -> ended ()
+# Guarded: commands unasked, the check kept
+o1: Set-Agent-Mode(o1, w1, guarded) -> performed -> ended ()
+holds Runs-Unasked(w1)
+holds Safety-Check-On(w1)
+stand-in: Start-Session(w1, false, true, true, _) -> ()
+o1: Start-Agent(o1, w1) -> performed -> ended ()
+# Yolo: commands unasked, the check off
+o1: Set-Agent-Mode(o1, w1, yolo) -> performed -> ended ()
+holds Runs-Unasked(w1)
+not Safety-Check-On(w1)
+stand-in: Start-Session(w1, false, true, false, _) -> ()
+o1: Start-Agent(o1, w1) -> performed -> ended ()
+# back to Safe
+o1: Set-Agent-Mode(o1, w1, safe) -> performed -> ended ()
+not Runs-Unasked(w1)
+holds Safety-Check-On(w1)
+# in a box the same: nothing set, Safe and Guarded keep the check on, only Yolo lifts it
+holds Safety-Check-On(w2)
+o1: Set-Agent-Mode(o1, w2, guarded) -> performed -> ended ()
+holds Runs-Unasked(w2)
+holds Safety-Check-On(w2)
+o1: Set-Agent-Mode(o1, w2, yolo) -> performed -> ended ()
+not Safety-Check-On(w2)
+o1: Set-Agent-Mode(o1, w2, safe) -> performed -> ended ()
+not Runs-Unasked(w2)
+holds Safety-Check-On(w2)

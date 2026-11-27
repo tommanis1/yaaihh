@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type meta\nNew type no_dubs\nNew type some\nNew type x\n+meta(\"\")\n+no_dubs(\"\")\n#2 > meta(\"\") = True\nno_dubs(\"\") = True\n\n#2 > +some(\"\")\n+x(2)\n#3 > meta(\"\") = True\nno_dubs(\"\") = True\nsome(\"\") = True\nx(2) = True\n\n#3 > ~no_dubs(\"\")\n+x(3)\n#4 > meta(\"\") = True\nsome(\"\") = True\nx(2) = True\nx(3) = True\n\n#4 > ~x(2)\n+no_dubs(\"\")\n#5 > meta(\"\") = True\nno_dubs(\"\") = True\nsome(\"\") = True\nx(3) = True\n\n#5 > ~some(\"\")\n~x(3)\n#6 > meta(\"\") = True\nno_dubs(\"\") = True\n\n#6 > "
+ }
+}

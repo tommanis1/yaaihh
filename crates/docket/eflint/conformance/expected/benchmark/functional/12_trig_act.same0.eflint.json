@@ -1,0 +1,10 @@
+{
+ "test": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "full": {
+  "exit": 0,
+  "stdout": "New type go\nNew type person\n#2 > \n#2 > executed transition: \ngo(person(\"Amy\")) (DISABLED)\nviolations:\n  disabled action: go(person(\"Amy\"))\n#3 > \n#3 > executed transition: \ngo(person(\"Bob\")) (DISABLED)\nviolations:\n  disabled action: go(person(\"Bob\"))\n#4 > \n#4 > "
+ }
+}

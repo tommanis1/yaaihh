@@ -1,0 +1,281 @@
+// Memory, in the library (paper-research N-568 part 7; consult-lead's one-interpreter.md §7). The owner: "yes user must
+// write policy on memories." Two picks and a duty, written in eFLINT whole:
+//
+// - keep(thing): the form a thing is stored in (full, packed, rollup, summary, stub, gone): the act `pick-keep`;
+// - carry(agent, thing): what an agent has in front of it, and in which form: the act `pick-carry`;
+// - the summary: a duty put on the fresh call the driver names when a thread comes to rest; `summarize` ends it.
+//
+// A pick is §4.2's: an act whose instances are the options, each enabled or greyed with the `Conditioned by` that fails
+// (one clause per rule, so a greyed form names its reason), a cost per option as the preference (the cheapest enabled
+// one is taken), and the pick an act in the record. Who picks is the driver: the system by the costs, the owner by a
+// click on the same list. A project narrows an option with
+//   Extend Act pick-keep
+//     Conditioned by form != form("gone")
+// and does not replace this file. It states a preference, with a condition or none, as one more clause of the cost,
+// ranked above the library's (see "Preferences" below):
+//   Extend Fact keep-cost
+//     Derived from (Foreach aged : keep-cost(aged.thing, form("packed"), rank(1), 0) When aged.int >= 7)
+//
+// Encoding of conditional preferences: proposed, N-568.p56, not yet seen by the owner. Way back: this file's text at
+// 4a28882 (one cost per form, `keep-cost(form, int)`, a project ending the library's fact to change it).
+//
+// The library's own choices lose nothing: the cheapest keep is `packed` (lossless), and the cheapest carry is the most
+// whole form allowed. Nothing is had more whole than it is kept. A replaced thing is carried as a stub: that it replaced
+// something, two words on what, and where.
+//
+// It reads only `agent` and `role(agent, "owner")` of the team's facts (declared by the dialect's prelude while it
+// loads, then by the library's first file). What happens to a thing comes as acts and events the driver reports from
+// the record (§4.3): `come-to-rest`, `move-again`, `replace`, `point-at`, `let-go`, `write` (the fresh call's output),
+// `summary-due` (the clock). Who picks and who writes summaries (`keeper`, `summarizer`) and the costs are facts the
+// library and a project state. Until the driver reports anything, nothing here holds and nothing is owed. Checked
+// against eflint-rs by coordd's test tests/memory_text.rs.
+//
+// One place depends on the interpreter's order (tool-scan/eflint-order-in-our-texts.md; paper-research N-581.p17):
+// pick-keep's and pick-carry's `Conditioned by !too-whole(thing, form)` read the derived `too-whole` through `Not`, and
+// both acts sort before it by name. If eflint-rs's saturation (which only adds, in name order) takes them before
+// too-whole's closure is done, an instance whose form is too whole may hold greyed for the wrong reason, or
+// enabled, and never be taken back. The meaning is: a form more whole than the kept one is never enabled (memory_text
+// pins it). docket-core3's two-rule test settles whether this is real (N-768.p2); the text is not reshaped around it.
+
+// ---- Things and their forms
+
+// A THING the record or an agent's context holds: a thread (`N-12`), a post (`N-12.p3`), a session, a file. Stated by
+// the driver as it names one, before any act or event about it (a quantifier ranges over the instances that hold).
+Fact thing Identified by String.
+
+// The forms a thing is stored or carried in:
+//   full     as written;
+//   packed   the same, stored smaller (nothing lost; a way of storing, never what an agent has in front of it);
+//   rollup   a resting thread's posts rolled into one text;
+//   summary  its summary (`summary-of`) in its place;
+//   stub     that it replaced something, two words on what, and where (`replaced-by`, `stub-words`);
+//   gone     not kept; the record's line of it stays.
+Fact form Identified by String.
++form("full").
++form("packed").
++form("rollup").
++form("summary").
++form("stub").
++form("gone").
+
+// MORE-WHOLE(A, B): form A says more than form B. Full and packed say the same, so neither is above the other. (Facts
+// over forms, not numbers: a quantifier ranges over the instances that hold, and an int or a string holds as none; so
+// the clauses below quantify over facts.)
+Fact more-whole Identified by form1 * form2
+  Derived from (Foreach form1, form2, form3 : more-whole(form1, form3) When more-whole(form1, form2) && more-whole(form2, form3)).
++more-whole(form("full"), form("rollup")).
++more-whole(form("packed"), form("rollup")).
++more-whole(form("rollup"), form("summary")).
++more-whole(form("summary"), form("stub")).
++more-whole(form("stub"), form("gone")).
+
+// ---- Who picks and who writes summaries
+
+// KEEPER(A): A picks how things are kept and carried, besides the owner: the driver names itself.
+Fact keeper Identified by agent.
+// SUMMARIZER(A): A writes summaries and stubs' words: the fresh call the driver starts for the duty below.
+Fact summarizer Identified by agent.
+
+Fact may-pick Identified by agent
+  Derived from (Foreach agent : may-pick(agent) When keeper(agent) || role(agent, "owner")).
+
+// ---- The summary owed
+
+// SUMMARY-AFTER(S): a resting thread's summary is owed within S seconds of its rest, shaped as the prelude's
+// `lapse-after`. The clock reads it and sends `summary-due` when that time has passed with the duty still held.
+Fact summary-after Identified by int.
++summary-after(600).
+Fact summary-overdue Identified by thing.
+Event summary-due
+  Related to thing
+  Creates summary-overdue(thing).
+
+// Owed by the fresh call the driver names, to the owner, from a thread's coming to rest (`come-to-rest` creates it)
+// until `summarize` (or the thread's moving again) ends it. Violated, said and not prevented, once it is overdue. Each
+// act ends it by name: it is declared before them, as eflint-rs reads a file in order.
+Duty write-summary
+  Holder agent1
+  Claimant agent2
+  Related to thing
+  Violated when summary-overdue(thing).
+
+// ---- What happens to a thing, as the driver reports it from the record
+
+// THING-RESTS(T): thread T rests: no step open, nobody owed. Its own name, not run.eflint's `rests(ticket)` (part 5):
+// a second declaration of a type replaces the first. Once both load, the file that joins them syncs run.eflint's
+// `rest` and `close` (a closed thread rests too) with `come-to-rest`, and what ends a rest with `move-again`.
+Fact thing-rests Identified by thing.
+
+// SUMMARY-OF(S, T): S is T's summary. STALE(S): S was written of a rest T has since left; it no longer says T.
+Fact summary-of Identified by thing1 * thing2.
+Fact stale Identified by thing.
+
+// A thread came to rest: a summary is owed by each summarizer, to the owner, and none is overdue yet (an old
+// `summary-due`, of a rest before, does not count against this one).
+Event come-to-rest
+  Related to thing
+  Creates thing-rests(thing)
+  Terminates summary-overdue(thing)
+  Creates (Foreach agent1, agent2 : write-summary(agent1, agent2, thing) When summarizer(agent1) && role(agent2, "owner")).
+
+// A thread moved again: it no longer rests, its summaries no longer say it, and no summary is owed or overdue until
+// its next rest.
+Event move-again
+  Related to thing
+  Terminates thing-rests(thing)
+  Terminates summary-overdue(thing)
+  Creates (Foreach summary-of : stale(summary-of.thing1) When summary-of.thing2 == thing)
+  Terminates (Foreach write-summary : write-summary When write-summary.thing == thing).
+
+// REPLACED-BY(A, B): B replaced A (an edit, a new version, a compaction), reported with who did it.
+Fact replaced-by Identified by thing1 * thing2.
+Physical replace
+  Actor agent
+  Related to thing1, thing2
+  Creates replaced-by(thing1, thing2).
+
+// REFERENCED(T): something open still points at T (a quote, a post under it, a ticket's form).
+Fact referenced Identified by thing.
+Event point-at
+  Related to thing
+  Creates referenced(thing).
+Event let-go
+  Related to thing
+  Terminates referenced(thing).
+
+// What the fresh call wrote (WRITTEN(S, A): A's output S), reported by the driver as its turn's output.
+Fact written Identified by thing * agent.
+Physical write
+  Actor agent
+  Related to thing
+  Creates written(thing, agent).
+
+// STUB-WORDS(A, W): W, the fresh call's output (`write`), is the two words on what A was, for its stub: a summarizer's,
+// as summaries are, and of a thing that was replaced. (Bound from `written`, a fact that holds: a bare string field
+// holds as none, so an act over one is derived for nothing and every `name-stub` would go through as not enabled.)
+Fact stub-words Identified by thing * thing1.
+Act name-stub
+  Actor agent
+  Related to thing, thing1
+  Holds when summarizer(agent) && written(thing1, agent) && (Exists replaced-by : replaced-by.thing1 == thing)
+  Conditioned by thing1 != thing
+  Conditioned by !(Exists summary-of : summary-of.thing1 == thing1)
+  Conditioned by !(Exists stub-words : stub-words.thing1 == thing1)
+  Creates stub-words(thing, thing1).
+
+// ---- Preferences (encoding of conditional preferences: proposed, N-568.p56, not yet seen by the owner)
+
+// A cost is a derived fact keyed by the thing picked for, the option, and a RANK; a preference with a condition is one
+// more `Derived from ... When` clause, a project's by `Extend Fact`. The picker (the driver) takes the enabled option of
+// least cost at the highest rank where the enabled options' costs differ, going down a rank among those tied; an
+// option a rank gives no cost to counts as the dearest there (consult-lead N-568.p56; the solver's levels,
+// compile.rs:197). The cost is read by the picker only, never in a `Holds when`. Rank 0 is the library's; a project's
+// own preferences go at rank 1 and above. Whose preference wins is then the definition of the rank, once, here; until
+// the library derives it from who stated a clause and where, the ranks are stated:
+Fact rank Identified by Int.
++rank(0).
++rank(1).
++rank(2).
++rank(3).
+
+// AGED(T, D): thing T was written D whole days ago, stated by the driver from the record as the days pass (a fact it
+// restates, not an event: a preference reads it, nothing is owed by it). Read by no rule of the library's own; it is
+// there for a project's preference by age, as the owner's own example (N-536.p13: keep everything one or two weeks,
+// pack at one to one and a half):
+//   Extend Fact keep-cost
+//     Derived from (Foreach aged : keep-cost(aged.thing, form("full"), rank(1), 0) When aged.int < 10)
+//     Derived from (Foreach aged : keep-cost(aged.thing, form("packed"), rank(1), 0) When aged.int >= 10 && aged.int < 14)
+//     Derived from (Foreach aged : keep-cost(aged.thing, form("gone"), rank(1), 0) When aged.int >= 14)
+// (whole for ten days, packed until two weeks, then gone where gone is enabled; where the one form rank 1 names is
+// not enabled, the enabled ones tie there and the library's rank 0 picks among them.)
+Fact aged Identified by thing * int.
+
+// ---- keep(thing): the form a thing is stored in
+
+// KEPT(T, F): T is stored as F. None: as written (full).
+Fact kept Identified by thing * form.
+
+// TOO-WHOLE(T, F): F says more than the form T is kept in: what it said beyond that is not kept, so T can be neither
+// kept nor carried as F again. Asked under `Conditioned by`, not `Holds when`: eflint-rs derives an act's instances in
+// the same pass as the derived facts, so a `!` over a derived fact in `Holds when` is read before the fact is derived.
+Fact too-whole Identified by thing * form
+  Derived from (Foreach thing, form1, form2 : too-whole(thing, form1) When kept(thing, form2) && more-whole(form1, form2)).
+
+// A pick replaces the old form. Rollup once the thread rests; summary once it rests and has a summary that still says
+// it; stub once it was replaced and its two words are known; gone once nothing open points at it, it rests or was
+// replaced, and it has a summary or a stub.
+Act pick-keep
+  Actor agent
+  Related to thing, form
+  Holds when may-pick(agent)
+  Conditioned by form != form("rollup") || thing-rests(thing)
+  Conditioned by form != form("summary") || (thing-rests(thing) && (Exists summary-of : summary-of.thing2 == thing && !stale(summary-of.thing1)))
+  Conditioned by form != form("stub") || ((Exists replaced-by : replaced-by.thing1 == thing) && (Exists stub-words : stub-words.thing == thing))
+  Conditioned by form != form("gone") || !referenced(thing)
+  Conditioned by form != form("gone") || thing-rests(thing) || (Exists replaced-by : replaced-by.thing1 == thing)
+  Conditioned by form != form("gone") || (Exists summary-of : summary-of.thing2 == thing && !stale(summary-of.thing1)) || ((Exists replaced-by : replaced-by.thing1 == thing) && (Exists stub-words : stub-words.thing == thing))
+  Conditioned by !too-whole(thing, form)
+  Terminates (Foreach form2 : kept(thing, form2) When form2 != form)
+  Creates kept(thing, form).
+
+// The preference: a cost per thing, form and rank (see "Preferences" below). The library's, at rank 0, is the same for
+// every thing: lossless first.
+Fact library-keep-cost Identified by form * int.
++library-keep-cost(form("packed"), 0).
++library-keep-cost(form("full"), 1).
++library-keep-cost(form("rollup"), 2).
++library-keep-cost(form("summary"), 3).
++library-keep-cost(form("stub"), 4).
++library-keep-cost(form("gone"), 5).
+Fact keep-cost Identified by thing * form * rank * int
+  Derived from (Foreach thing, library-keep-cost : keep-cost(thing, library-keep-cost.form, rank(0), library-keep-cost.int)).
+
+// ---- carry(agent, thing): what an agent has in front of it
+
+// CARRIED(A, T, F): agent A has T in front of it as F. None: it does not have T.
+Fact carried Identified by agent * thing * form.
+
+// A pick replaces that agent's old form. Never packed (a way of storing); a replaced thing as a stub only, or not at
+// all; a rollup only of a thread that rests; a summary only one that still says it; nothing more whole than kept.
+Act pick-carry
+  Actor agent1
+  Recipient agent2
+  Related to thing, form
+  Holds when may-pick(agent1)
+  Conditioned by form != form("packed")
+  Conditioned by form == form("stub") || form == form("gone") || !(Exists replaced-by : replaced-by.thing1 == thing)
+  Conditioned by form != form("stub") || ((Exists replaced-by : replaced-by.thing1 == thing) && (Exists stub-words : stub-words.thing == thing))
+  Conditioned by form != form("rollup") || thing-rests(thing)
+  Conditioned by form != form("summary") || (Exists summary-of : summary-of.thing2 == thing && !stale(summary-of.thing1))
+  Conditioned by !too-whole(thing, form)
+  Terminates (Foreach form2 : carried(agent2, thing, form2) When form2 != form)
+  Creates carried(agent2, thing, form).
+
+// The preference: the most whole form allowed, at rank 0 for every thing.
+Fact library-carry-cost Identified by form * int.
++library-carry-cost(form("full"), 0).
++library-carry-cost(form("rollup"), 2).
++library-carry-cost(form("summary"), 3).
++library-carry-cost(form("stub"), 4).
++library-carry-cost(form("gone"), 5).
+Fact carry-cost Identified by thing * form * rank * int
+  Derived from (Foreach thing, library-carry-cost : carry-cost(thing, library-carry-cost.form, rank(0), library-carry-cost.int)).
+
+// ---- The summary, written
+
+// Writing it: THING1, the fresh call's output (`write`), is the resting thread THING's summary. The summaries it had
+// before are replaced by it; nothing is overdue any more. An output is one thread's summary (and no stub's words),
+// and a thread that has one still saying it is not summarised again.
+Act summarize
+  Actor agent1
+  Recipient agent2
+  Related to thing, thing1
+  Holds when summarizer(agent1) && role(agent2, "owner") && thing-rests(thing) && written(thing1, agent1)
+  Conditioned by thing1 != thing
+  Conditioned by !(Exists summary-of : summary-of.thing1 == thing1)
+  Conditioned by !(Exists stub-words : stub-words.thing1 == thing1)
+  Conditioned by !(Exists summary-of : summary-of.thing2 == thing && !stale(summary-of.thing1))
+  Creates (Foreach summary-of : replaced-by(summary-of.thing1, thing1) When summary-of.thing2 == thing)
+  Creates summary-of(thing1, thing)
+  Terminates summary-overdue(thing)
+  Terminates write-summary(agent1, agent2, thing).

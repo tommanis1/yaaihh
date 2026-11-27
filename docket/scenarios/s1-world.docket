@@ -1,0 +1,21 @@
+module scenario.s1
+
+import std.hooks as H
+import std.comms as C
+import std.rails as R
+
+// Scenario 1's parties and what was said before its first step. `w1` writes; `lk1` is a looker of another family,
+// `lk2` one of the writer's own.
++H.Party("o1").  +C.Role("o1", "owner").
++H.Party("w1").  +C.Role("w1", "front").   +R.Of-Family("w1", "anthropic").
++H.Party("w2").
++H.Party("cl1"). +C.Role("cl1", "clerk").
++H.Party("lk1"). +C.Role("lk1", "looker"). +R.Of-Family("lk1", "openai").
++H.Party("lk2"). +C.Role("lk2", "looker"). +R.Of-Family("lk2", "anthropic").
++H.Running-On("w1", "claude-code", "2.1.332").
++C.Key("k-worker"). +C.Key("k-outline"). +C.Key-Of("w2", "k-worker").
++C.Node("h1"). +C.Node("n1"). +C.Node("n2"). +C.Node("n3").
++C.Owner-Said("h1", "w1").
++C.Spoken("n1", "w1"). +C.Spoken("n2", "w1"). +C.Spoken("n3", "w1").
++C.Seen("w1", "k-worker"). +C.Seen("w1", "k-outline").
++R.Fault("more").

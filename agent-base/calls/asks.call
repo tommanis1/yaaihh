@@ -1,0 +1,51 @@
+// KEPT FOR RECORDED PROGRAMS (paper-research N-1479 p462, I-1480): no kind calls `asks` or `find` now, and no policy
+// line gives them a model. A call stays in agent-base for as long as an open ticket's recorded program calls it. The
+// threads opened before 16 Nov 20:05 record no calls on their lines, and on a start coordd checks each recorded program
+// against today's calls (docket-machine `recorded_program_as`). Theirs holds 64's `when agent_post(p) where p.owner_on
+// do q <- step watcher asks(p.text, p.by)`, so without this file research's 65 such threads still open stop with
+// NoCall (N-1479 p460). cav-paper's one, N-1, closed as it opened (13 Nov), and a replay there reads the same without
+// it. coordd answers such a step Nothing with no call (core2-asks). This file can go once none of them is open. Below
+// it, as it was until I-1480.
+//
+// What an agent's post asks the owner (design-two-systems §16, 2; design.md part 9): the thread kind's `agent_post`
+// handler makes the step, owed by the watcher, which coordd answers itself as it does intake and route. It runs `find`
+// below once, statelessly, with the model policy names for the task `asks`, and answers `asks` with what it found.
+// The call marks, it never rewrites: each ask and each option is a passage copied from the message. coordd looks each
+// up in the message (docket_machine::asks::spans: an option first inside its ask, else anywhere in the message) and
+// answers `asks` with where each stands, byte offsets into the post's text, half-open: thread.kind's `mark p marks`
+// puts them on the post. What is not found word for word is thrown away; an item whose ask is not found goes, and none
+// left is Nothing. A call that fails, or answers out of shape, is Nothing: the post is always shown whole, and a
+// missed ask costs the owner only the card. BY is the agent who wrote the post.
+
+type Item {
+  ask: Text
+  options: [Text]
+}
+
+type Mark {
+  at: [Int]
+  options: [[Int]]
+}
+
+call asks(text: Text, by: Agent) -> Nothing | Asks(marks: [Mark])
+  task asks
+
+call find(text: Text, by: Agent) -> Nothing | Asks(items: [Item])
+  task asks
+  template
+    An agent wrote the message below to the owner of a project. Find what it asks the owner to answer or decide. When
+    the numbered items of the message are what it asks the owner (its questions to him), each numbered item is one
+    ask: copy the whole item, from its first word to its last, as one ask, even when it holds several sentences. When
+    the numbered items are a plan, steps, findings or anything else it tells him, they are not asks: from them take
+    only a sentence that asks the owner something, as one ask. When the message offers ready-made choices to pick from
+    (a list of ideas or proposals), the sentence that offers them is an ask too, and the choices are its options, each
+    by its short name. When it does not number them, each question is one ask. Under an ask, list the options the
+    message offers for it. An option is a short name or phrase of a few words, copied exactly as written, never a
+    whole sentence. An option may stand anywhere in the message. An ask with no offered options has an empty list.
+    Copy only, character for character. Do not reword, shorten, add, correct or merge. If the message asks the owner
+    nothing, answer Nothing.
+
+    The message, from {{ by }}:
+    <<<
+    {{ text }}
+    >>>

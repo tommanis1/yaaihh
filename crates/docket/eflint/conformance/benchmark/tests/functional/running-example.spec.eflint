@@ -1,0 +1,38 @@
+// Three basic data types
+Fact instant Identified by Int
+Fact user 
+  Derived from (Foreach controls: controls.controller)
+Fact dataset Identified by String
+  Derived from (Foreach controls: controls.dataset)
+
+// Introduces aliases for users and instants
+Placeholder controller For user
+Placeholder deadline   For instant
+
+// (Mutable) relations over users, instants, and datasets
+Fact elapsed Identified by instant
+Fact controls Identified by controller * dataset
+  Derived from (Foreach dataset:
+    controls(user("Admin"),dataset)
+    Where Not(Exists user:
+      user != user("Admin") && controls(user,dataset)))
+
+Act access Actor user Related to dataset, instant
+  Derived from (Foreach user, controls, instant:
+    access(user, controls.dataset, instant))
+  // When triggered, the access has these effects
+  Creates (Foreach controls:
+    must_notify(user, controls.controller,
+      access(user,dataset,instant), instant + 10)
+    Where controls.dataset == dataset)
+
+// Facts, but their elements are conditionally violated
+Duty must_notify Holder user Claimant controller
+  Related to access, deadline
+  // Predicates when these duties are violated
+  Violated when Holds(elapsed(deadline))
+  
+Act notify Actor user Recipient controller
+  Related to must_notify Terminates must_notify
+  Derived from (Foreach must_notify: notify(
+    must_notify.user, must_notify.controller, must_notify))

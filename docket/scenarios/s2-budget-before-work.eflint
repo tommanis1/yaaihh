@@ -1,0 +1,121 @@
+// Scenario 2. An engine check is given a budget of 7 minutes (420 000 ms) before it starts. It runs 44 minutes.
+// The ledger is over, the claim is refuted by the ledger and by nobody's word, the duty is violated, and it waits
+// on the owner. The rules of std.budgets 1, std.rails 1 and yaaihh.hygiene 2, by hand in the reference eFLINT that
+// eflint-rs reads. Every query must succeed.
+Fact party Identified by String
+Fact role-name Identified by String
+Fact role Identified by party * role-name
+Fact family Identified by String
+Fact of-family Identified by party * family
+Fact other-family Identified by party * party'
+  Holds when (Exists family, family' : of-family(party, family) && of-family(party', family') && family != family')
+Fact verifier-module Identified by party
+Fact artifact Identified by String
+Fact condition Identified by String
+Fact bucket Identified by String
+Fact dimension Identified by String
+Fact amount Identified by Int
+Fact entry Identified by Int
+Fact limit Identified by bucket * dimension * amount
+Fact carte-blanche Identified by bucket
+Fact spent Identified by bucket * dimension * entry * amount
+Fact over-budget Identified by bucket * dimension
+  Holds when (Exists amount : limit(bucket, dimension, amount)
+              && Sum(Foreach spent : spent.amount When spent.bucket == bucket && spent.dimension == dimension) > amount)
+             && Not(carte-blanche(bucket))
+Fact assigned Identified by party * artifact
+Fact given-by Identified by artifact * party
+Fact budget-of Identified by artifact * bucket
+Fact required Identified by artifact * condition
+  Holds when (Exists bucket : budget-of(artifact, bucket)) && condition == condition("within_budget")
+Fact claimed-done Identified by party * artifact
+Fact verified Identified by artifact * condition
+Fact refuted Identified by artifact * condition
+Fact may-find Identified by party * party' * artifact
+  Holds when (Exists party'' : claimed-done(party'', artifact) && Not(assigned(party', artifact))
+              && ((role(party, "owner") && party' == party)
+                  || (verifier-module(party) && role(party', "looker") && other-family(party', party''))))
+
+Duty owes-valid-result
+  Holder party
+  Claimant party'
+  Related to artifact, condition
+  Holds when assigned(party, artifact) && given-by(artifact, party') && required(artifact, condition) && Not(verified(artifact, condition))
+  Violated when refuted(artifact, condition)
+
+Act spend                                               // said before the cost: refused when it would pass the limit
+  Actor party
+  Related to bucket, dimension, entry, amount
+  Holds when carte-blanche(bucket)
+             || Not(Exists amount' : limit(bucket, dimension, amount')
+                    && Sum(Foreach spent : spent.amount When spent.bucket == bucket && spent.dimension == dimension) + amount > amount')
+  Creates spent(bucket, dimension, entry, amount)
+Act record-spend                                        // what the engine charged after the fact: always recorded
+  Actor party
+  Related to bucket, dimension, entry, amount
+  Holds when True
+  Creates spent(bucket, dimension, entry, amount)
+Act raise-limit
+  Actor party
+  Related to bucket, dimension, amount
+  Holds when role(party, "owner")
+  Terminates limit(bucket, dimension, amount') When limit(bucket, dimension, amount')
+  Creates limit(bucket, dimension, amount)
+Act claim-done
+  Actor party
+  Related to artifact
+  Holds when assigned(party, artifact) && (Exists condition : required(artifact, condition))
+  Creates claimed-done(party, artifact)
+Act verify-condition
+  Actor party
+  Related to party', artifact, condition
+  Holds when may-find(party, party', artifact) && required(artifact, condition)
+  Creates verified(artifact, condition)
+  Terminates refuted(artifact, condition)
+Act refute-condition
+  Actor party
+  Related to party', artifact, condition
+  Holds when may-find(party, party', artifact) && required(artifact, condition)
+  Creates refuted(artifact, condition)
+  Terminates verified(artifact, condition)
+  Terminates claimed-done(party'', artifact) When claimed-done(party'', artifact)
+.
++party("o1"). +party("w1"). +party("b1"). +party("yaaihh.hygiene"). 
++role-name("owner"). +role-name("looker"). +role("o1", "owner"). +role("yaaihh.hygiene", "looker").
++family("anthropic"). +family("machine"). +of-family("b1", "anthropic"). +of-family("yaaihh.hygiene", "machine").
++verifier-module("yaaihh.hygiene").
++artifact("engine-check"). +condition("within_budget").
++bucket("yaaihh-engine-check"). +bucket("yaaihh-front"). +dimension("wall_ms"). +dimension("owner_clicks").
++amount(1). +amount(360000). +amount(420000). +amount(2640000). +amount(3000000). +entry(1). +entry(2).
+
+// 1. The contract, before the work: 7 minutes.
++limit("yaaihh-engine-check", "wall_ms", 420000).
++assigned("b1", "engine-check"). +given-by("engine-check", "w1").
++budget-of("engine-check", "yaaihh-engine-check").
+?required("engine-check", "within_budget").                     // the budget is one of the work's conditions
+?!Enabled(spend("b1", "yaaihh-engine-check", "wall_ms", 1, 2640000)).   // said beforehand, 44 minutes is refused
+?Enabled(spend("b1", "yaaihh-engine-check", "wall_ms", 1, 360000)).     // 6 minutes is not
+
+// 2. It runs 44 minutes anyway. The engine charges what it took; the ledger is true whatever the limit says.
+record-spend("b1", "yaaihh-engine-check", "wall_ms", 1, 2640000).
+?over-budget("yaaihh-engine-check", "wall_ms").
+
+// 3. The claim, and who finds what.
+claim-done("b1", "engine-check").
+?!Enabled(verify-condition("b1", "yaaihh.hygiene", "engine-check", "within_budget")).   // not the builder, in the ledger's name
+refute-condition("yaaihh.hygiene", "yaaihh.hygiene", "engine-check", "within_budget").       // the module reads the ledger
+?Violated(owes-valid-result("b1", "w1", "engine-check", "within_budget")).
+?!claimed-done("b1", "engine-check").                      // back to open: it is owed again
+
+// 4. Saying it again changes nothing.
+claim-done("b1", "engine-check").
+?Violated(owes-valid-result("b1", "w1", "engine-check", "within_budget")).
+
+// 5. It waits on the owner: asking him is itself counted, and only he gives room.
+record-spend("yaaihh.hygiene", "yaaihh-engine-check", "owner_clicks", 1, 1).
+?!Enabled(raise-limit("b1", "yaaihh-engine-check", "wall_ms", 3000000)).
+raise-limit("o1", "yaaihh-engine-check", "wall_ms", 3000000).
+?!over-budget("yaaihh-engine-check", "wall_ms").
+verify-condition("yaaihh.hygiene", "yaaihh.hygiene", "engine-check", "within_budget").
+?!Violated(owes-valid-result("b1", "w1", "engine-check", "within_budget")).
+?verified("engine-check", "within_budget").

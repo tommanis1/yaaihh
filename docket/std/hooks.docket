@@ -1,0 +1,239 @@
+module std.hooks
+
+// Uniform Harness Hook IR + Declarative Version-Pinned Capability Bridges.
+// Hook scripts installed in each CLI contain ZERO decision logic: they translate
+// native hook payloads into `perform Hook(moment, payload)` and apply the returned HookAction.
+//
+//   1  the IR            moments, powers, HookAction, the one effect `Hook`
+//   2  capabilities      Lets, pinned to a version; what an agent's harness can carry right now
+//   3  one answer        what each HookAction needs; how several reactions give one answer
+//   4  a tool call       the payload of `tool_called`, read once into its parts
+//   5  serve             a session as a program: what the wrappers of std.control, std.rails, std.budgets wrap
+//   6  the safety check  off inside a box unless switched on
+//
+// The bridges' own facts are in std/bridges/, one file for each harness.
+
+// ===== 1. The IR =================================================================================================
+
+Fact Harness Identified by String
+Fact Party   Identified by String   // anybody who can act: an agent in a harness, a model with no
+                                      // session, a module, a person
+Fact Moment  Identified by String
+Fact Power   Identified by String
+Fact Version Identified by String
+
+// Each constructor says which power it needs of the harness (spec 12). Allow needs none: it is the harness going
+// on as it would have.
+type HookAction =
+  | Allow
+  | Deny(reason: String)        Needs "deny"
+  | Modify(patch: String)       Needs "modify"
+  | Inject(text: String)        Needs "inject"
+  | Answer(value: String)       Needs "answer"
+  | KeepGoing(prompt: String)   Needs "keep_going"
+  | Suspend(event_ref: String)  Needs "suspend"
+
+// Core computational effect emitted by every harness lifecycle hook. Its point is its `moment` field.
+Effect Hook(agent: Party, moment: Moment, payload: String) -> HookAction Does { return Allow }
+
+// Standard uniform moments
++Moment("turn_begins").
++Moment("before_model_call").
++Moment("tool_called").
++Moment("tool_result").
++Moment("permission_asked").
++Moment("turn_end").
++Moment("compacting").
++Moment("overloaded").
+
+// Standard hook powers. Watching needs none: an arm that ends with `perform Hook(…)` has watched.
++Power("deny"). +Power("modify"). +Power("inject").
++Power("answer"). +Power("keep_going"). +Power("suspend").
+
++Harness("claude-code"). +Harness("codex"). +Harness("opencode"). +Harness("agy").
+// A harness is named for the program that runs the agent, never for a model or an agent.
+
+// ===== 2. Capabilities ===========================================================================================
+// A bridge says three things about its harness, each for one exact version: which moments it comes to at all
+// (Reaches), what a handler may answer there (Lets), and how long it waits for the answer (Waits). An agent's
+// session says which version it runs when it starts (Running-On).
+//
+// Edge: a moment that comes only in one mode. Some harnesses ask before a tool call only when started to. Its
+// bridge states such a moment with `Reaches-In`, the session says its mode (`Started-In`), and `Comes-To` is what
+// a program asks before it relies on the moment. A session that states no mode, or one the bridge did not read,
+// does not come to it: a guard that would never fire is not counted on.
+//
+// Edge: a version nobody has read. A harness updates itself; its new version has no facts. Then nothing is let and
+// `Unread-Version` holds: a run whose arms need a power does not start for that agent (spec 12) until its bridge's
+// text is read again. A prefix match ("2.1" for 2.1.332 and 2.1.400) would let a power the new version may have
+// dropped.
+//
+// The check itself is the engine's, made when a run is bound to its driver, and it reads `Lets` and nothing else.
+// So an arm that answers with a power only where the harness has it says so with `Lets` in its own `where`:
+//     on Hook(agent, "turn_begins", p) where Running-On(agent, h, v) && Lets(h, v, "turn_begins", "inject") do { … }
+
+Fact Running-On(agent: Party, harness: Harness, version: Version)
+Fact Lets(harness: Harness, version: Version, moment: Moment, power: Power)
+Fact Reaches(harness: Harness, version: Version, moment: Moment)               // however the session was started
+Fact Mode Identified by String
+Fact Reaches-In(harness: Harness, version: Version, mode: Mode, moment: Moment)   // only when started in this mode
+Fact Started-In(agent: Party, mode: Mode)
+Fact Native-Hook(harness: Harness, name: String, moment: Moment)   // its hooks by its own names: the relay's names
+Fact Waits(harness: Harness, version: Version, moment: Moment, seconds: Int)   // none: it waits with no bound, or was not read
+
+// The session driver's: it starts the agent's harness, and the two lines below are what it writes when the session
+// is up. What this text decides about the session is passed with it, so every start shows in the record with
+// what it was started as: whether it is in a box, whether it runs commands without asking (6), whether the
+// harness's own safety check is on (6), and the model, a text the driver hands on unread (empty: the harness's own).
+Effect Start-Session(agent: Party, boxed: Bool, unasked: Bool, safety_check: Bool, model: String) -> Unit
+Event Session-Started(agent: Party, harness: Harness, version: Version)       // a bridge's line
+  Terminates Running-On(agent, h, v) When Running-On(agent, h, v)
+  Terminates Started-In(agent, m) When Started-In(agent, m)
+  Creates    Running-On(agent, harness, version)
+Event Mode-Stated(agent: Party, mode: Mode)                                    // a bridge's line, after the one above
+  Terminates Started-In(agent, m) When Started-In(agent, m)
+  Creates    Started-In(agent, mode)
+
+Fact Comes-To(agent: Party, moment: Moment)
+  Holds when Running-On(agent, h, v) && Reaches(h, v, moment)
+  Holds when Running-On(agent, h, v) && Started-In(agent, mode) && Reaches-In(h, v, mode, moment)
+
+Fact Unread-Version(agent: Party)
+  Holds when Running-On(agent, h, v) && Not(Exists m : Reaches(h, v, m)) && Not(Exists d, m : Reaches-In(h, v, d, m))
+
+Fact Can(agent: Party, moment: Moment, power: Power)   // for rules and for his window; the engine's check reads `Lets`
+  Holds when Running-On(agent, h, v) && Lets(h, v, moment, power) && Comes-To(agent, moment)
+
+// ===== 3. One answer =============================================================================================
+
+// Edge: several reactions to one moment. A reaction to `Hook` is a root arm (spec 8.7): the first whose pattern
+// and `where` hold takes the moment, and the others are reached only if it performs `Hook` again, which goes
+// outward. So an arm with an opinion asks outward and folds the two answers with `combine`:
+//     rest <- perform Hook(agent, m, payload); return combine(Deny("…"), rest)
+// and an arm that only watches ends with `perform Hook(agent, m, payload)`. An arm that returns its own answer and
+// asks nobody has the last word, and should be a Deny. The rule of `combine`: whichever stops more wins, and two
+// that cannot both be done stop it.
+//   Deny > Suspend > Answer > Modify > KeepGoing > Inject > Allow
+// Folding needs no power of its own: every constructor `combine` gives back was given to it, except the two Denys
+// for answers that cannot both be done, which need "deny" where two such arms are loaded.
+fn combine(a: HookAction, b: HookAction) -> HookAction {
+  match (a, b) {
+    | (Deny(x), Deny(y))           => return Deny("{{ x }}\n{{ y }}")           // both reasons reach the agent
+    | (Deny(x), _)                 => return a
+    | (_, Deny(y))                 => return b
+    | (Suspend(x), _)              => return a
+    | (_, Suspend(y))              => return b
+    | (Answer(x), Answer(y)) where x != y
+                                   => return Deny("Two handlers answered this differently: {{ x }} / {{ y }}")
+    | (Answer(x), _)               => return a
+    | (_, Answer(y))               => return b
+    | (Modify(x), Modify(y)) where x != y
+                                   => return Deny("Two handlers would change this in different ways; neither was applied.")
+    | (Modify(x), _)               => return a
+    | (_, Modify(y))               => return b
+    | (KeepGoing(x), KeepGoing(y)) => return KeepGoing("{{ x }}\n{{ y }}")
+    | (KeepGoing(x), _)            => return a
+    | (_, KeepGoing(y))            => return b
+    | (Inject(x), Inject(y))       => return Inject("{{ x }}\n{{ y }}")
+    | (Inject(x), _)               => return a
+    | (_, Inject(y))               => return b
+    | (Allow, Allow)               => return Allow
+  }
+}
+
+// ===== 4. A tool call ============================================================================================
+// Edge: the payload is one text, in each harness's own shape. A guard needs the tool, the file and the change, and
+// must not hunt for them with a pattern over JSON. The bridge reads its own payload once; this is a pure parse and
+// decides nothing.
+//   tool      the library's name: command, read, edit (any tool that changes files)
+//   command   the line a command tool runs; empty for any other tool
+//   changes   one for each file the call changes; a patch over several files gives several. Empty for a tool that
+//             changes no file. A read is no change: no guard here judges what an agent reads.
+// A file changed by a command has no change here. A guard on files does not see it; a guard on commits does.
+//   kind      edit, create (a file that is not there yet), delete, move
+//   path      the file, from the agent's working folder, with no `.` or `..` in it; for a move, its new name
+//   from      for a move, its old name; empty otherwise
+//   patch     what this change does to the file's text, as a unified diff; for a move, only what the text changes
+//   added     the text of the lines it adds
+// So a moved file is one change with two names. Its text is not counted as taken out and put in again.
+type FileChange { kind: String, path: String, from: String, patch: String, added: String }
+type ToolUse { tool: String, command: String, changes: List<FileChange> }
+Effect Tool-Use(agent: Party, payload: String) -> ToolUse
+
+// "Does any file of this call …" is a question for facts, not for a list. So while a call is judged, its files
+// stand as facts, and a guard asks with `Exists`: no guard can miss a file, whichever harness made the call and
+// however many files it changes. `serve` notes them before it asks `Hook` and forgets them after.
+Fact Changing(agent: Party, kind: String, path: String, from: String, added: String, removed: Int)
+Fact Changes(agent: Party, path: String)            // every name the call touches: a move's old name and its new one
+  Holds when Changing(agent, kind, path, from, added, removed)
+  Holds when Changing(agent, kind, to, path, added, removed) && kind == "move"
+Act Note-Change(agent: Party, kind: String, path: String, from: String, added: String, removed: Int)
+  Conditioned by Holds(agent)
+  Creates        Changing(agent, kind, path, from, added, removed)
+Act Forget-Changes(agent: Party)
+  Conditioned by Holds(agent)
+  Terminates     Changing(agent, kind, path, from, added, removed) When Changing(agent, kind, path, from, added, removed)
+
+fn note_changes(agent: Party, payload: String) -> Program<Unit> {
+  use <- perform Tool-Use(agent, payload);
+  par c in use.changes up to 1 { Note-Change(agent, c.kind, c.path, c.from, c.added, removed_lines(c.patch)) };
+  return ()
+}
+
+// ===== 5. Serve ==================================================================================================
+// Edge: what do the wrappers wrap? `with_slow_mode(p)`, `with_budget(actor, p)` and the rest take a program, and an
+// agent driven by a harness had none. `serve(agent)` is that program: the machine gives the next moment the
+// harness reached and takes the answer back, and between the two everything is this text. A handler wrapped around
+// `serve(agent)` therefore takes that agent's `Hook` before anything else answers it. An agent run as plain
+// `serve(agent)` has nothing of ours on it: its tool calls are read and noted, and nothing is decided.
+
+type Reached { moment: Moment, payload: String }
+Effect Next-Moment(agent: Party)                          -> Reached   // the driver's: rests until the harness is at one
+Effect Apply(agent: Party, moment: Moment, a: HookAction) -> Unit      // the driver's: the bridge does it, and nothing else
+
+// The record's line for a moment. It is an Act of the agent's own run, so no handler takes it (spec, invariant 1):
+// what a turn is, is known from these lines whatever any arm answers. Reactions to it run as their module (8.7),
+// which is where one party's work about another party's turn belongs.
+Fact In-Turn(agent: Party)
+Act Reach(agent: Party, moment: Moment)
+  Conditioned by Holds(agent) && Holds(moment)
+  Creates        In-Turn(agent) When moment == "turn_begins"
+  Terminates     In-Turn(agent) When moment == "turn_end" || moment == "overloaded"
+
+fn serve(agent: Party) -> Program<Unit> {
+  iterate round = 0 {
+    at <- perform Next-Moment(agent);
+    Reach(agent, at.moment);                       // `agent` is the run's own party: any other is refused (8.2)
+    if at.moment == "tool_called" { do note_changes(agent, at.payload) };
+    answer <- perform Hook(agent, at.moment, at.payload);
+    if Exists p : Changes(agent, p) { Forget-Changes(agent) };
+    perform Apply(agent, at.moment, answer);
+    return Again(round + 1)
+  }
+}
+// With no arm that takes it, `Hook` is answered by its `Does`: Allow. Whether the harness can carry an answer is
+// not tested here, and need not be. The engine tests it twice (spec 12): early, when the run is bound to its
+// driver, from the text of the arms; and at the boundary, when the answer crosses to the driver in `Apply`, where
+// an answer whose power the harness does not let is not carried out and `Fault` is performed. The run ends when
+// the session is stopped: `Next-Moment` is then cancelled.
+
+// ===== 6. The safety check =======================================================================================
+// Default safety-check policy: OFF by default inside boxed projects, toggleable per project/agent.
+// Edge: both overrides stated for one agent (a project's text says on, his switch says off). Off wins: the reason
+// for the rule is that the harness's own check gets in the way inside a box, and a switch he set is the later word.
+
+Fact Boxed(agent: Party)
+Fact Safety-Check-Override(agent: Party, enabled: Bool)
+// Commands run without asking first; the safety check, where on, still asks before a dangerous one. None by default.
+Fact Runs-Unasked(agent: Party)
+
+Fact Safety-Check-On(agent: Party)
+  Holds when Safety-Check-Override(agent, true) && Not(Safety-Check-Override(agent, false))
+  Holds when Party(agent) && Not(Boxed(agent)) && Not(Safety-Check-Override(agent, false)) && Not(Safety-Check-Override(agent, true))
+
+// With the check off, a `permission_asked` that still arrives is answered, not left waiting on a person. Only
+// where the harness lets an answer there: on any other the moment passes outward as it came.
+on Hook(agent, "permission_asked", payload)
+   where Not(Safety-Check-On(agent)) && Running-On(agent, h, v) && Lets(h, v, "permission_asked", "answer") do {
+  return Answer("allow")
+}

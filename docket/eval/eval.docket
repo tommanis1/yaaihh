@@ -1,0 +1,198 @@
+module eval
+
+import std.hooks as H
+import std.comms as C
+import std.budgets as B
+
+// Candidate Docket texts run on a suite's tasks, k trials each, sealed, verified by others, and kept by passes and cost.
+
+// ===== 1. Suites, candidates, runs ===============================================================================
+
+Fact Suite     Identified by String
+Fact Task      Identified by String
+Fact Candidate Identified by String                 // a Docket text, by its hash
+Fact In-Suite(task: Task, suite: Suite)             // the loader's; a task is of one suite
+Fact Task-Cap(suite: Suite, dim: B.Dimension, max_val: Int)   // the suite's: what one run may spend in a dimension
+Fact Trials(suite: Suite, k: Int)                   // the suite's: how many runs each candidate gets on each task
+Fact Grader-Glob(task: Task, glob: String)          // the loader's: files only the verifier may read, from the task's root
+Fact Offered(task: Task, path: String)              // the loader's: a file of the tree the candidate is given
+
+Fact Run-Of(run: B.Bucket, cand: Candidate, task: Task, trial: Int, agent: H.Party)
+Fact Ran(run: B.Bucket, cand: Candidate, suite: Suite)
+  Holds when Run-Of(run, cand, task, j, agent) && In-Suite(task, suite)
+Fact Evaluating(agent: H.Party, task: Task)
+  Holds when Run-Of(run, cand, task, j, agent) && Not(Recorded(run))
+
+// Who sets a suite's caps and trials is the project's fact Caps-By; loading a task is the loader's.
+Fact Caps-By(role: String)
+Act Load-Task(actor: H.Party, task: Task, suite: Suite)
+  Conditioned by C.Role(actor, "loader") && Not(Exists s : In-Suite(task, s))
+  Creates        suite, task, In-Suite(task, suite)
+Act Cap(actor: H.Party, suite: Suite, dim: B.Dimension, max_val: Int)
+  Conditioned by C.Role(actor, r) && Caps-By(r) && Suite(suite) && max_val > 0 && Not(Exists m : Task-Cap(suite, dim, m))
+  Creates        Task-Cap(suite, dim, max_val)
+Act Set-Trials(actor: H.Party, suite: Suite, k: Int)
+  Conditioned by C.Role(actor, r) && Caps-By(r) && Suite(suite) && k >= 1 && Not(Exists j : Trials(suite, j))
+  Creates        Trials(suite, k)
+Act Offer(actor: H.Party, task: Task, path: String)
+  Conditioned by C.Role(actor, "loader") && In-Suite(task, s)
+  Creates        Offered(task, path)
+Act Hide(actor: H.Party, task: Task, glob: String)
+  Conditioned by C.Role(actor, "loader") && In-Suite(task, s)
+  Creates        Grader-Glob(task, glob)
+
+// ===== 2. The seal ===============================================================================================
+// A run starts sealed: no network, no grader file given, every dimension capped as its bucket's limit in std.budgets.
+// A path is read from the task's root with no `.`, `..`, empty or leading `/` part; one that is not counts as a grader
+// file, so a name written another way never passes a glob it should meet.
+
+Fact Named(path: String)
+  Holds when Offered(t, path)
+  Holds when Grader-Glob(t, path)
+  Holds when Saw(run, path)
+  Holds when H.Changes(agent, path)
+Fact Odd(path: String)
+  Holds when Named(path) && (path == "" || path == "." || path == ".." || matches_glob(path, "/*") || matches_glob(path, "*/")
+             || matches_glob(path, "*//*") || matches_glob(path, "./*") || matches_glob(path, "*/./*") || matches_glob(path, "*/.")
+             || matches_glob(path, "../*") || matches_glob(path, "*/../*") || matches_glob(path, "*/.."))
+Fact Grader-File(task: Task, path: String)
+  Holds when Named(path) && Grader-Glob(task, g) && Odd(path)
+  Holds when Named(path) && Grader-Glob(task, g) && matches_glob(path, g)
+
+Fact Leaks(task: Task)
+  Holds when Offered(task, p) && Grader-File(task, p)
+  Holds when Grader-Glob(task, g) && Odd(g)
+Fact Capped(suite: Suite)
+  Holds when Suite(suite) && Task-Cap(suite, "tokens", t) && Task-Cap(suite, "usd_cents", c) && Task-Cap(suite, "wall_ms", w)
+Fact Ready(suite: Suite)
+  Holds when Capped(suite) && Trials(suite, k)
+
+// One run for each candidate, task and trial: a retry is the next trial, and there are k of them.
+Act Start-Run(actor: H.Party, agent: H.Party, cand: Candidate, task: Task, trial: Int, run: B.Bucket, network_off: Bool)
+  Conditioned by C.Role(actor, "runner") && actor != agent && network_off
+                 && In-Suite(task, s) && Ready(s) && Trials(s, k) && trial >= 1 && trial <= k && Not(Leaks(task))
+                 && Not(Exists r, a : Run-Of(r, cand, task, trial, a))
+                 && Not(Exists c, t, j, a : Run-Of(run, c, t, j, a))
+  Creates        cand, run, Run-Of(run, cand, task, trial, agent), B.Metered(run, agent)
+               , B.Limit-Set(run, d, m) When In-Suite(task, s) && Task-Cap(s, d, m)
+
+// What the sandbox saw, as its driver's lines: a connection out, a file opened. Either one breaks the seal.
+Fact Egressed(run: B.Bucket, host: String)
+Fact Saw(run: B.Bucket, path: String)
+Event Egress(run: B.Bucket, host: String)
+  Creates Egressed(run, host)
+Event Opened(run: B.Bucket, path: String)
+  Creates Saw(run, path)
+Fact Touched(run: B.Bucket, path: String)
+  Holds when Saw(run, path) && Run-Of(run, c, task, j, a) && Grader-File(task, path)
+
+Fact Broke-Seal(run: B.Bucket)
+  Holds when Egressed(run, h)
+  Holds when Touched(run, p)
+  Holds when Run-Of(run, c, t, j, a) && B.Over-Budget(run, d)
+
+// Refuses the agent's tool call that changes a grader file, by the paths the call changes; reading one is the
+// sandbox's to stop, and no grader file is in the tree the candidate's job is given.
+fn with_seal<T>(agent: H.Party, p: Program<T>) -> Program<T> {
+  handle do p with {
+    return x => return x
+    | H.Hook(who, "tool_called", payload), k where who == agent => {
+        if Exists t, f : Evaluating(agent, t) && H.Changes(agent, f) && Grader-File(t, f) {
+          resume k(H.Deny("This changes a file the grader keeps. Change the work, never what judges it."))
+        } else {
+          answer <- perform H.Hook(who, "tool_called", payload);
+          resume k(answer)
+        }
+      }
+  }
+}
+
+// Charges the run's bucket and stops it at a cap: an evaluation never asks for more room. The runner runs it, as
+// the party a run's bucket meters records nothing into it.
+fn capped<T>(run: B.Bucket, p: Program<T>) -> Program<B.Result<T>> {
+  handle do B.with_budget(run, p) with {
+    return x => return x
+    | B.Request-Budget(bucket, dim, needed), k => resume k(B.Denied("an evaluation run is over its cap"))
+  }
+}
+
+// ===== 3. Results ================================================================================================
+// Recorded by a grader with the trace's cold-storage key. A run passes only if its tests passed, it kept the seal,
+// and what it spent is within every cap of its suite.
+
+Fact Run-Result(run: B.Bucket, pass: Bool, usd_cents: Int, tokens: Int, wall_ms: Int, trace: String)
+Act Record-Result(actor: H.Party, run: B.Bucket, pass: Bool, usd_cents: Int, tokens: Int, wall_ms: Int, trace: String)
+  Conditioned by C.Role(actor, "grader") && Run-Of(run, c, t, j, a) && actor != a
+                 && usd_cents >= 0 && tokens >= 0 && wall_ms >= 0 && Not(Recorded(run))
+  Creates        Run-Result(run, pass, usd_cents, tokens, wall_ms, trace)
+
+Fact Recorded(run: B.Bucket)
+  Holds when Run-Result(run, p, u, k, w, x)
+Fact Within-Caps(run: B.Bucket)
+  Holds when Run-Result(run, p, u, k, w, x) && Run-Of(run, c, t, j, a) && In-Suite(t, s)
+             && Task-Cap(s, "usd_cents", cu) && Task-Cap(s, "tokens", ck) && Task-Cap(s, "wall_ms", cw)
+             && u <= cu && k <= ck && w <= cw
+Fact Passed(run: B.Bucket)
+  Holds when Run-Result(run, true, u, k, w, x) && Not(Broke-Seal(run)) && Within-Caps(run)
+Fact Failed(run: B.Bucket)
+  Holds when Recorded(run) && Not(Passed(run))
+
+// ===== 4. The archive ============================================================================================
+// Scored once every trial of every task has a result. A task counts once, solved when any of its k trials passed
+// (pass@k); cost is the sum over all of them. On the front when no other score is as good on all four and better
+// on one.
+
+Fact Tasks(suite: Suite, n: Int)
+  Holds when Suite(suite) && n == Count(Foreach t : t When In-Suite(t, suite))
+Fact Cost(run: B.Bucket, usd_cents: Int, tokens: Int, wall_ms: Int)
+  Holds when Run-Result(run, p, usd_cents, tokens, wall_ms, x)
+Fact Done(suite: Suite, cand: Candidate, task: Task)
+  Holds when In-Suite(task, suite) && Candidate(cand) && Trials(suite, k)
+             && k == Count(Foreach r : r When Exists j, a : Run-Of(r, cand, task, j, a) && Recorded(r))
+Fact Solved(suite: Suite, cand: Candidate, task: Task)
+  Holds when In-Suite(task, suite) && Run-Of(r, cand, task, j, a) && Passed(r)
+Fact Graded(suite: Suite, cand: Candidate, n: Int)
+  Holds when Suite(suite) && Candidate(cand) && n == Count(Foreach t : t When Done(suite, cand, t))
+Fact Score(suite: Suite, cand: Candidate, passes: Int, usd_cents: Int, tokens: Int, wall_ms: Int)
+  Holds when Tasks(suite, n) && Graded(suite, cand, n) && n > 0
+             && passes == Count(Foreach t : t When Solved(suite, cand, t))
+             && usd_cents == Sum(Foreach r, u, k, w : u When Ran(r, cand, suite) && Cost(r, u, k, w))
+             && tokens == Sum(Foreach r, u, k, w : k When Ran(r, cand, suite) && Cost(r, u, k, w))
+             && wall_ms == Sum(Foreach r, u, k, w : w When Ran(r, cand, suite) && Cost(r, u, k, w))
+Fact Dominated(suite: Suite, cand: Candidate)
+  Holds when Score(suite, cand, p, c, t, m) && Score(suite, o, q, d, u, n)
+             && q >= p && d <= c && u <= t && n <= m && (q > p || d < c || u < t || n < m)
+Fact On-Front(suite: Suite, cand: Candidate)
+  Holds when Score(suite, cand, p, c, t, m) && Not(Dominated(suite, cand))
+
+// ===== 5. Mutation ===============================================================================================
+// A front candidate's text and its failed traces go to a reflector; the change it proposes becomes a child.
+
+type Reflection = Change(what: String) | Stop(why: String)
+Call Reflect(source: String, failures: List<String>) -> Reflection
+  Template """
+  This harness text was evaluated on a suite of tasks. The text:
+  {{ source }}
+  The traces of the runs it failed: {{ failures }}
+  Say one change to the text that would have made more of these pass without fitting any one task, and why. If the
+  failures share no cause a change to the text could remove, return Stop with what they show.
+  """
+Effect Source-Of(cand: Candidate) -> String                              // the driver's: the text whose hash it is
+Effect Write-Candidate(parent: Candidate, change: String) -> Candidate   // the driver's: the changed text, stored
+
+Fact Child-Of(child: Candidate, parent: Candidate, change: String)
+Act Propose(actor: H.Party, suite: Suite, parent: Candidate, child: Candidate, change: String)
+  Conditioned by C.Role(actor, "proposer") && On-Front(suite, parent) && child != parent && Not(Candidate(child))
+  Creates        child, Child-Of(child, parent, change)
+
+fn mutate(suite: Suite, parent: Candidate) -> Program<Unit> {
+  reflector <- perform C.Pick("reflector");
+  source    <- perform Source-Of(parent);
+  failed    <- return (Foreach r, p, u, k, w, x : x When Ran(r, parent, suite) && Failed(r) && Run-Result(r, p, u, k, w, x));
+  traces    <- par x in failed { perform C.TextOf(x) };
+  found     <- do C.step(reflector, Reflect(source, traces));
+  match found {
+    | Change(what) => { child <- perform Write-Candidate(parent, what); Propose(self, suite, parent, child, what) }
+    | Stop(why)    => return ()
+  }
+}
